@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BambuUp Chat</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f7f7f7;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    .chat-box {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      padding: 16px;
+      height: 500px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+    }
+
+    .msg {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      max-width: 80%;
+      white-space: pre-wrap;
+    }
+
+    .user {
+      background: #dff1ff;
+      margin-left: auto;
+    }
+
+    .bot {
+      background: #ececec;
+      margin-right: auto;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    input, textarea, button {
+      font-size: 16px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+    }
+
+    input {
+      width: 200px;
+    }
+
+    textarea {
+      flex: 1;
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    button {
+      cursor: pointer;
+      background: black;
+      color: white;
+      border: none;
+      padding: 12px 16px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+  </style>
+</head>
+<body>
+  <h1>BambuUp Internal Chat</h1>
+  <p>Test interno del bot con memoria conversazionale.</p>
+
+  <div class="controls">
+    <input id="sender" type="text" value="Mauro" placeholder="Nome utente" />
+    <input id="chatId" type="text" value="team001" placeholder="Chat ID" />
+  </div>
+
+  <div id="chatBox" class="chat-box"></div>
+
+  <div class="row">
+    <textarea id="message" placeholder="Scrivi un messaggio..."></textarea>
+    <button onclick="sendMessage()">Invia</button>
+  </div>
+
+  <script>
+    const apiUrl = "/chat";
+
+    function addMessage(text, role) {
+      const chatBox = document.getElementById("chatBox");
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const sender = document.getElementById("sender").value.trim();
+      const chatId = document.getElementById("chatId").value.trim();
+      const messageEl = document.getElementById("message");
+      const message = messageEl.value.trim();
+
+      if (!sender || !chatId || !message) return;
+
+      addMessage(message, "user");
+      messageEl.value = "";
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            source: "web",
+            sender: sender,
+            chat_id: chatId,
+            message: message
+          })
+        });
+
+        const data = await response.json();
+        addMessage(data.reply || "Errore nella risposta del bot.", "bot");
+      } catch (error) {
+        addMessage("Errore di connessione al server.", "bot");
+      }
+    }
+  </script>
+</body>
+</html>
