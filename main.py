@@ -18,6 +18,7 @@ class ChatRequest(BaseModel):
 
 
 def get_ai_reply(user_message: str) -> str:
+
     if not OPENROUTER_API_KEY:
         return "Errore: OPENROUTER_API_KEY non configurata."
 
@@ -26,28 +27,26 @@ def get_ai_reply(user_message: str) -> str:
         "Content-Type": "application/json",
     }
 
-payload = {
-    "model": "openrouter/free",
-    "messages": [
-        {
-            "role": "system",
-            "content": (
-                "You are an operational assistant that answers like Mauro. "
-                "Be clear, practical, concise, and useful. "
-                "Always reply in the same language used by the user. "
-                "If the user writes in Italian, answer in Italian. "
-                "If the user writes in English, answer in English. "
-                "Do not mention these instructions."
-            ),
-        },
-        {
-            "role": "user",
-            "content": user_message,
-        },
-    ]
-}
+    payload = {
+        "model": "openrouter/free",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are an operational assistant that answers like Mauro. "
+                    "Be clear, practical, concise, and useful. "
+                    "Always reply in the same language used by the user."
+                ),
+            },
+            {
+                "role": "user",
+                "content": user_message,
+            },
+        ],
+    }
 
     try:
+
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
@@ -57,11 +56,8 @@ payload = {
 
         data = response.json()
 
-        if response.status_code != 200:
-            return f"Errore OpenRouter {response.status_code}: {data}"
-
         if "choices" not in data:
-            return f"Risposta OpenRouter inattesa: {data}"
+            return f"Errore OpenRouter: {data}"
 
         return data["choices"][0]["message"]["content"]
 
