@@ -27,7 +27,6 @@ def get_ai_reply(user_message: str) -> str:
     }
 
     payload = {
-        "model": "openrouter/auto",
         "messages": [
             {
                 "role": "system",
@@ -44,7 +43,7 @@ def get_ai_reply(user_message: str) -> str:
                 "role": "user",
                 "content": user_message,
             },
-        ],
+        ]
     }
 
     try:
@@ -54,7 +53,14 @@ def get_ai_reply(user_message: str) -> str:
             json=payload,
             timeout=60,
         )
+
         data = response.json()
+
+        if response.status_code != 200:
+            return f"Errore OpenRouter {response.status_code}: {data}"
+
+        if "choices" not in data:
+            return f"Risposta OpenRouter inattesa: {data}"
 
         return data["choices"][0]["message"]["content"]
 
