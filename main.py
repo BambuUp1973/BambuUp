@@ -1,3 +1,5 @@
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
 from pydantic import BaseModel
 import os
@@ -5,7 +7,7 @@ import psycopg2
 import requests
 
 app = FastAPI()
-
+app.mount("/static", StaticFiles(directory="static"), name="static")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
@@ -97,6 +99,9 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     except Exception as e:
         return f"Errore AI: {str(e)}"
 
+@app.get("/webchat")
+def webchat():
+    return FileResponse("static/chat.html")
 
 @app.get("/")
 def home():
