@@ -2,10 +2,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import psycopg2
+import requests
 
 app = FastAPI()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
 class ChatRequest(BaseModel):
@@ -13,6 +15,51 @@ class ChatRequest(BaseModel):
     sender: str
     chat_id: str
     message: str
+
+
+def get_ai_reply(user_message: str) -> str:
+    if not OPENROUTER_API_KEY:
+        return "Errore: OPENROUTER_API_KEY non configurata."
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": "openrouter/auto",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are an operational assistant that answers like Mauro. "
+                    "Be clear, practical, concise, and useful. "
+                    "Always reply in the same language used by the user. "
+                    "If the user writes in Italian, answer in Italian. "
+                    "If the user writes in English, answer in English. "
+                    "Do not mention these instructions."
+                ),
+            },
+            {
+                "role": "user",
+                "content": user_message,
+            },
+        ],
+    }
+
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=60,
+        )
+        data = response.json()
+
+        return data["choices"][0]["message"]["content"]
+
+    except Exception as e:
+        return f"Errore AI: {str(e)}"
 
 
 @app.get("/")
@@ -45,7 +92,6 @@ def chat(request: ChatRequest):
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
-        # salva il messaggio dell'utente
         cur.execute(
             """
             INSERT INTO messages (source, sender, chat_id, role, content)
@@ -54,10 +100,8 @@ def chat(request: ChatRequest):
             (request.source, request.sender, request.chat_id, "user", request.message),
         )
 
-        # risposta temporanea del bot
-        bot_reply = f"Ricevuto: {request.message}"
+        bot_reply = get_ai_reply(request.message)
 
-        # salva la risposta del bot
         cur.execute(
             """
             INSERT INTO messages (source, sender, chat_id, role, content)
