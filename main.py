@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
+import re
 import psycopg2
 import requests
 from woocommerce import API
@@ -125,6 +126,8 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
 def normalize_order(order):
     billing = order.get("billing", {}) or {}
     shipping = order.get("shipping", {}) or {}
+    shipping_lines = order.get("shipping_lines", []) or []
+    line_items = order.get("line_items", []) or []
 
     return {
         "id": order.get("id"),
@@ -132,17 +135,36 @@ def normalize_order(order):
         "date_created": order.get("date_created"),
         "total": order.get("total"),
         "currency": order.get("currency"),
+        "payment_method_title": order.get("payment_method_title"),
+        "customer_note": order.get("customer_note"),
         "customer_name": f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip(),
         "email": billing.get("email"),
         "phone": billing.get("phone"),
+        "billing_address": {
+            "address_1": billing.get("address_1"),
+            "address_2": billing.get("address_2"),
+            "city": billing.get("city"),
+            "state": billing.get("state"),
+            "postcode": billing.get("postcode"),
+            "country": billing.get("country"),
+        },
         "shipping_name": f"{shipping.get('first_name', '')} {shipping.get('last_name', '')}".strip(),
+        "shipping_address": {
+            "address_1": shipping.get("address_1"),
+            "address_2": shipping.get("address_2"),
+            "city": shipping.get("city"),
+            "state": shipping.get("state"),
+            "postcode": shipping.get("postcode"),
+            "country": shipping.get("country"),
+        },
+        "shipping_methods": [line.get("method_title") for line in shipping_lines],
         "items": [
             {
                 "name": item.get("name"),
                 "quantity": item.get("quantity"),
                 "total": item.get("total"),
             }
-            for item in order.get("line_items", [])
+            for item in line_items
         ],
     }
 
@@ -187,6 +209,99 @@ def search_orders_by_name(name: str):
             filtered.append(normalize_order(order))
 
     return {"results": filtered}
+
+
+def format_address(address: dict) -> str:
+    parts = [
+        address.get("address_1"),
+        address.get("address_2"),
+        address.get("city"),
+        address.get("state"),
+        address.get("postcode"),
+        address.get("country"),
+    ]
+    clean_parts = [p for p in parts if p]
+    return ", ".join(clean_parts) if clean_parts else "N/A"
+
+
+def format_order_for_human(order: dict) -> str:
+    lines = []
+    lines.append(f"Ordine: {order.get('id')}")
+    lines.append(f"Stato: {order.get('status')}")
+    lines.append(f"Data ordine: {order.get('date_created')}")
+    lines.append(f"Totale: {order.get('total')} {order.get('currency')}")
+    lines.append(f"Metodo pagamento: {order.get('payment_method_title') or 'N/A'}")
+    lines.append("")
+    lines.append(f"Cliente: {order.get('customer_name') or 'N/A'}")
+    lines.append(f"Email: {order.get('email') or 'N/A'}")
+    lines.append(f"Telefono: {order.get('phone') or 'N/A'}")
+    lines.append("")
+    lines.append(f"Indirizzo fatturazione: {format_address(order.get('billing_address', {}))}")
+    lines.append(f"Destinatario spedizione: {order.get('shipping_name') or 'N/A'}")
+    lines.append(f"Indirizzo spedizione: {format_address(order.get('shipping_address', {}))}")
+    lines.append("")
+    lines.append("Prodotti:")
+    items = order.get("items", [])
+    if items:
+        for item in items:
+            lines.append(
+                f"- {item.get('name')} | quantità: {item.get('quantity')} | totale: {item.get('total')}"
+            )
+    else:
+        lines.append("- Nessun prodotto trovato")
+
+    shipping_methods = order.get("shipping_methods", [])
+    if shipping_methods:
+        lines.append("")
+        lines.append("Metodo spedizione:")
+        for method in shipping_methods:
+            lines.append(f"- {method}")
+
+    if order.get("customer_note"):
+        lines.append("")
+        lines.append(f"Nota cliente: {order.get('customer_note')}")
+
+    lines.append("")
+    status = (order.get("status") or "").lower()
+    if status in ["completed", "shipped"]:
+        lines.append(
+            "Nota tracking: l'ordine risulta spedito/completato. Per il tracking dettagliato bisogna controllare il sistema logistica."
+        )
+    else:
+        lines.append(
+            "Nota tracking: l'ordine non risulta ancora spedito/completato in WooCommerce."
+        )
+
+    return "\n".join(lines)
+
+
+def try_extract_order_id(message: str) -> str | None:
+    patterns = [
+        r"ordine\s*#?\s*(\d+)",
+        r"order\s*#?\s*(\d+)",
+        r"\b(\d{5,})\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, message.lower())
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def is_order_request(message: str) -> bool:
+    msg = message.lower()
+    keywords = [
+        "ordine",
+        "order",
+        "stato ordine",
+        "order status",
+        "spedito",
+        "processing",
+        "completed",
+    ]
+    return any(word in msg for word in keywords)
 
 
 @app.get("/")
@@ -236,7 +351,26 @@ def chat(request: ChatRequest):
         cur.close()
         conn.close()
 
-        bot_reply = get_ai_reply(request.chat_id, request.message)
+        bot_reply = None
+
+        if is_order_request(request.message):
+            order_id = try_extract_order_id(request.message)
+            if order_id:
+                result = search_orders_by_id(order_id)
+                if result.get("results"):
+                    bot_reply = format_order_for_human(result["results"][0])
+                elif result.get("error"):
+                    bot_reply = f"Errore ricerca ordine: {result['error']}"
+                else:
+                    bot_reply = f"Non ho trovato l'ordine {order_id}."
+            else:
+                bot_reply = (
+                    "Ho capito che stai chiedendo informazioni su un ordine, "
+                    "ma mi serve il numero ordine per cercarlo con precisione."
+                )
+
+        if not bot_reply:
+            bot_reply = get_ai_reply(request.chat_id, request.message)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
