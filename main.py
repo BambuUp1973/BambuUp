@@ -7,6 +7,7 @@ import re
 import psycopg2
 import requests
 from woocommerce import API
+from docx import Document
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -555,6 +556,26 @@ def is_order_request(message: str) -> bool:
     ]
     return any(word in msg for word in keywords)
 
+def extract_text_from_docx(file_path: str) -> str:
+    doc = Document(file_path)
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    return "\n".join(paragraphs)
+
+def save_knowledge_document(title: str, category: str, content: str):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO knowledge_documents (title, category, content)
+        VALUES (%s, %s, %s)
+        """,
+        (title, category, content),
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
 
 @app.get("/")
 def home():
@@ -737,3 +758,59 @@ def custom_order_view(order_number: str):
     except Exception as e:
         return {"error": str(e)}
         
+@app.get("/import-knowledge")
+def import_knowledge():
+    try:
+        file_path = "manuale_operativo.docx"
+
+        content = extract_text_from_docx(file_path)
+
+        save_knowledge_document(
+            title="Manuale Operativo Kano",
+            category="manuale",
+            content=content
+        )
+
+        return {
+            "status": "ok",
+            "message": "Knowledge imported successfully",
+            "characters": len(content)
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/knowledge")
+def get_knowledge():
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, title, category, content, created_at
+            FROM knowledge_documents
+            ORDER BY created_at DESC
+            LIMIT 10
+            """
+        )
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        results = []
+
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "title": row[1],
+                "category": row[2],
+                "preview": row[3][:500],
+                "created_at": str(row[4])
+            })
+
+        return {"documents": results}
+
+    except Exception as e:
+        return {"error": str(e)}
