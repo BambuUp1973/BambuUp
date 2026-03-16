@@ -35,6 +35,11 @@ class OrderSearchRequest(BaseModel):
     email: str | None = None
     name: str | None = None
 
+class CustomSearchRequest(BaseModel):
+    order_number: str | None = None
+    email: str | None = None
+    name: str | None = None
+    limit: int = 100
 
 def get_wcapi():
     return API(
@@ -75,6 +80,173 @@ def get_custom_resource(resource: str, limit: int = 50):
             "error": "Invalid JSON response from custom API",
             "details": str(e)
         }
+
+def normalize_custom_order(order: dict):
+    customer = order.get("customers", {}) or {}
+    products = order.get("products", []) or []
+
+    return {
+        "id": order.get("id"),
+        "order_number": order.get("order_number"),
+        "status": order.get("status"),
+        "payment_status": order.get("payment_status"),
+        "customer_name": f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
+        "customer_email": customer.get("email"),
+        "customer_phone": customer.get("phone_number"),
+        "customer_city": customer.get("city"),
+        "customer_country": customer.get("country"),
+        "customer_type": order.get("customer_type"),
+        "customer_number": order.get("customer_number"),
+        "products": [
+            {
+                "name": p.get("name"),
+                "category": p.get("category"),
+                "subcategory": p.get("subcategory"),
+                "image_url": p.get("image_url"),
+            }
+            for p in products
+        ],
+        "selected_variations": order.get("selected_variations"),
+        "admin_design_url": order.get("admin_design_url"),
+        "admin_design_uploaded_at": order.get("admin_design_uploaded_at"),
+        "producer_assigned_at": order.get("producer_assigned_at"),
+        "producer_file_uploaded_at": order.get("producer_file_uploaded_at"),
+        "producer_csv_uploaded_at": order.get("producer_csv_uploaded_at"),
+        "producer_csv_version": order.get("producer_csv_version"),
+        "final_approval_status": order.get("final_approval_status"),
+        "final_approval_notes": order.get("final_approval_notes"),
+        "final_approved_at": order.get("final_approved_at"),
+        "final_rejected_at": order.get("final_rejected_at"),
+        "producer_reception_confirmed": order.get("producer_reception_confirmed"),
+        "producer_reception_confirmed_at": order.get("producer_reception_confirmed_at"),
+        "producer_shipped_at": order.get("producer_shipped_at"),
+        "producer_tracking": order.get("producer_tracking"),
+        "logistics_shipped_at": order.get("logistics_shipped_at"),
+        "logistics_tracking": order.get("logistics_tracking"),
+        "customer_notes": order.get("customer_notes"),
+        "admin_notes": order.get("admin_notes"),
+        "created_at": order.get("created_at"),
+    }
+
+
+def search_custom_orders_raw(limit: int = 100):
+    data = get_custom_resource("orders", limit)
+
+    if isinstance(data, dict) and data.get("error"):
+        return data
+
+    raw_orders = data.get("data", []) if isinstance(data, dict) else []
+    normalized = [normalize_custom_order(order) for order in raw_orders]
+    return {"results": normalized}
+
+
+def search_custom_orders_by_number(order_number: str, limit: int = 100):
+    data = search_custom_orders_raw(limit)
+    if data.get("error"):
+        return data
+
+    order_number_clean = order_number.strip().lower()
+    filtered = [
+        order for order in data["results"]
+        if str(order.get("order_number", "")).strip().lower() == order_number_clean
+    ]
+    return {"results": filtered}
+
+
+def search_custom_orders_by_email(email: str, limit: int = 100):
+    data = search_custom_orders_raw(limit)
+    if data.get("error"):
+        return data
+
+    email_clean = email.strip().lower()
+    filtered = [
+        order for order in data["results"]
+        if str(order.get("customer_email", "")).strip().lower() == email_clean
+    ]
+    return {"results": filtered}
+
+
+def search_custom_orders_by_name(name: str, limit: int = 100):
+    data = search_custom_orders_raw(limit)
+    if data.get("error"):
+        return data
+
+    name_clean = name.strip().lower()
+    filtered = [
+        order for order in data["results"]
+        if name_clean in str(order.get("customer_name", "")).strip().lower()
+    ]
+    return {"results": filtered}
+
+
+def yes_no_unknown(value):
+    if value is True:
+        return "Sì"
+    if value is False:
+        return "No"
+    if value:
+        return str(value)
+    return "N/A"
+
+
+def format_custom_order_for_human(order: dict) -> str:
+    lines = []
+    lines.append(f"Ordine custom: {order.get('order_number') or order.get('id')}")
+    lines.append(f"Status: {order.get('status') or 'N/A'}")
+    lines.append(f"Pagamento: {order.get('payment_status') or 'N/A'}")
+    lines.append(f"Creato il: {order.get('created_at') or 'N/A'}")
+    lines.append("")
+
+    lines.append(f"Cliente: {order.get('customer_name') or 'N/A'}")
+    lines.append(f"Email: {order.get('customer_email') or 'N/A'}")
+    lines.append(f"Telefono: {order.get('customer_phone') or 'N/A'}")
+    lines.append(f"Città: {order.get('customer_city') or 'N/A'}")
+    lines.append(f"Paese: {order.get('customer_country') or 'N/A'}")
+    lines.append(f"Tipo cliente: {order.get('customer_type') or 'N/A'}")
+    lines.append(f"Numero cliente: {order.get('customer_number') or 'N/A'}")
+    lines.append("")
+
+    lines.append("Prodotti:")
+    products = order.get("products", [])
+    if products:
+        for p in products:
+            lines.append(
+                f"- {p.get('name') or 'N/A'} | categoria: {p.get('category') or 'N/A'} | sottocategoria: {p.get('subcategory') or 'N/A'}"
+            )
+    else:
+        lines.append("- Nessun prodotto trovato")
+
+    lines.append("")
+    lines.append(f"Bozza admin inserita: {'Sì' if order.get('admin_design_url') else 'No'}")
+    lines.append(f"URL bozza admin: {order.get('admin_design_url') or 'N/A'}")
+    lines.append(f"Bozza admin caricata il: {order.get('admin_design_uploaded_at') or 'N/A'}")
+    lines.append(f"Varianti/taglie inserite: {'Sì' if order.get('selected_variations') else 'No'}")
+    lines.append(f"Dettaglio varianti/taglie: {order.get('selected_variations') or 'N/A'}")
+    lines.append("")
+    lines.append(f"Produttore scelto: {'Sì' if order.get('producer_assigned_at') else 'No'}")
+    lines.append(f"Produttore assegnato il: {order.get('producer_assigned_at') or 'N/A'}")
+    lines.append(f"File produzione caricati: {'Sì' if order.get('producer_file_uploaded_at') else 'No'}")
+    lines.append(f"File produzione caricati il: {order.get('producer_file_uploaded_at') or 'N/A'}")
+    lines.append(f"CSV produzione caricato: {'Sì' if order.get('producer_csv_uploaded_at') else 'No'}")
+    lines.append(f"CSV produzione caricato il: {order.get('producer_csv_uploaded_at') or 'N/A'}")
+    lines.append(f"Versione CSV produzione: {order.get('producer_csv_version') or 'N/A'}")
+    lines.append("")
+    lines.append(f"Approvazione finale: {order.get('final_approval_status') or 'N/A'}")
+    lines.append(f"Note approvazione finale: {order.get('final_approval_notes') or 'N/A'}")
+    lines.append(f"Approvato il: {order.get('final_approved_at') or 'N/A'}")
+    lines.append(f"Rifiutato il: {order.get('final_rejected_at') or 'N/A'}")
+    lines.append("")
+    lines.append(f"Produttore ha confermato ricezione: {yes_no_unknown(order.get('producer_reception_confirmed'))}")
+    lines.append(f"Ricezione confermata il: {order.get('producer_reception_confirmed_at') or 'N/A'}")
+    lines.append(f"Produttore ha spedito il: {order.get('producer_shipped_at') or 'N/A'}")
+    lines.append(f"Tracking produttore: {order.get('producer_tracking') or 'N/A'}")
+    lines.append(f"Logistica ha spedito il: {order.get('logistics_shipped_at') or 'N/A'}")
+    lines.append(f"Tracking logistica: {order.get('logistics_tracking') or 'N/A'}")
+    lines.append("")
+    lines.append(f"Note cliente: {order.get('customer_notes') or 'N/A'}")
+    lines.append(f"Note admin: {order.get('admin_notes') or 'N/A'}")
+
+    return "\n".join(lines)
 
 def get_recent_messages(chat_id: str, limit: int = 8):
     conn = psycopg2.connect(DATABASE_URL)
@@ -452,5 +624,39 @@ def order_search(request: OrderSearchRequest):
 def custom_orders(limit: int = 20):
     try:
         return get_custom_resource("orders", limit)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/custom-search")
+def custom_search(request: CustomSearchRequest):
+    try:
+        if request.order_number:
+            return search_custom_orders_by_number(request.order_number, request.limit)
+
+        if request.email:
+            return search_custom_orders_by_email(request.email, request.limit)
+
+        if request.name:
+            return search_custom_orders_by_name(request.name, request.limit)
+
+        return {"error": "Provide order_number, email, or name."}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/custom-search")
+def custom_search(request: CustomSearchRequest):
+    try:
+        if request.order_number:
+            return search_custom_orders_by_number(request.order_number, request.limit)
+
+        if request.email:
+            return search_custom_orders_by_email(request.email, request.limit)
+
+        if request.name:
+            return search_custom_orders_by_name(request.name, request.limit)
+
+        return {"error": "Provide order_number, email, or name."}
+
     except Exception as e:
         return {"error": str(e)}
