@@ -1,15 +1,21 @@
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import psycopg2
 import requests
+from woocommerce import API
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+WC_API_URL = os.getenv("WC_API_URL")
+WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
+WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 
 
 class ChatRequest(BaseModel):
@@ -17,6 +23,22 @@ class ChatRequest(BaseModel):
     sender: str
     chat_id: str
     message: str
+
+
+class OrderSearchRequest(BaseModel):
+    order_id: str | None = None
+    email: str | None = None
+    name: str | None = None
+
+
+def get_wcapi():
+    return API(
+        url=WC_API_URL,
+        consumer_key=WC_CONSUMER_KEY,
+        consumer_secret=WC_CONSUMER_SECRET,
+        version="wc/v3",
+        timeout=30
+    )
 
 
 def get_recent_messages(chat_id: str, limit: int = 8):
@@ -99,9 +121,73 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     except Exception as e:
         return f"Errore AI: {str(e)}"
 
-@app.get("/webchat")
-def webchat():
-    return FileResponse("static/chat.html")
+
+def normalize_order(order):
+    billing = order.get("billing", {}) or {}
+    shipping = order.get("shipping", {}) or {}
+
+    return {
+        "id": order.get("id"),
+        "status": order.get("status"),
+        "date_created": order.get("date_created"),
+        "total": order.get("total"),
+        "currency": order.get("currency"),
+        "customer_name": f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip(),
+        "email": billing.get("email"),
+        "phone": billing.get("phone"),
+        "shipping_name": f"{shipping.get('first_name', '')} {shipping.get('last_name', '')}".strip(),
+        "items": [
+            {
+                "name": item.get("name"),
+                "quantity": item.get("quantity"),
+                "total": item.get("total"),
+            }
+            for item in order.get("line_items", [])
+        ],
+    }
+
+
+def search_orders_by_id(order_id: str):
+    wcapi = get_wcapi()
+    response = wcapi.get(f"orders/{order_id}")
+    if response.status_code != 200:
+        return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
+    return {"results": [normalize_order(response.json())]}
+
+
+def search_orders_by_email(email: str):
+    wcapi = get_wcapi()
+    response = wcapi.get("orders", params={"search": email, "per_page": 20})
+    if response.status_code != 200:
+        return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
+
+    orders = response.json()
+    filtered = [
+        normalize_order(order)
+        for order in orders
+        if (order.get("billing", {}) or {}).get("email", "").lower() == email.lower()
+    ]
+    return {"results": filtered}
+
+
+def search_orders_by_name(name: str):
+    wcapi = get_wcapi()
+    response = wcapi.get("orders", params={"search": name, "per_page": 20})
+    if response.status_code != 200:
+        return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
+
+    orders = response.json()
+    name_lower = name.lower().strip()
+
+    filtered = []
+    for order in orders:
+        billing = order.get("billing", {}) or {}
+        full_name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip().lower()
+        if name_lower in full_name:
+            filtered.append(normalize_order(order))
+
+    return {"results": filtered}
+
 
 @app.get("/")
 def home():
@@ -111,6 +197,11 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/webchat")
+def webchat():
+    return FileResponse("static/chat.html")
 
 
 @app.get("/db-check")
@@ -170,3 +261,21 @@ def chat(request: ChatRequest):
 
     except Exception as e:
         return {"status": "error", "details": str(e)}
+
+
+@app.post("/order-search")
+def order_search(request: OrderSearchRequest):
+    try:
+        if request.order_id:
+            return search_orders_by_id(request.order_id)
+
+        if request.email:
+            return search_orders_by_email(request.email)
+
+        if request.name:
+            return search_orders_by_name(request.name)
+
+        return {"error": "Provide order_id, email, or name."}
+
+    except Exception as e:
+        return {"error": str(e)}
