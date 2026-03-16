@@ -14,6 +14,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+KANOCUSTOM_FUNCTION_URL = os.getenv("KANOCUSTOM_FUNCTION_URL")
+KANOCUSTOM_API_KEY = os.getenv("KANOCUSTOM_API_KEY")
+KANOCUSTOM_SITE = os.getenv("KANOCUSTOM_SITE")
+
 WC_API_URL = os.getenv("WC_API_URL")
 WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
@@ -41,6 +45,36 @@ def get_wcapi():
         timeout=30
     )
 
+def get_custom_resource(resource: str, limit: int = 50):
+    headers = {
+        "x-bot-api-key": KANOCUSTOM_API_KEY
+    }
+
+    params = {
+        "resource": resource,
+        "limit": limit
+    }
+
+    response = requests.get(
+        KANOCUSTOM_FUNCTION_URL,
+        headers=headers,
+        params=params,
+        timeout=60
+    )
+
+    if response.status_code != 200:
+        return {
+            "error": f"Custom API error {response.status_code}",
+            "details": response.text
+        }
+
+    try:
+        return response.json()
+    except Exception as e:
+        return {
+            "error": "Invalid JSON response from custom API",
+            "details": str(e)
+        }
 
 def get_recent_messages(chat_id: str, limit: int = 8):
     conn = psycopg2.connect(DATABASE_URL)
@@ -411,5 +445,12 @@ def order_search(request: OrderSearchRequest):
 
         return {"error": "Provide order_id, email, or name."}
 
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/custom-orders")
+def custom_orders(limit: int = 20):
+    try:
+        return get_custom_resource("orders", limit)
     except Exception as e:
         return {"error": str(e)}
