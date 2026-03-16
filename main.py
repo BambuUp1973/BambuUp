@@ -90,8 +90,21 @@ def normalize_custom_order(order: dict):
         customer = {}
 
     products = order.get("products", []) or []
-    if not isinstance(products, list):
+
+    # Se products è un singolo dict, lo trasformiamo in lista con un elemento
+    if isinstance(products, dict):
+        products = [products]
+    elif not isinstance(products, list):
         products = []
+
+    selected_variations = order.get("selected_variations")
+    admin_design_url = None
+    admin_design_uploaded_at = None
+
+    # In alcuni record admin_design_url è dentro selected_variations
+    if isinstance(selected_variations, dict):
+        admin_design_url = selected_variations.get("admin_design_url")
+        admin_design_uploaded_at = selected_variations.get("admin_design_uploaded_at")
 
     return {
         "id": order.get("id"),
@@ -103,8 +116,8 @@ def normalize_custom_order(order: dict):
         "customer_phone": customer.get("phone_number"),
         "customer_city": customer.get("city"),
         "customer_country": customer.get("country"),
-        "customer_type": order.get("customer_type"),
-        "customer_number": order.get("customer_number"),
+        "customer_type": customer.get("customer_type") or order.get("customer_type"),
+        "customer_number": customer.get("customer_number") or order.get("customer_number"),
         "products": [
             {
                 "name": p.get("name"),
@@ -113,10 +126,11 @@ def normalize_custom_order(order: dict):
                 "image_url": p.get("image_url"),
             }
             for p in products
+            if isinstance(p, dict)
         ],
-        "selected_variations": order.get("selected_variations"),
-        "admin_design_url": order.get("admin_design_url"),
-        "admin_design_uploaded_at": order.get("admin_design_uploaded_at"),
+        "selected_variations": selected_variations,
+        "admin_design_url": admin_design_url,
+        "admin_design_uploaded_at": admin_design_uploaded_at,
         "producer_assigned_at": order.get("producer_assigned_at"),
         "producer_file_uploaded_at": order.get("producer_file_uploaded_at"),
         "producer_csv_uploaded_at": order.get("producer_csv_uploaded_at"),
