@@ -82,8 +82,16 @@ def get_custom_resource(resource: str, limit: int = 50):
         }
 
 def normalize_custom_order(order: dict):
+    if not isinstance(order, dict):
+        return {"raw_value": order}
+
     customer = order.get("customers", {}) or {}
+    if not isinstance(customer, dict):
+        customer = {}
+
     products = order.get("products", []) or []
+    if not isinstance(products, list):
+        products = []
 
     return {
         "id": order.get("id"),
@@ -135,8 +143,33 @@ def search_custom_orders_raw(limit: int = 100):
     if isinstance(data, dict) and data.get("error"):
         return data
 
-    raw_orders = data.get("data", []) if isinstance(data, dict) else []
-    normalized = [normalize_custom_order(order) for order in raw_orders]
+    raw_orders = []
+
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            raw_orders = data.get("data", [])
+        elif isinstance(data.get("orders"), list):
+            raw_orders = data.get("orders", [])
+        else:
+            return {
+                "error": "Unexpected custom API structure",
+                "details": data
+            }
+
+    elif isinstance(data, list):
+        raw_orders = data
+
+    else:
+        return {
+            "error": "Unsupported custom API response type",
+            "details": str(type(data))
+        }
+
+    normalized = []
+    for order in raw_orders:
+        if isinstance(order, dict):
+            normalized.append(normalize_custom_order(order))
+
     return {"results": normalized}
 
 
@@ -177,7 +210,6 @@ def search_custom_orders_by_name(name: str, limit: int = 100):
         if name_clean in str(order.get("customer_name", "")).strip().lower()
     ]
     return {"results": filtered}
-
 
 def yes_no_unknown(value):
     if value is True:
@@ -624,6 +656,17 @@ def order_search(request: OrderSearchRequest):
 def custom_orders(limit: int = 20):
     try:
         return get_custom_resource("orders", limit)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/custom-debug")
+def custom_debug(limit: int = 3):
+    try:
+        data = get_custom_resource("orders", limit)
+        return {
+            "type": str(type(data)),
+            "preview": data
+        }
     except Exception as e:
         return {"error": str(e)}
 
