@@ -717,3 +717,23 @@ def custom_search(request: CustomSearchRequest):
 
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/custom-order-view")
+def custom_order_view(order_number: str):
+    try:
+        result = search_custom_orders_by_number(order_number, 100)
+
+        if result.get("error"):
+            return result
+
+        if not result.get("results"):
+            return {"error": f"No custom order found for {order_number}"}
+
+        return {
+            "order_number": order_number,
+            "formatted": format_custom_order_for_human(result["results"][0])
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+        
