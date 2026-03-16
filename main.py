@@ -814,3 +814,47 @@ def get_knowledge():
 
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/search-knowledge")
+async def search_knowledge(q: str):
+
+    try:
+
+        url = f"{SUPABASE_URL}/rest/v1/knowledge_documents"
+
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+        }
+
+        params = {
+            "select": "content"
+        }
+
+        r = requests.get(url, headers=headers, params=params)
+        data = r.json()
+
+        if not data:
+            return {"result": "no knowledge"}
+
+        text = data[0]["content"]
+
+        q = q.lower()
+
+        chunks = text.split("\n")
+
+        matches = []
+
+        for c in chunks:
+
+            if q in c.lower():
+                matches.append(c)
+
+        return {
+            "query": q,
+            "matches": matches[:10]
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
