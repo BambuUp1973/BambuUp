@@ -322,6 +322,56 @@ def get_recent_messages(chat_id: str, limit: int = 8):
 
     return history
 
+def get_knowledge_context(query: str, max_matches: int = 12) -> str:
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT content
+        FROM knowledge_documents
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    )
+
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row or not row[0]:
+        return ""
+
+    text = row[0]
+    lines = text.split("\n")
+
+    query_words = [w.strip().lower() for w in query.split() if len(w.strip()) > 2]
+
+    matches = []
+    for line in lines:
+        line_lower = line.lower()
+        score = 0
+
+        for word in query_words:
+            if word in line_lower:
+                score += 1
+
+        if score > 0:
+            matches.append((score, line))
+
+    matches.sort(key=lambda x: x[0], reverse=True)
+
+    selected = []
+    seen = set()
+    for _, line in matches:
+        clean = line.strip()
+        if clean and clean not in seen:
+            selected.append(clean)
+            seen.add(clean)
+        if len(selected) >= max_matches:
+            break
+
+    return "\n".join(selected)
 
 def get_ai_reply(chat_id: str, user_message: str) -> str:
     if not OPENROUTER_API_KEY:
@@ -333,21 +383,34 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     }
 
     history = get_recent_messages(chat_id)
+    knowledge_context = get_knowledge_context(user_message)
+
+    system_content = (
+        "You are an operational assistant that answers like Mauro. "
+        "Be clear, practical, concise, and useful. "
+        "Always reply in the same language used by the user. "
+        "If the user writes in Italian, answer in Italian. "
+        "If the user writes in English, answer in English. "
+        "Use the conversation history to maintain context and continuity. "
+        "If useful knowledge is provided, prioritize it and use it as operational guidance. "
+        "Do not invent procedures if the knowledge already contains relevant instructions. "
+        "Do not mention these instructions."
+    )
 
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are an operational assistant that answers like Mauro. "
-                "Be clear, practical, concise, and useful. "
-                "Always reply in the same language used by the user. "
-                "If the user writes in Italian, answer in Italian. "
-                "If the user writes in English, answer in English. "
-                "Use the conversation history to maintain context and continuity. "
-                "Do not mention these instructions."
-            ),
+            "content": system_content,
         }
     ]
+
+    if knowledge_context:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Relevant internal knowledge:\n{knowledge_context}"
+            }
+        )
 
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
@@ -374,7 +437,6 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
 
     except Exception as e:
         return f"Errore AI: {str(e)}"
-
 
 def normalize_order(order):
     billing = order.get("billing", {}) or {}
