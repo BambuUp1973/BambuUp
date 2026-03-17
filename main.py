@@ -3,13 +3,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
-import requests
-from fastapi import FastAPI
-
-app = FastAPI()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 import re
 import psycopg2
 import requests
@@ -823,38 +816,35 @@ def get_knowledge():
         return {"error": str(e)}
 
 @app.get("/search-knowledge")
-async def search_knowledge(q: str):
-
+def search_knowledge(q: str):
     try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
 
-        url = f"{SUPABASE_URL}/rest/v1/knowledge_documents"
+        cur.execute(
+            """
+            SELECT content
+            FROM knowledge_documents
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
 
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
-        }
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
 
-        params = {
-            "select": "content"
-        }
-
-        r = requests.get(url, headers=headers, params=params)
-        data = r.json()
-
-        if not data:
+        if not row or not row[0]:
             return {"result": "no knowledge"}
 
-        text = data[0]["content"]
-
-        q = q.lower()
+        text = row[0]
+        query_lower = q.lower()
 
         chunks = text.split("\n")
-
         matches = []
 
         for c in chunks:
-
-            if q in c.lower():
+            if query_lower in c.lower():
                 matches.append(c)
 
         return {
@@ -864,4 +854,3 @@ async def search_knowledge(q: str):
 
     except Exception as e:
         return {"error": str(e)}
-
