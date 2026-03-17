@@ -722,23 +722,6 @@ def custom_search(request: CustomSearchRequest):
     except Exception as e:
         return {"error": str(e)}
 
-@app.post("/custom-search")
-def custom_search(request: CustomSearchRequest):
-    try:
-        if request.order_number:
-            return search_custom_orders_by_number(request.order_number, request.limit)
-
-        if request.email:
-            return search_custom_orders_by_email(request.email, request.limit)
-
-        if request.name:
-            return search_custom_orders_by_name(request.name, request.limit)
-
-        return {"error": "Provide order_number, email, or name."}
-
-    except Exception as e:
-        return {"error": str(e)}
-
 @app.get("/custom-order-view")
 def custom_order_view(order_number: str):
     try:
