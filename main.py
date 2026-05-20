@@ -551,7 +551,7 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": "openrouter/free",
+        "model": "mistralai/mistral-small-3.1-24b-instruct:free",
         "messages": messages,
     }
 
