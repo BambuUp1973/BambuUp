@@ -28,7 +28,7 @@
     }
 
     .msg {
-      margin-bottom: 12px;
+      margin-bottom: 4px;
       padding: 10px 12px;
       border-radius: 10px;
       max-width: 80%;
@@ -43,6 +43,27 @@
     .bot {
       background: #ececec;
       margin-right: auto;
+    }
+
+    .msg-wrapper {
+      margin-bottom: 12px;
+    }
+
+    .feedback-btn {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: 12px;
+      padding: 3px 8px;
+      background: transparent;
+      color: #999;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .feedback-btn:hover {
+      color: #c00;
+      border-color: #c00;
     }
 
     .controls {
@@ -81,6 +102,68 @@
       gap: 10px;
       align-items: flex-start;
     }
+
+    /* Modale feedback */
+    #feedbackOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #feedbackOverlay.open {
+      display: flex;
+    }
+
+    #feedbackModal {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      width: 560px;
+      max-width: 95vw;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #feedbackModal h2 {
+      margin: 0 0 4px;
+      font-size: 18px;
+    }
+
+    #feedbackModal label {
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 2px;
+      display: block;
+    }
+
+    #feedbackModal textarea {
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 14px;
+      resize: vertical;
+      min-height: 70px;
+      background: #f9f9f9;
+    }
+
+    #feedbackModal textarea.editable {
+      background: white;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .modal-actions button.cancel {
+      background: #eee;
+      color: #333;
+    }
   </style>
 </head>
 <body>
@@ -99,17 +182,102 @@
     <button onclick="sendMessage()">Invia</button>
   </div>
 
+  <!-- Modale feedback -->
+  <div id="feedbackOverlay">
+    <div id="feedbackModal">
+      <h2>Segnala risposta sbagliata</h2>
+
+      <div>
+        <label>Domanda</label>
+        <textarea id="fbQuestion" readonly></textarea>
+      </div>
+      <div>
+        <label>Risposta sbagliata del bot</label>
+        <textarea id="fbWrong" readonly></textarea>
+      </div>
+      <div>
+        <label>Risposta corretta (scrivi tu)</label>
+        <textarea id="fbCorrect" class="editable" placeholder="Come avrebbe dovuto rispondere..."></textarea>
+      </div>
+
+      <div class="modal-actions">
+        <button class="cancel" onclick="closeFeedbackModal()">Annulla</button>
+        <button onclick="submitFeedback()">Invia feedback</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const apiUrl = "/chat";
+    let lastUserMessage = "";
 
     function addMessage(text, role) {
       const chatBox = document.getElementById("chatBox");
+      const wrapper = document.createElement("div");
+      wrapper.className = "msg-wrapper";
+
       const div = document.createElement("div");
       div.className = `msg ${role}`;
       div.textContent = text;
-      chatBox.appendChild(div);
+      wrapper.appendChild(div);
+
+      if (role === "bot") {
+        const capturedQuestion = lastUserMessage;
+        const capturedReply = text;
+        const btn = document.createElement("button");
+        btn.className = "feedback-btn";
+        btn.textContent = "👎 Risposta sbagliata";
+        btn.onclick = () => openFeedbackModal(capturedQuestion, capturedReply);
+        wrapper.appendChild(btn);
+      } else {
+        lastUserMessage = text;
+      }
+
+      chatBox.appendChild(wrapper);
       chatBox.scrollTop = chatBox.scrollHeight;
     }
+
+    function openFeedbackModal(question, wrongReply) {
+      document.getElementById("fbQuestion").value = question;
+      document.getElementById("fbWrong").value = wrongReply;
+      document.getElementById("fbCorrect").value = "";
+      document.getElementById("feedbackOverlay").classList.add("open");
+      document.getElementById("fbCorrect").focus();
+    }
+
+    function closeFeedbackModal() {
+      document.getElementById("feedbackOverlay").classList.remove("open");
+    }
+
+    async function submitFeedback() {
+      const question = document.getElementById("fbQuestion").value;
+      const wrongReply = document.getElementById("fbWrong").value;
+      const correctReply = document.getElementById("fbCorrect").value.trim();
+
+      if (!correctReply) {
+        alert("Inserisci la risposta corretta prima di inviare.");
+        return;
+      }
+
+      try {
+        await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: question,
+            wrong_reply: wrongReply,
+            correct_reply: correctReply
+          })
+        });
+        closeFeedbackModal();
+      } catch (e) {
+        alert("Errore nell'invio del feedback.");
+      }
+    }
+
+    // Chiudi modale cliccando fuori
+    document.getElementById("feedbackOverlay").addEventListener("click", function(e) {
+      if (e.target === this) closeFeedbackModal();
+    });
 
     async function sendMessage() {
       const sender = document.getElementById("sender").value.trim();
@@ -123,11 +291,9 @@
       messageEl.value = "";
 
       try {
-        const response = await fetch(apiUrl, {
+        const response = await fetch("/chat", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             source: "web",
             sender: sender,

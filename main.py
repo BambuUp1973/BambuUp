@@ -42,6 +42,15 @@ def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             );
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id SERIAL PRIMARY KEY,
+                question TEXT,
+                wrong_reply TEXT,
+                correct_reply TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
         conn.commit()
         cur.close()
         conn.close()
@@ -72,6 +81,11 @@ class OrderSearchRequest(BaseModel):
     order_id: str | None = None
     email: str | None = None
     name: str | None = None
+
+class FeedbackRequest(BaseModel):
+    question: str
+    wrong_reply: str
+    correct_reply: str
 
 class CustomSearchRequest(BaseModel):
     order_number: str | None = None
@@ -791,6 +805,23 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/feedback")
+def submit_feedback(request: FeedbackRequest):
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO feedback (question, wrong_reply, correct_reply) VALUES (%s, %s, %s)",
+            (request.question, request.wrong_reply, request.correct_reply),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "details": str(e)}
 
 
 @app.get("/webchat")
