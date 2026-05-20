@@ -551,7 +551,7 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": "mistralai/mistral-small-3.1-24b-instruct:free",
+        "model": "openrouter/free",
         "messages": messages,
     }
 
@@ -569,7 +569,14 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
             print(f"[OpenRouter error] {data}")
         return f"Errore OpenRouter: {data}"
 
-        return data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
+        # Alcuni modelli restituiscono reasoning separato — prendi solo il content
+        reply = msg.get("content", "")
+        # Se il content è vuoto o None, prova reasoning
+        if not reply:
+            reasoning = msg.get("reasoning", "")
+            reply = reasoning if reasoning else "Nessuna risposta disponibile."
+        return reply
 
     except Exception as e:
         return f"Errore AI: {str(e)}"
