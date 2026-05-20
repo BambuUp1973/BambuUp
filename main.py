@@ -514,7 +514,7 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": "google/gemini-flash-1.5",
+        "model": "meta-llama/llama-3.3-8b-instruct:free",
         "messages": messages,
     }
 
@@ -529,7 +529,8 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
         data = response.json()
 
         if "choices" not in data:
-            return f"Errore OpenRouter: {data}"
+            print(f"[OpenRouter error] {data}")
+        return f"Errore OpenRouter: {data}"
 
         return data["choices"][0]["message"]["content"]
 
