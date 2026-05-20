@@ -455,6 +455,7 @@ Ordini sito web:
 
 Prodotti personalizzati (custom):
 - Tutto passa da kanokimonos.app — registrazione + approvazione Mauro
+- Hai accesso diretto tramite API a tutti gli ordini custom su kanokimonos.app: quando ti chiedono di un ordine custom, cercalo subito per numero ordine, email o nome senza dire che devi verificare manualmente
 - File grafici solo vettoriali (.AI, .EPS, .PDF, .SVG) — mai JPG o PNG
 - Niente bozze senza informazioni complete
 - Niente modifiche dopo approvazione finale
@@ -739,9 +740,10 @@ def format_order_for_human(order: dict) -> str:
 
 def try_extract_order_id(message: str) -> str | None:
     patterns = [
-        r"ordine\s*#?\s*(\d+)",
-        r"order\s*#?\s*(\d+)",
-        r"\b(\d{5,})\b",
+        r"ordine\s*#?\s*(\d[\d\-]+\d)",   # ordine #0466-05-26 o ordine 12345
+        r"order\s*#?\s*(\d[\d\-]+\d)",    # order #0466-05-26 o order 12345
+        r"\b(\d{3,4}-\d{2,4}-\d{2,4})\b", # formato 0466-05-26
+        r"\b(\d{5,})\b",                   # numero puro 5+ cifre
     ]
 
     for pattern in patterns:
@@ -866,18 +868,22 @@ def chat(request: ChatRequest):
         if is_order_request(request.message):
             order_id = try_extract_order_id(request.message)
             if order_id:
-                result = search_orders_by_id(order_id)
-                if result.get("results"):
-                    bot_reply = format_order_for_human(result["results"][0])
-                elif result.get("error"):
-                    bot_reply = f"Errore ricerca ordine: {result['error']}"
+                # Prima cerca su kanokimonos.app (ordini custom)
+                custom_result = search_custom_orders_by_number(order_id)
+                if custom_result.get("results"):
+                    bot_reply = format_custom_order_for_human(custom_result["results"][0])
                 else:
-                    bot_reply = f"Non ho trovato l'ordine {order_id}."
-            else:
-                bot_reply = (
-                    "Ho capito che stai chiedendo informazioni su un ordine, "
-                    "ma mi serve il numero ordine per cercarlo con precisione."
-                )
+                    # Se non trovato tra i custom e il numero è puramente numerico, prova WooCommerce
+                    if order_id.isdigit():
+                        wc_result = search_orders_by_id(order_id)
+                        if wc_result.get("results"):
+                            bot_reply = format_order_for_human(wc_result["results"][0])
+                        elif wc_result.get("error"):
+                            bot_reply = f"Errore ricerca ordine: {wc_result['error']}"
+                        else:
+                            bot_reply = f"Non ho trovato l'ordine {order_id} né su kanokimonos.app né su WooCommerce."
+                    else:
+                        bot_reply = f"Non ho trovato l'ordine custom {order_id} su kanokimonos.app."
 
         if not bot_reply:
             bot_reply = get_ai_reply(request.chat_id, request.message)
