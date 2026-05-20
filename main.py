@@ -739,17 +739,7 @@ def try_extract_order_id(message: str) -> str | None:
 
 
 def is_order_request(message: str) -> bool:
-    msg = message.lower()
-    keywords = [
-        "ordine",
-        "order",
-        "stato ordine",
-        "order status",
-        "spedito",
-        "processing",
-        "completed",
-    ]
-    return any(word in msg for word in keywords)
+    return try_extract_order_id(message) is not None
 
 def extract_text_from_docx(file_path: str) -> str:
     doc = Document(file_path)
