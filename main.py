@@ -753,8 +753,29 @@ def is_order_request(message: str) -> bool:
 
 def extract_text_from_docx(file_path: str) -> str:
     doc = Document(file_path)
-    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    return "\n".join(paragraphs)
+    texts = []
+
+    def _cell_text(cell):
+        return "\n".join(p.text for p in cell.paragraphs if p.text.strip())
+
+    for element in doc.element.body:
+        tag = element.tag.split("}")[-1] if "}" in element.tag else element.tag
+        if tag == "p":
+            from docx.text.paragraph import Paragraph
+            text = Paragraph(element, doc).text.strip()
+            if text:
+                texts.append(text)
+        elif tag == "tbl":
+            from docx.table import Table
+            seen: set = set()
+            for row in Table(element, doc).rows:
+                for cell in row.cells:
+                    t = _cell_text(cell)
+                    if t and t not in seen:
+                        seen.add(t)
+                        texts.append(t)
+
+    return "\n".join(texts)
 
 def save_knowledge_document(title: str, category: str, content: str):
     conn = psycopg2.connect(DATABASE_URL)
@@ -942,15 +963,9 @@ def import_knowledge():
         file_path = "manuale_operativo.docx"
         full_text = extract_text_from_docx(file_path)
 
-        # Cancella i documenti precedenti per evitare duplicati
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("DELETE FROM knowledge_documents WHERE category = 'manuale';")
-        conn.commit()
-        cur.close()
-        conn.close()
+        if not full_text:
+            return {"error": "Nessun testo estratto dal documento"}
 
-        # Dividi in chunks da 4000 caratteri con overlap di 200
         chunk_size = 4000
         overlap = 200
         chunks = []
@@ -958,21 +973,27 @@ def import_knowledge():
         while start < len(full_text):
             end = start + chunk_size
             chunks.append(full_text[start:end])
+            if end >= len(full_text):
+                break
             start = end - overlap
 
-        # Salva ogni chunk come documento separato
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM knowledge_documents WHERE category = 'manuale';")
         for i, chunk in enumerate(chunks):
-            save_knowledge_document(
-                title=f"Manuale Operativo Kano - Parte {i+1}",
-                category="manuale",
-                content=chunk
+            cur.execute(
+                "INSERT INTO knowledge_documents (title, category, content) VALUES (%s, %s, %s)",
+                (f"Manuale Operativo Kano - Parte {i+1}", "manuale", chunk),
             )
+        conn.commit()
+        cur.close()
+        conn.close()
 
         return {
             "status": "ok",
-            "message": f"Knowledge imported successfully in {len(chunks)} chunks",
+            "message": f"Knowledge imported in {len(chunks)} chunks",
             "total_characters": len(full_text),
-            "chunks": len(chunks)
+            "chunks": len(chunks),
         }
 
     except Exception as e:
