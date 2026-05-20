@@ -359,55 +359,47 @@ def get_recent_messages(chat_id: str, limit: int = 8):
 
     return history
 
-def get_knowledge_context(query: str, max_matches: int = 12) -> str:
+def get_knowledge_context(query: str, max_matches: int = 20) -> str:
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
 
+    # Prendi tutti i chunks del manuale
     cur.execute(
         """
         SELECT content
         FROM knowledge_documents
-        ORDER BY created_at DESC
-        LIMIT 1
+        WHERE category = 'manuale'
+        ORDER BY title ASC
         """
     )
 
-    row = cur.fetchone()
+    rows = cur.fetchall()
     cur.close()
     conn.close()
 
-    if not row or not row[0]:
+    if not rows:
         return ""
 
-    text = row[0]
-    lines = text.split("\n")
-
+    # Unisci tutti i chunks e cerca per righe
     query_words = [w.strip().lower() for w in query.split() if len(w.strip()) > 2]
-
     matches = []
-    for line in lines:
-        line_lower = line.lower()
-        score = 0
+    seen = set()
 
-        for word in query_words:
-            if word in line_lower:
-                score += 1
-
-        if score > 0:
-            matches.append((score, line))
+    for row in rows:
+        text = row[0] or ""
+        lines = text.split("\n")
+        for line in lines:
+            line_clean = line.strip()
+            if not line_clean or line_clean in seen:
+                continue
+            line_lower = line_clean.lower()
+            score = sum(1 for word in query_words if word in line_lower)
+            if score > 0:
+                matches.append((score, line_clean))
+                seen.add(line_clean)
 
     matches.sort(key=lambda x: x[0], reverse=True)
-
-    selected = []
-    seen = set()
-    for _, line in matches:
-        clean = line.strip()
-        if clean and clean not in seen:
-            selected.append(clean)
-            seen.add(clean)
-        if len(selected) >= max_matches:
-            break
-
+    selected = [line for _, line in matches[:max_matches]]
     return "\n".join(selected)
 
 SYSTEM_PROMPT = """Sei Mauro Danesin, N2 di Kano Kimonos.
@@ -431,6 +423,7 @@ STILE E TONO
 
 STRUTTURA AZIENDALE
 - Ivan Tomasetti: proprietario, coinvolto solo in rarissimi casi e sempre tramite Mauro
+- Andrea Tomasetti: customer service, sorella di Ivan
 - Evelin: logistica (chat "Logistic Kano") — fornitore Kelmar, stiamo valutando cambio
 - Kaltrina: contabilità (chat WhatsApp accounting)
 - Angelis: designer principale, parla spagnolo
@@ -947,19 +940,39 @@ def custom_order_view(order_number: str):
 def import_knowledge():
     try:
         file_path = "manuale_operativo.docx"
+        full_text = extract_text_from_docx(file_path)
 
-        content = extract_text_from_docx(file_path)
+        # Cancella i documenti precedenti per evitare duplicati
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM knowledge_documents WHERE category = 'manuale';")
+        conn.commit()
+        cur.close()
+        conn.close()
 
-        save_knowledge_document(
-            title="Manuale Operativo Kano",
-            category="manuale",
-            content=content
-        )
+        # Dividi in chunks da 4000 caratteri con overlap di 200
+        chunk_size = 4000
+        overlap = 200
+        chunks = []
+        start = 0
+        while start < len(full_text):
+            end = start + chunk_size
+            chunks.append(full_text[start:end])
+            start = end - overlap
+
+        # Salva ogni chunk come documento separato
+        for i, chunk in enumerate(chunks):
+            save_knowledge_document(
+                title=f"Manuale Operativo Kano - Parte {i+1}",
+                category="manuale",
+                content=chunk
+            )
 
         return {
             "status": "ok",
-            "message": "Knowledge imported successfully",
-            "characters": len(content)
+            "message": f"Knowledge imported successfully in {len(chunks)} chunks",
+            "total_characters": len(full_text),
+            "chunks": len(chunks)
         }
 
     except Exception as e:
