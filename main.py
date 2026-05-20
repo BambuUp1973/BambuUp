@@ -551,7 +551,7 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
     messages.append({"role": "user", "content": user_message})
 
     payload = {
-        "model": "meta-llama/llama-3.3-8b-instruct:free",
+        "model": "mistralai/mistral-7b-instruct:free",
         "messages": messages,
     }
 
