@@ -12,6 +12,42 @@ from docx import Document
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+def init_db():
+    """Crea le tabelle se non esistono — eseguito all'avvio."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                source TEXT,
+                sender TEXT,
+                chat_id TEXT,
+                role TEXT,
+                content TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_documents (
+                id SERIAL PRIMARY KEY,
+                title TEXT,
+                category TEXT,
+                content TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("[DB] Tabelle inizializzate con successo.")
+    except Exception as e:
+        print(f"[DB] Errore init: {e}")
+
+
+init_db()
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
