@@ -13,6 +13,10 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+
 def init_db():
     """Crea le tabelle se non esistono — eseguito all'avvio."""
     try:
@@ -47,9 +51,6 @@ def init_db():
 
 
 init_db()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 KANOCUSTOM_FUNCTION_URL = os.getenv("KANOCUSTOM_FUNCTION_URL")
 KANOCUSTOM_API_KEY = os.getenv("KANOCUSTOM_API_KEY")
