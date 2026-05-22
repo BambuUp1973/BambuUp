@@ -168,6 +168,13 @@ def normalize_custom_order(order: dict):
         "customer_phone": customer.get("phone_number"),
         "customer_city": customer.get("city"),
         "customer_country": customer.get("country"),
+        "billing_address": customer.get("address_street"),
+        "billing_post_code": customer.get("post_code"),
+        "use_billing_as_shipping": customer.get("use_billing_as_shipping", True),
+        "shipping_address": customer.get("shipping_address_street") if not customer.get("use_billing_as_shipping", True) else customer.get("address_street"),
+        "shipping_city": customer.get("shipping_city") if not customer.get("use_billing_as_shipping", True) else customer.get("city"),
+        "shipping_post_code": customer.get("shipping_post_code") if not customer.get("use_billing_as_shipping", True) else customer.get("post_code"),
+        "shipping_country": customer.get("shipping_country") if not customer.get("use_billing_as_shipping", True) else customer.get("country"),
         "customer_type": customer.get("customer_type") or order.get("customer_type"),
         "customer_number": customer.get("customer_number") or order.get("customer_number"),
         "products": [
@@ -302,6 +309,23 @@ def format_custom_order_for_human(order: dict) -> str:
     lines.append(f"Paese: {order.get('customer_country') or 'N/A'}")
     lines.append(f"Tipo cliente: {order.get('customer_type') or 'N/A'}")
     lines.append(f"Numero cliente: {order.get('customer_number') or 'N/A'}")
+    lines.append("")
+
+    billing_addr = order.get('billing_address')
+    billing_pc = order.get('billing_post_code')
+    billing_line = " | ".join(filter(None, [billing_addr, billing_pc, order.get('customer_city'), order.get('customer_country')]))
+    lines.append(f"Indirizzo di fatturazione: {billing_line or 'N/A'}")
+
+    use_billing = order.get('use_billing_as_shipping', True)
+    shipping_addr = order.get('shipping_address')
+    shipping_city = order.get('shipping_city')
+    shipping_pc = order.get('shipping_post_code')
+    shipping_country = order.get('shipping_country')
+    shipping_line = " | ".join(filter(None, [shipping_addr, shipping_pc, shipping_city, shipping_country]))
+    if use_billing:
+        lines.append(f"Indirizzo di spedizione: {shipping_line or 'N/A'} (stesso della fatturazione)")
+    else:
+        lines.append(f"Indirizzo di spedizione: {shipping_line or 'N/A'}")
     lines.append("")
 
     lines.append("Prodotti:")
