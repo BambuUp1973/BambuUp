@@ -175,6 +175,7 @@ def normalize_custom_order(order: dict):
         "shipping_city": customer.get("shipping_city") if not customer.get("use_billing_as_shipping", True) else customer.get("city"),
         "shipping_post_code": customer.get("shipping_post_code") if not customer.get("use_billing_as_shipping", True) else customer.get("post_code"),
         "shipping_country": customer.get("shipping_country") if not customer.get("use_billing_as_shipping", True) else customer.get("country"),
+        "vat_number": customer.get("vat_number"),
         "customer_type": customer.get("customer_type") or order.get("customer_type"),
         "customer_number": customer.get("customer_number") or order.get("customer_number"),
         "products": [
@@ -309,6 +310,7 @@ def format_custom_order_for_human(order: dict) -> str:
     lines.append(f"Paese: {order.get('customer_country') or 'N/A'}")
     lines.append(f"Tipo cliente: {order.get('customer_type') or 'N/A'}")
     lines.append(f"Numero cliente: {order.get('customer_number') or 'N/A'}")
+    lines.append(f"P.IVA / VAT: {order.get('vat_number') or 'N/A'}")
     lines.append("")
 
     billing_addr = order.get('billing_address')
@@ -369,6 +371,47 @@ def format_custom_order_for_human(order: dict) -> str:
     lines.append(f"Note admin: {order.get('admin_notes') or 'N/A'}")
 
     return "\n".join(lines)
+
+
+def format_custom_orders_summary(orders: list) -> str:
+    if not orders:
+        return "Nessun ordine custom trovato."
+
+    customer_name = orders[0].get("customer_name") if orders else None
+    lines = []
+    if customer_name:
+        lines.append(f"Ordini custom di {customer_name} ({len(orders)} totale):")
+    else:
+        lines.append(f"Ordini custom trovati: {len(orders)}")
+    lines.append("")
+
+    for order in orders:
+        products = order.get("products", [])
+        product_str = ", ".join(p.get("name") for p in products if p.get("name")) or "N/A"
+        date_str = (order.get("created_at") or "N/A")[:10]
+        lines.append(
+            f"• {order.get('order_number') or order.get('id') or 'N/A'} | "
+            f"stato: {order.get('status') or 'N/A'} | "
+            f"pagamento: {order.get('payment_status') or 'N/A'} | "
+            f"{product_str} | "
+            f"{date_str}"
+        )
+
+    return "\n".join(lines)
+
+
+def try_extract_customer_name(message: str) -> str | None:
+    patterns = [
+        r"ordini\s+di\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,}?)(?:\?|$|,|\.|!|\s*$)",
+        r"orders?\s+(?:of|for)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,}?)(?:\?|$|,|\.|!|\s*$)",
+        r"cliente\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,}?)(?:\?|$|,|\.|!|\s*$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
+
 
 def get_recent_messages(chat_id: str, limit: int = 8):
     conn = psycopg2.connect(DATABASE_URL)
@@ -908,6 +951,13 @@ def chat(request: ChatRequest):
                             bot_reply = f"Non ho trovato l'ordine {order_id} né su kanokimonos.app né su WooCommerce."
                     else:
                         bot_reply = f"Non ho trovato l'ordine custom {order_id} su kanokimonos.app."
+
+        if not bot_reply:
+            customer_name = try_extract_customer_name(request.message)
+            if customer_name:
+                name_result = search_custom_orders_by_name(customer_name)
+                if name_result.get("results"):
+                    bot_reply = format_custom_orders_summary(name_result["results"])
 
         if not bot_reply:
             bot_reply = get_ai_reply(request.chat_id, request.message)
