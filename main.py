@@ -411,19 +411,29 @@ def format_custom_orders_summary(orders: list) -> str:
 
 
 def try_extract_customer_name(message: str) -> str | None:
-    # Capitalized proper noun: one or more words starting with uppercase
-    NAME = r"([A-ZÀ-Ý][A-Za-zÀ-ÿ]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ]+)*)"
-    patterns = [
-        r"ordin[ei]\s+di\s+" + NAME,            # "ordine/ordini di Manfren"
-        r"orders?\s+(?:of|for)\s+" + NAME,       # English
-        r"cliente\s+" + NAME,                    # "cliente Manfren"
-        r"(?:fatt[io]\s+)?da\s+" + NAME,         # "da Manfren" / "fatti da Manfren"
-        r"\bha\s+" + NAME + r"(?:\s*$|\?)",      # "ha Manfren" at end of sentence
+    # Pass 1: capitalized name — stops naturally at the first lowercase word mid-sentence
+    NAME_CAPS = r"([A-ZÀ-Ý][A-Za-zÀ-ÿ]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ]+)*)"
+    # Pass 2: single lowercase word fallback (avoids over-matching mid-sentence)
+    NAME_WORD = r"([A-Za-zÀ-ÿ]{2,})"
+
+    keyword_patterns = [
+        r"ordin[ei]\s+di\s+",                    # "ordine/ordini di ..."
+        r"(?:fatt[io]\s+)?da\s+",                # "da ..." / "fatti da ..."
+        r"orders?\s+(?:of|for)\s+",              # English
+        r"cliente\s+",                           # "cliente ..."
+        r"ordini\s+(?!(?:di|fatt)\b)",           # "ordini ..." (not followed by "di" or "fatti")
     ]
-    for pattern in patterns:
-        match = re.search(pattern, message)
+
+    for NAME in [NAME_CAPS, NAME_WORD]:
+        for kw in keyword_patterns:
+            match = re.search(kw + NAME, message, re.IGNORECASE if NAME is NAME_WORD else 0)
+            if match:
+                return match.group(1).strip()
+        # "ha NAME" only at end of sentence
+        match = re.search(r"\bha\s+" + NAME + r"(?:\s*$|\?)", message, re.IGNORECASE if NAME is NAME_WORD else 0)
         if match:
             return match.group(1).strip()
+
     return None
 
 
