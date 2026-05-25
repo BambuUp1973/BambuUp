@@ -184,6 +184,7 @@ def normalize_custom_order(order: dict):
                 "category": p.get("category"),
                 "subcategory": p.get("subcategory"),
                 "image_url": p.get("image_url"),
+                "quantity": p.get("quantity"),
             }
             for p in products
             if isinstance(p, dict)
@@ -334,8 +335,10 @@ def format_custom_order_for_human(order: dict) -> str:
     products = order.get("products", [])
     if products:
         for p in products:
+            qty = p.get("quantity")
+            qty_str = f" | quantità: {qty}" if qty is not None else ""
             lines.append(
-                f"- {p.get('name') or 'N/A'} | categoria: {p.get('category') or 'N/A'} | sottocategoria: {p.get('subcategory') or 'N/A'}"
+                f"- {p.get('name') or 'N/A'} | categoria: {p.get('category') or 'N/A'} | sottocategoria: {p.get('subcategory') or 'N/A'}{qty_str}"
             )
     else:
         lines.append("- Nessun prodotto trovato")
@@ -387,7 +390,13 @@ def format_custom_orders_summary(orders: list) -> str:
 
     for order in orders:
         products = order.get("products", [])
-        product_str = ", ".join(p.get("name") for p in products if p.get("name")) or "N/A"
+        product_parts = []
+        for p in products:
+            if not p.get("name"):
+                continue
+            qty = p.get("quantity")
+            product_parts.append(f"{p['name']} (x{qty})" if qty is not None else p["name"])
+        product_str = ", ".join(product_parts) or "N/A"
         date_str = (order.get("created_at") or "N/A")[:10]
         lines.append(
             f"• {order.get('order_number') or order.get('id') or 'N/A'} | "
