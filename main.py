@@ -1023,18 +1023,9 @@ def chat(request: ChatRequest):
             if customer_name:
                 name_result = search_custom_orders_by_name(customer_name)
                 if name_result.get("results"):
-                    orders_summary = format_custom_orders_summary(name_result["results"])
-                    bot_reply = get_ai_reply(
-                        request.chat_id,
-                        request.message,
-                        extra_context=f"Dati ordini da kanokimonos.app per '{customer_name}':\n{orders_summary}",
-                    )
+                    bot_reply = format_custom_orders_summary(name_result["results"])
                 else:
-                    bot_reply = get_ai_reply(
-                        request.chat_id,
-                        request.message,
-                        extra_context=f"Ricerca su kanokimonos.app per '{customer_name}': nessun ordine trovato.",
-                    )
+                    bot_reply = f"Nessun ordine trovato per '{customer_name}'."
 
         if not bot_reply:
             bot_reply = get_ai_reply(request.chat_id, request.message)
