@@ -149,6 +149,10 @@ def normalize_custom_order(order: dict):
     elif not isinstance(products, list):
         products = []
 
+    for p in products:
+        if isinstance(p, dict):
+            print(f"[DEBUG product keys] {list(p.keys())}", flush=True)
+
     selected_variations = order.get("selected_variations")
     admin_design_url = None
     admin_design_uploaded_at = None
