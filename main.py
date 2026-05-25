@@ -401,13 +401,17 @@ def format_custom_orders_summary(orders: list) -> str:
 
 
 def try_extract_customer_name(message: str) -> str | None:
+    # Capitalized proper noun: one or more words starting with uppercase
+    NAME = r"([A-ZÀ-Ý][A-Za-zÀ-ÿ]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ]+)*)"
     patterns = [
-        r"ordini\s+di\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,}?)(?:\?|$|,|\.|!|\s*$)",
-        r"orders?\s+(?:of|for)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,}?)(?:\?|$|,|\.|!|\s*$)",
-        r"cliente\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,}?)(?:\?|$|,|\.|!|\s*$)",
+        r"ordin[ei]\s+di\s+" + NAME,            # "ordine/ordini di Manfren"
+        r"orders?\s+(?:of|for)\s+" + NAME,       # English
+        r"cliente\s+" + NAME,                    # "cliente Manfren"
+        r"(?:fatt[io]\s+)?da\s+" + NAME,         # "da Manfren" / "fatti da Manfren"
+        r"\bha\s+" + NAME + r"(?:\s*$|\?)",      # "ha Manfren" at end of sentence
     ]
     for pattern in patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
+        match = re.search(pattern, message)
         if match:
             return match.group(1).strip()
     return None
@@ -638,7 +642,7 @@ PAGAMENTO BONIFICO (promemoria)
 - Causale: numero ordine"""
 
 
-def get_ai_reply(chat_id: str, user_message: str) -> str:
+def get_ai_reply(chat_id: str, user_message: str, extra_context: str = None) -> str:
     if not OPENROUTER_API_KEY:
         return "Errore: OPENROUTER_API_KEY non configurata."
 
@@ -662,6 +666,14 @@ def get_ai_reply(chat_id: str, user_message: str) -> str:
             {
                 "role": "system",
                 "content": f"Contesto dalla knowledge base interna:\n{knowledge_context}"
+            }
+        )
+
+    if extra_context:
+        messages.append(
+            {
+                "role": "system",
+                "content": extra_context,
             }
         )
 
@@ -1001,7 +1013,18 @@ def chat(request: ChatRequest):
             if customer_name:
                 name_result = search_custom_orders_by_name(customer_name)
                 if name_result.get("results"):
-                    bot_reply = format_custom_orders_summary(name_result["results"])
+                    orders_summary = format_custom_orders_summary(name_result["results"])
+                    bot_reply = get_ai_reply(
+                        request.chat_id,
+                        request.message,
+                        extra_context=f"Dati ordini da kanokimonos.app per '{customer_name}':\n{orders_summary}",
+                    )
+                else:
+                    bot_reply = get_ai_reply(
+                        request.chat_id,
+                        request.message,
+                        extra_context=f"Ricerca su kanokimonos.app per '{customer_name}': nessun ordine trovato.",
+                    )
 
         if not bot_reply:
             bot_reply = get_ai_reply(request.chat_id, request.message)
