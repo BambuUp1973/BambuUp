@@ -280,11 +280,16 @@ def search_custom_orders_by_name(name: str, limit: int = 100):
     if data.get("error"):
         return data
 
+    all_orders = data["results"]
+    sample_names = [o.get("customer_name") for o in all_orders[:3]]
+    print(f"[DEBUG name_search] totale ordini API: {len(all_orders)}, primi 3 nomi: {sample_names}", flush=True)
+
     name_clean = name.strip().lower()
     filtered = [
-        order for order in data["results"]
+        order for order in all_orders
         if name_clean in str(order.get("customer_name", "")).strip().lower()
     ]
+    print(f"[DEBUG name_search] ricerca '{name_clean}' -> {len(filtered)} risultati", flush=True)
     return {"results": filtered}
 
 def yes_no_unknown(value):
