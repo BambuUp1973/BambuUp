@@ -215,37 +215,25 @@ def normalize_custom_order(order: dict):
     }
 
 
-CUSTOM_ORDER_STATUSES = ["confirmed", "completed", "pending_confirmation"]
-
-
-def _extract_raw_orders(data) -> list:
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        if isinstance(data.get("data"), list):
-            return data["data"]
-        if isinstance(data.get("orders"), list):
-            return data["orders"]
-    return []
-
-
 def search_custom_orders_raw(limit: int = 100):
-    seen_ids = set()
-    normalized = []
+    data = get_custom_resource("orders", limit)
 
-    for status in CUSTOM_ORDER_STATUSES:
-        data = get_custom_resource("orders", limit, status=status)
-        if isinstance(data, dict) and data.get("error"):
-            continue
-        for order in _extract_raw_orders(data):
-            if not isinstance(order, dict):
-                continue
-            order_id = order.get("id") or order.get("order_number")
-            if order_id in seen_ids:
-                continue
-            seen_ids.add(order_id)
-            normalized.append(normalize_custom_order(order))
+    if isinstance(data, dict) and data.get("error"):
+        return data
 
+    if isinstance(data, list):
+        raw_orders = data
+    elif isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            raw_orders = data["data"]
+        elif isinstance(data.get("orders"), list):
+            raw_orders = data["orders"]
+        else:
+            return {"error": "Unexpected custom API structure", "details": data}
+    else:
+        return {"error": "Unsupported custom API response type", "details": str(type(data))}
+
+    normalized = [normalize_custom_order(o) for o in raw_orders if isinstance(o, dict)]
     return {"results": normalized}
 
 
