@@ -17,6 +17,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+BTO_API_URL = "https://hckmzdztgffxovpbiwgw.supabase.co/functions/v1/bto-bot-api"
+BTO_API_KEY = os.getenv("BTO_API_KEY")
 
 
 def init_db():
@@ -278,6 +280,50 @@ def search_custom_orders_by_name(name: str, limit: int = 100):
         if name_clean in str(order.get("customer_name", "")).strip().lower()
     ]
     return {"results": filtered}
+
+def get_bto_resource(params: dict):
+    if not BTO_API_KEY:
+        return {"error": "BTO_API_KEY non configurata."}
+
+    headers = {"x-api-key": BTO_API_KEY}
+
+    try:
+        response = requests.get(
+            BTO_API_URL,
+            headers=headers,
+            params=params,
+            timeout=60,
+        )
+    except Exception as e:
+        return {"error": f"Errore connessione btoweb: {str(e)}"}
+
+    if response.status_code != 200:
+        return {"error": f"btoweb API error {response.status_code}", "details": response.text}
+
+    try:
+        data = response.json()
+    except Exception:
+        return {"error": "Risposta btoweb non valida (non JSON)", "details": response.text}
+
+    if isinstance(data, list):
+        return {"results": data}
+    if isinstance(data, dict):
+        for key in ("results", "data", "orders"):
+            if isinstance(data.get(key), list):
+                return {"results": data[key]}
+        if data.get("error"):
+            return data
+        return {"results": [data]}
+    return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
+
+
+def search_bto_orders_by_producer(producer: str):
+    return get_bto_resource({"producer": producer})
+
+
+def search_bto_orders_by_status(status: str):
+    return get_bto_resource({"status": status})
+
 
 def yes_no_unknown(value):
     if value is True:
