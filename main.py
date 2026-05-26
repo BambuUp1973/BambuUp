@@ -325,6 +325,52 @@ def search_bto_orders_by_status(status: str):
     return get_bto_resource({"status": status})
 
 
+def search_bto_orders_all():
+    return get_bto_resource({})
+
+
+def try_parse_bto_request(message: str):
+    """Ritorna ("status"|"producer"|"all", valore) oppure None se non è una richiesta btoweb."""
+    msg = message.strip().lower()
+    if "bto" not in msg:
+        return None
+
+    m = re.search(r"produttore\s+(\S+)", msg)
+    if m:
+        return ("producer", m.group(1))
+
+    if re.search(r"\bin\s+produzione\b|produzione", msg):
+        return ("status", "in_produzione")
+
+    return ("all", None)
+
+
+def format_bto_orders_summary(result: dict) -> str:
+    if result.get("error"):
+        return f"Errore btoweb: {result['error']}"
+
+    orders = result.get("results", [])
+    if not orders:
+        return "Nessun ordine btoweb trovato."
+
+    lines = [f"Ordini btoweb ({len(orders)} trovati):"]
+    for o in orders:
+        if not isinstance(o, dict):
+            lines.append(f"• {o}")
+            continue
+        parts = []
+        for label, key in [
+            ("ID", "id"), ("N°", "order_number"), ("stato", "status"),
+            ("produttore", "producer"), ("cliente", "customer_name"),
+        ]:
+            val = o.get(key)
+            if val:
+                parts.append(f"{label}: {val}")
+        lines.append("• " + " | ".join(parts) if parts else f"• {o}")
+
+    return "\n".join(lines)
+
+
 def yes_no_unknown(value):
     if value is True:
         return "Sì"
@@ -1039,6 +1085,18 @@ def chat(request: ChatRequest):
                             bot_reply = f"Non ho trovato l'ordine {order_id} né su kanokimonos.app né su WooCommerce."
                     else:
                         bot_reply = f"Non ho trovato l'ordine custom {order_id} su kanokimonos.app."
+
+        if not bot_reply:
+            bto = try_parse_bto_request(request.message)
+            if bto:
+                kind, value = bto
+                if kind == "status":
+                    bto_result = search_bto_orders_by_status(value)
+                elif kind == "producer":
+                    bto_result = search_bto_orders_by_producer(value)
+                else:
+                    bto_result = search_bto_orders_all()
+                bot_reply = format_bto_orders_summary(bto_result)
 
         if not bot_reply:
             customer_name = try_extract_customer_name(request.message)
