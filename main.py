@@ -6,6 +6,7 @@ import os
 import re
 import psycopg2
 import requests
+import anthropic
 from woocommerce import API
 from docx import Document
 
@@ -14,7 +15,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
 
 def init_db():
@@ -653,68 +655,31 @@ PAGAMENTO BONIFICO (promemoria)
 
 
 def get_ai_reply(chat_id: str, user_message: str, extra_context: str = None) -> str:
-    if not OPENROUTER_API_KEY:
-        return "Errore: OPENROUTER_API_KEY non configurata."
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    if not ANTHROPIC_API_KEY:
+        return "Errore: ANTHROPIC_API_KEY non configurata."
 
     history = get_recent_messages(chat_id)
     knowledge_context = get_knowledge_context(user_message)
 
-    messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT,
-        }
-    ]
-
+    system_parts = [SYSTEM_PROMPT]
     if knowledge_context:
-        messages.append(
-            {
-                "role": "system",
-                "content": f"Contesto dalla knowledge base interna:\n{knowledge_context}"
-            }
-        )
-
+        system_parts.append(f"Contesto dalla knowledge base interna:\n{knowledge_context}")
     if extra_context:
-        messages.append(
-            {
-                "role": "system",
-                "content": extra_context,
-            }
-        )
+        system_parts.append(extra_context)
+    system = "\n\n".join(system_parts)
 
-    messages.extend(history)
+    messages = list(history)
     messages.append({"role": "user", "content": user_message})
 
-    payload = {
-        "model": "openrouter/free",
-        "messages": messages,
-    }
-
     try:
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=60,
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=1024,
+            system=system,
+            messages=messages,
         )
-
-        response.encoding = 'utf-8'
-        data = response.json()
-
-        if "choices" not in data:
-            print(f"[OpenRouter error] {data}")
-            return f"Errore OpenRouter: {data}"
-
-        msg = data["choices"][0]["message"]
-        reply = msg.get("content", "")
-        if not reply:
-            reply = msg.get("reasoning", "") or "Nessuna risposta disponibile."
-        return reply
+        return response.content[0].text
 
     except Exception as e:
         return f"Errore AI: {str(e)}"
