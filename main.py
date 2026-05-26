@@ -403,9 +403,13 @@ def format_custom_orders_summary(orders: list) -> str:
 
 
 def try_extract_customer_name(message: str) -> str | None:
-    # Pass 1: capitalized name — stops naturally at the first lowercase word mid-sentence
+    # Pass 1: capitalized words — "De Tulio", "Van Den Berg", "Rossi"
     NAME_CAPS = r"([A-ZÀ-Ý][A-Za-zÀ-ÿ]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ]+)*)"
-    # Pass 2: single lowercase word fallback (avoids over-matching mid-sentence)
+    # Pass 2: lowercase compound surnames with nobility/origin particles
+    # "da" excluded: it's already a keyword preposition ("ordini da X" → X is the name)
+    _PART = r"(?:de|del|della|degli|dei|van|von|den|der|ter|ten|dos|das|du|al|bin|zu)"
+    NAME_PARTICLE = r"((?:" + _PART + r"\s+)+" + r"[A-Za-zÀ-ÿ]+)"
+    # Pass 3: single lowercase word fallback
     NAME_WORD = r"([A-Za-zÀ-ÿ]{2,})"
 
     keyword_patterns = [
@@ -416,13 +420,12 @@ def try_extract_customer_name(message: str) -> str | None:
         r"ordini\s+(?!(?:di|fatt)\b)",           # "ordini ..." (not followed by "di" or "fatti")
     ]
 
-    for NAME in [NAME_CAPS, NAME_WORD]:
+    for NAME, flags in [(NAME_CAPS, 0), (NAME_PARTICLE, re.IGNORECASE), (NAME_WORD, re.IGNORECASE)]:
         for kw in keyword_patterns:
-            match = re.search(kw + NAME, message, re.IGNORECASE if NAME is NAME_WORD else 0)
+            match = re.search(kw + NAME, message, flags)
             if match:
                 return match.group(1).strip()
-        # "ha NAME" only at end of sentence
-        match = re.search(r"\bha\s+" + NAME + r"(?:\s*$|\?)", message, re.IGNORECASE if NAME is NAME_WORD else 0)
+        match = re.search(r"\bha\s+" + NAME + r"(?:\s*$|\?)", message, flags)
         if match:
             return match.group(1).strip()
 
