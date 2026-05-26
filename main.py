@@ -550,8 +550,9 @@ Prodotti personalizzati (custom):
 - Pezzi extra (max 10% ordine, min 3 pz): cliente li acquista al 65% prezzo unitario
 
 Team Gi (sistema patch):
-- Patch standard: min 20 pz, produzione 45–60 gg, poi kimono spedito in 7–10 gg
-- Patch DTF: realizzazione rapida (niente 45–60 gg), kimono spedito in 7–10 gg
+- Patch standard: min 20 pz, produzione 45–60 gg (come tutti i custom)
+- Patch DTF su kimono Team Gi (modello da catalogo): consegna 7–10 gg, nessun minimo
+- Patch DTF su altri modelli kimono: 7–10 gg + 2–3 gg aggiuntivi per il modello, nessun minimo
 
 Resi e rimborsi:
 - Procedura entro 14 giorni dalla ricezione
@@ -618,7 +619,14 @@ CONTATTI INTERNI
 TEMPI E PRODUZIONE
 - Tempi produzione custom (rash, short, kimono): sempre 45–60 giorni. "Di meno non è quasi mai fattibile." Stiamo migliorando e spesso arriviamo sui 45 gg, ma mai promettere meno.
 - Cinture standard da catalogo: spedizione 24–48 ore dall'ordine
-- Taglie femminili personalizzate: non si fanno al momento. Minimo 10 pz non basta per una produzione separata.
+- Rashguard femminili: trattate esattamente come unisex — stesso prezzo, stesso minimo (10 pz)
+- Kimono femminili personalizzati (taglia o grafica custom): non si fanno al momento
+- Kimono femminili da catalogo: si possono personalizzare con patch standard o DTF
+
+MINIMI ORDINE CUSTOM
+- Kimono, rashguard, shorts personalizzati: minimo 10 pezzi
+- Patch standard: minimo 20 pezzi
+- Patch DTF: nessun minimo
 
 PREZZI E SCONTI CON CLIENTI FIDATI
 - Non dare mai il prezzo dal listino standard senza autorizzazione. Il prezzo si calcola dopo conferma quantità.
