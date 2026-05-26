@@ -269,15 +269,12 @@ def search_custom_orders_by_name(name: str, limit: int = 100):
         return data
 
     all_orders = data["results"]
-    sample_names = [o.get("customer_name") for o in all_orders[:3]]
-    print(f"[DEBUG name_search] totale ordini API: {len(all_orders)}, primi 3 nomi: {sample_names}", flush=True)
 
     name_clean = name.strip().lower()
     filtered = [
         order for order in all_orders
         if name_clean in str(order.get("customer_name", "")).strip().lower()
     ]
-    print(f"[DEBUG name_search] ricerca '{name_clean}' -> {len(filtered)} risultati", flush=True)
     return {"results": filtered}
 
 def yes_no_unknown(value):
@@ -1023,18 +1020,14 @@ def chat(request: ChatRequest):
 
         if not bot_reply:
             customer_name = try_extract_customer_name(request.message)
-            print(f"[DEBUG name_extract] message={repr(request.message)} -> customer_name={repr(customer_name)}", flush=True)
             if customer_name:
                 name_result = search_custom_orders_by_name(customer_name)
-                n = len(name_result.get("results") or [])
-                print(f"[DEBUG name_search] customer_name={repr(customer_name)} -> {n} ordini dall'API", flush=True)
                 if name_result.get("results"):
                     bot_reply = format_custom_orders_summary(name_result["results"])
                 else:
                     bot_reply = f"Nessun ordine trovato per '{customer_name}'."
 
         if not bot_reply:
-            print(f"[DEBUG fallback_ai] nessun match, passo a get_ai_reply", flush=True)
             bot_reply = get_ai_reply(request.chat_id, request.message)
 
         conn = psycopg2.connect(DATABASE_URL)
