@@ -980,10 +980,10 @@ def format_order_for_human(order: dict) -> str:
 
 def try_extract_order_id(message: str) -> str | None:
     patterns = [
-        r"ordine\s*#?\s*(\d[\d\-]+\d)",   # ordine #0466-05-26 o ordine 12345
-        r"order\s*#?\s*(\d[\d\-]+\d)",    # order #0466-05-26 o order 12345
-        r"\b(\d{3,4}-\d{2,4}-\d{2,4})\b", # formato 0466-05-26
-        r"\b(\d{5,})\b",                   # numero puro 5+ cifre
+        r"ordine\s*#?\s*(\d[\d\-]+\d(?:-[A-Za-z0-9]+)?)",   # ordine #0466-05-26 o ordine 12345
+        r"order\s*#?\s*(\d[\d\-]+\d(?:-[A-Za-z0-9]+)?)",    # order #0466-05-26 o order 12345
+        r"\b(\d{3,4}-\d{2,4}-\d{2,4}(?:-[A-Za-z0-9]+)?)\b", # formato 0466-05-26 o 0495-05-26-A
+        r"\b(\d{5,})\b",                                      # numero puro 5+ cifre
     ]
 
     for pattern in patterns:
