@@ -349,24 +349,63 @@ def format_bto_orders_summary(result: dict) -> str:
     if result.get("error"):
         return f"Errore btoweb: {result['error']}"
 
-    orders = result.get("results", [])
-    if not orders:
+    rows = result.get("results", [])
+    if not rows:
         return "Nessun ordine btoweb trovato."
 
-    lines = [f"Ordini btoweb ({len(orders)} trovati):"]
-    for o in orders:
-        if not isinstance(o, dict):
-            lines.append(f"• {o}")
+    # Group rows by order_number (fallback to id) since each size is a separate row
+    grouped = {}
+    order_keys = []
+    for row in rows:
+        if not isinstance(row, dict):
+            key = str(row)
+            if key not in grouped:
+                grouped[key] = {"_raw": row, "_items": []}
+                order_keys.append(key)
             continue
-        parts = []
-        for label, key in [
-            ("ID", "id"), ("N°", "order_number"), ("stato", "status"),
-            ("produttore", "producer"), ("cliente", "customer_name"),
-        ]:
-            val = o.get(key)
-            if val:
-                parts.append(f"{label}: {val}")
-        lines.append("• " + " | ".join(parts) if parts else f"• {o}")
+        key = str(row.get("order_number") or row.get("id") or id(row))
+        if key not in grouped:
+            grouped[key] = {**row, "_items": []}
+            order_keys.append(key)
+        # collect product/size/qty info from this row
+        item_parts = []
+        for f in ("product", "product_name", "item", "item_name", "description"):
+            v = row.get(f)
+            if v:
+                item_parts.append(str(v))
+                break
+        for f in ("size", "taglia"):
+            v = row.get(f)
+            if v:
+                item_parts.append(str(v))
+                break
+        for f in ("quantity", "qty", "quantita", "quantità"):
+            v = row.get(f)
+            if v:
+                item_parts.append(f"×{v}")
+                break
+        if item_parts:
+            grouped[key]["_items"].append(" ".join(item_parts))
+
+    lines = [f"Ordini btoweb ({len(grouped)} trovati):"]
+    for key in order_keys:
+        o = grouped[key]
+        if o.get("_raw") is not None:
+            lines.append(f"• {o['_raw']}")
+            continue
+        order_num = o.get("order_number") or o.get("id") or key
+        producer = o.get("producer") or o.get("produttore") or ""
+        status = o.get("status") or o.get("stato") or ""
+        items = o.get("_items", [])
+        products_str = ", ".join(items) if items else ""
+        parts = [f"N° {order_num}"]
+        if producer:
+            parts.append(producer)
+        if status:
+            parts.append(status)
+        if products_str:
+            parts.append(products_str)
+        lines.append("• " + " | ".join(parts))
 
     return "\n".join(lines)
 
