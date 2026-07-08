@@ -169,6 +169,8 @@ def normalize_custom_order(order: dict):
     return {
         "id": order.get("id"),
         "order_number": order.get("order_number"),
+        "order_group_id": order.get("order_group_id"),
+        "quantity": order.get("quantity"),
         "status": order.get("status"),
         "payment_status": order.get("payment_status"),
         "customer_name": f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
@@ -680,8 +682,9 @@ Prodotti personalizzati (custom):
 - Hai accesso diretto tramite API a tutti gli ordini custom su kanokimonos.app: quando ti chiedono di un ordine custom, cercalo subito per numero ordine, email o nome senza dire che devi verificare manualmente
 - File grafici solo vettoriali (.AI, .EPS, .PDF, .SVG) — mai JPG o PNG
 - Niente bozze senza informazioni complete
-- Niente modifiche dopo approvazione finale
-- Tempi produzione: 45–60 giorni lavorativi da pagamento + approvazione grafica
+- Prezzi: non comunicarli mai (patch incluse). Rimanda il cliente al suo listino personale nell'area privata su kanokimonos.app. Eccezione super-VIP: prezzi già concordati direttamente, non li vedono sul sito
+- Modifiche a ordini già fatti: su kanokimonos.app (custom) il cliente aggiunge prodotti direttamente dal sito; su kanokimonos.com B2B si cancella l'ordine e se ne fa uno nuovo; su kanokimonos.com retail le modifiche le facciamo noi e la differenza si paga tramite link di pagamento carta
+- Tempi di consegna custom: 45–60 giorni lavorativi dal pagamento dell'acconto. Alla domanda sui tempi dai SEMPRE prima questa informazione standard, poi eventualmente chiedi il numero ordine per dettagli
 - Ritardo oltre 75 gg: sconto 15%
 - Pezzi extra (max 10% ordine, min 3 pz): cliente li acquista al 65% prezzo unitario
 
@@ -764,7 +767,7 @@ MINIMI ORDINE CUSTOM
 - Patch DTF: nessun minimo
 
 PREZZI E SCONTI CON CLIENTI FIDATI
-- Non dare mai il prezzo dal listino standard senza autorizzazione. Il prezzo si calcola dopo conferma quantità.
+- Non comunicare mai prezzi: rimanda il cliente al suo listino personale nell'area privata su kanokimonos.app (super-VIP esclusi: prezzi già concordati direttamente).
 - Sconto clienti partner/fedeli: 30–40% sul sito, attivato da Mauro sul profilo. Il cliente ignora il prezzo che vede sul sito.
 - Piccoli aumenti nel tempo sono normali: "era 3 anni che li tenevamo duri, ora abbiamo dovuto dare qualche colpetto qua e là."
 
@@ -787,7 +790,7 @@ GESTIONE PROBLEMI
 FRASI TIPO DI MAURO
 - "ciao. si, ci sono"
 - "si si, come sempre i tempi sono 45-60"
-- "il prezzo te lo faccio dopo che hai scelto le quantità"
+- "i prezzi li trovi nel tuo listino personale nell'area privata del sito"
 - "provo a sentire la fabbrica e ti aggiorno"
 - "facciamo sconto al prossimo ordine"
 - "approva le bozze sul sito e metti le taglie"
@@ -1150,17 +1153,68 @@ def _bto_search_by_number(numero: str):
     return {"results": filtered}
 
 
+def _first_product_name(o: dict) -> str:
+    names = [p.get("name") for p in (o.get("products") or []) if isinstance(p, dict) and p.get("name")]
+    return ", ".join(names) if names else "N/A"
+
+
+def _find_custom_order_and_group(numero: str) -> dict:
+    """Cerca l'ordine custom per numero e, con lo STESSO fetch, ne ricava il gruppo
+    (fratelli con lo stesso order_group_id). Un solo scarico dalla API."""
+    data = search_custom_orders_raw(1000)
+    if data.get("error"):
+        return {"error": data["error"]}
+    results = data.get("results", [])
+    numero_clean = numero.strip().lower()
+    match = next(
+        (o for o in results if str(o.get("order_number", "")).strip().lower() == numero_clean),
+        None,
+    )
+    if not match:
+        return {"results": []}
+    group_id = match.get("order_group_id")
+    siblings = [o for o in results if group_id and o.get("order_group_id") == group_id]
+    return {"results": [match], "group": siblings}
+
+
+def format_order_group_summary(group_orders: list, main_number: str) -> str:
+    """Riepilogo del gruppo: una riga per articolo. Vuoto se il gruppo ha <= 1 membro."""
+    if not group_orders or len(group_orders) <= 1:
+        return ""
+    ordered = sorted(group_orders, key=lambda o: str(o.get("order_number") or ""))
+    total = sum((o.get("quantity") or 0) for o in ordered)
+    customer = next(
+        (o.get("customer_name") or o.get("customer_email") for o in ordered
+         if o.get("customer_name") or o.get("customer_email")),
+        None,
+    )
+    header = "--- Gruppo ordine" + (f" (cliente: {customer})" if customer else "") + " ---"
+    lines = [header, f"Fa parte di un gruppo di {len(ordered)} articoli, {total} pezzi totali:"]
+    main_clean = str(main_number).strip().lower()
+    for o in ordered:
+        num = o.get("order_number") or o.get("id") or "N/A"
+        qty = o.get("quantity")
+        qty_str = f"{qty} pz" if qty is not None else "N/A"
+        marker = "  ← ordine richiesto" if str(num).strip().lower() == main_clean else ""
+        lines.append(f"• {num} | {_first_product_name(o)} | {qty_str} | {o.get('status') or 'N/A'}{marker}")
+    return "\n".join(lines)
+
+
 def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None) -> str:
     """Opzione (a): restituisce la stringa già formattata dalle funzioni esistenti."""
     numero = (numero or "").strip()
     if not numero:
         return "Nessun numero d'ordine fornito."
 
-    def _fmt_custom(res):
+    def _fmt_custom(numero):
+        """Ordine custom + eventuale riepilogo gruppo (solo se gruppo > 1 membro)."""
+        res = _find_custom_order_and_group(numero)
         if res.get("error"):
             return f"Errore ricerca custom: {res['error']}"
         if res.get("results"):
-            return format_custom_order_for_human(res["results"][0])
+            text = format_custom_order_for_human(res["results"][0])
+            group = format_order_group_summary(res.get("group", []), numero)
+            return text + ("\n\n" + group if group else "")
         return None
 
     def _fmt_wc(res):
@@ -1178,14 +1232,14 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None) -> str:
         return None
 
     if piattaforma == "custom":
-        return _fmt_custom(search_custom_orders_by_number(numero)) or f"Non ho trovato l'ordine custom {numero}."
+        return _fmt_custom(numero) or f"Non ho trovato l'ordine custom {numero}."
     if piattaforma == "woocommerce":
         return _fmt_wc(search_orders_by_id(numero)) or f"Non ho trovato l'ordine WooCommerce {numero}."
     if piattaforma == "btoweb":
         return _fmt_bto(_bto_search_by_number(numero)) or f"Non ho trovato l'ordine btoweb {numero}."
 
     # Auto: deduci dal formato (stessa logica del vecchio routing regex)
-    custom = _fmt_custom(search_custom_orders_by_number(numero))
+    custom = _fmt_custom(numero)
     if custom:
         return custom
     if numero.isdigit():
