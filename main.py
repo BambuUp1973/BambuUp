@@ -186,6 +186,7 @@ def normalize_custom_order(order: dict):
         "vat_number": customer.get("vat_number"),
         "customer_type": customer.get("customer_type") or order.get("customer_type"),
         "customer_number": customer.get("customer_number") or order.get("customer_number"),
+        "customer_business_name": customer.get("business_name"),
         "products": [
             {
                 "name": p.get("name"),
@@ -268,7 +269,7 @@ def search_custom_orders_by_email(email: str, limit: int = 100):
     return {"results": filtered}
 
 
-def search_custom_orders_by_name(name: str, limit: int = 100):
+def search_custom_orders_by_name(name: str, limit: int = 1000):
     data = search_custom_orders_raw(limit)
     if data.get("error"):
         return data
@@ -276,9 +277,12 @@ def search_custom_orders_by_name(name: str, limit: int = 100):
     all_orders = data["results"]
 
     name_clean = name.strip().lower()
+    # Cerca la sottostringa in nome cliente, email e ragione sociale (business_name):
+    # un cliente può essere noto col nome persona, con l'azienda o via email.
+    search_fields = ("customer_name", "customer_email", "customer_business_name")
     filtered = [
         order for order in all_orders
-        if name_clean in str(order.get("customer_name", "")).strip().lower()
+        if any(name_clean in str(order.get(f) or "").lower() for f in search_fields)
     ]
     return {"results": filtered}
 
@@ -1080,10 +1084,12 @@ CHAT_TOOLS = [
     {
         "name": "cerca_ordini_per_cliente",
         "description": (
-            "Cerca tutti gli ordini custom (kanokimonos.app) di un cliente dato il "
-            "suo NOME completo, anche composto (es. 'bjj lab', 'de tulio'). Usalo "
-            "quando l'utente chiede gli ordini di una persona/azienda. Estrai SOLO "
-            "il nome del cliente, mai parole come 'ordini', 'sopra', 'rashguard'. "
+            "Cerca tutti gli ordini custom (kanokimonos.app) di un cliente. Il valore "
+            "può essere il NOME della persona (anche composto, es. 'de tulio'), il "
+            "NOME dell'AZIENDA/palestra (es. 'bjj lab') o anche una parte dell'EMAIL: "
+            "la ricerca cerca la sottostringa in tutti e tre i campi. Usalo quando "
+            "l'utente chiede gli ordini di una persona o di un'azienda. Estrai SOLO "
+            "l'identificativo del cliente, mai parole come 'ordini', 'sopra', 'rashguard'. "
             "Restituisce dati strutturati (inclusi i prodotti) che puoi poi filtrare "
             "tu, ad esempio per mostrare solo gli ordini che contengono certi prodotti."
         ),
