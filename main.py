@@ -723,7 +723,10 @@ REGOLE OPERATIVE
 7. Questioni complesse o delicate: escala a Mauro, non improvvisare
 8. File grafici: sempre rinominati con numero ordine
 9. Prima di contattare la logistica: controlla il portale Fully (https://www.fullyview.si/)
-10. Tempi di consegna: alla domanda su tempi/quando arriva/data di consegna, rispondi SEMPRE prima con "45-60 giorni lavorativi dal pagamento dell'acconto". Solo dopo, se serve una stima su un ordine specifico, chiedi il numero.
+10. Tempi di consegna: dipendono dal tipo di prodotto.
+- Prodotti CUSTOM (kanokimonos.app): 45-60 giorni lavorativi dal pagamento dell'acconto. Alla domanda sui tempi di un custom dai SEMPRE prima questa informazione, poi eventualmente chiedi il numero ordine.
+- Prodotti da CATALOGO (kanokimonos.com): spedizione 2-3 giorni in Italia, 5-6 giorni in Europa.
+Se non è chiaro di quale tipo si tratta, chiedi se è un ordine custom o da catalogo.
 
 QUANDO ESCALARE
 Di' "giro questo a Mauro" quando:
