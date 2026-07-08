@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 import re
+import json
 import psycopg2
 import requests
 import anthropic
@@ -1039,6 +1040,266 @@ def save_knowledge_document(title: str, category: str, content: str):
     cur.close()
     conn.close()
 
+
+# ---------------------------------------------------------------------------
+# TOOL USE — Haiku decide quale strumento chiamare (sostituisce il routing regex)
+# Le funzioni di ricerca/formattazione esistenti restano identiche: cambia solo
+# CHI decide di chiamarle e con quali parametri.
+# ---------------------------------------------------------------------------
+
+CHAT_TOOLS = [
+    {
+        "name": "cerca_ordine_per_numero",
+        "description": (
+            "Cerca un singolo ordine dato il suo NUMERO. Usalo quando l'utente "
+            "fornisce o cita un numero d'ordine (se scritto a parole, convertilo "
+            "in cifre prima di chiamare).\n"
+            "Piattaforme:\n"
+            "- 'custom' (kanokimonos.app): numeri con trattini tipo 0495-05-26-A\n"
+            "- 'woocommerce': numeri puri (solo cifre) del sito web\n"
+            "- 'btoweb': ordini di fabbrica/produttore, numeri tipo 062026-0004\n"
+            "Se non sei sicuro della piattaforma, ometti 'piattaforma': verrà "
+            "dedotta dal formato del numero."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "numero": {
+                    "type": "string",
+                    "description": "Il numero dell'ordine in cifre (es. '0495-05-26-A' o '12345').",
+                },
+                "piattaforma": {
+                    "type": "string",
+                    "enum": ["custom", "woocommerce", "btoweb"],
+                    "description": "Piattaforma su cui cercare. Ometti se incerto.",
+                },
+            },
+            "required": ["numero"],
+        },
+    },
+    {
+        "name": "cerca_ordini_per_cliente",
+        "description": (
+            "Cerca tutti gli ordini custom (kanokimonos.app) di un cliente dato il "
+            "suo NOME completo, anche composto (es. 'bjj lab', 'de tulio'). Usalo "
+            "quando l'utente chiede gli ordini di una persona/azienda. Estrai SOLO "
+            "il nome del cliente, mai parole come 'ordini', 'sopra', 'rashguard'. "
+            "Restituisce dati strutturati (inclusi i prodotti) che puoi poi filtrare "
+            "tu, ad esempio per mostrare solo gli ordini che contengono certi prodotti."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nome": {
+                    "type": "string",
+                    "description": "Nome completo del cliente (es. 'bjj lab').",
+                },
+            },
+            "required": ["nome"],
+        },
+    },
+    {
+        "name": "rispondi_dal_manuale",
+        "description": (
+            "Recupera informazioni dal manuale operativo interno / knowledge base "
+            "per rispondere a domande procedurali o di policy aziendale (sconti, "
+            "spedizioni, come si esegue una certa operazione, regole interne). Usalo "
+            "quando la domanda NON riguarda un ordine o un cliente specifico."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "argomento": {
+                    "type": "string",
+                    "description": "Parole chiave dell'argomento da cercare nel manuale.",
+                },
+            },
+            "required": [],
+        },
+    },
+]
+
+
+TOOL_SYSTEM_SUFFIX = """
+STRUMENTI E ONESTÀ
+Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni dal manuale. Regole:
+- Per QUALSIASI richiesta su un ordine (numero) o su un cliente (nome), chiama lo strumento giusto. Non inventare mai lo stato di un ordine.
+- Usa SOLO i dati restituiti dagli strumenti. Se uno strumento non restituisce risultati, dillo onestamente (es. "Non trovo ordini per X").
+- Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A). Se l'utente fornisce solo una parte (es. solo "0495"), NON chiamare lo strumento con il valore parziale: chiedi il numero completo invece di indovinare.
+- Per QUALSIASI domanda procedurale o di policy (sconti, prezzi a quantità, spedizioni, resi, tempi, "come si fa X", regole interne) DEVI chiamare rispondi_dal_manuale PRIMA di rispondere. Non rispondere mai a memoria su questi temi: il manuale è la fonte di verità. Solo se rispondi_dal_manuale restituisce NESSUN_CONTENUTO puoi dire onestamente che non trovi la procedura nel manuale.
+- Se nessuno strumento è adatto e non conosci la risposta con certezza, dillo con onestà spiegando cosa non sai fare. NON rispondere mai con "Nessun ordine trovato per '<parola a caso>'" raschiando parole a caso dalla domanda.
+"""
+
+
+def _bto_search_by_number(numero: str):
+    """btoweb non ha una ricerca per numero: prende tutti gli ordini e filtra."""
+    data = search_bto_orders_all()
+    if data.get("error"):
+        return data
+    numero_clean = numero.strip().lower()
+    filtered = [
+        row for row in data.get("results", [])
+        if isinstance(row, dict)
+        and str(row.get("order_number", "")).strip().lower() == numero_clean
+    ]
+    return {"results": filtered}
+
+
+def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None) -> str:
+    """Opzione (a): restituisce la stringa già formattata dalle funzioni esistenti."""
+    numero = (numero or "").strip()
+    if not numero:
+        return "Nessun numero d'ordine fornito."
+
+    def _fmt_custom(res):
+        if res.get("error"):
+            return f"Errore ricerca custom: {res['error']}"
+        if res.get("results"):
+            return format_custom_order_for_human(res["results"][0])
+        return None
+
+    def _fmt_wc(res):
+        if res.get("error"):
+            return f"Errore WooCommerce: {res['error']}"
+        if res.get("results"):
+            return format_order_for_human(res["results"][0])
+        return None
+
+    def _fmt_bto(res):
+        if res.get("error"):
+            return f"Errore btoweb: {res['error']}"
+        if res.get("results"):
+            return format_bto_orders_summary(res)
+        return None
+
+    if piattaforma == "custom":
+        return _fmt_custom(search_custom_orders_by_number(numero)) or f"Non ho trovato l'ordine custom {numero}."
+    if piattaforma == "woocommerce":
+        return _fmt_wc(search_orders_by_id(numero)) or f"Non ho trovato l'ordine WooCommerce {numero}."
+    if piattaforma == "btoweb":
+        return _fmt_bto(_bto_search_by_number(numero)) or f"Non ho trovato l'ordine btoweb {numero}."
+
+    # Auto: deduci dal formato (stessa logica del vecchio routing regex)
+    custom = _fmt_custom(search_custom_orders_by_number(numero))
+    if custom:
+        return custom
+    if numero.isdigit():
+        wc = _fmt_wc(search_orders_by_id(numero))
+        if wc:
+            return wc
+    bto = _fmt_bto(_bto_search_by_number(numero))
+    if bto:
+        return bto
+    return f"Non ho trovato l'ordine {numero} su nessuna piattaforma (custom, WooCommerce, btoweb)."
+
+
+def tool_cerca_ordini_per_cliente(nome: str) -> dict:
+    """Opzione (b): restituisce dati strutturati così Haiku può filtrarli."""
+    nome = (nome or "").strip()
+    if not nome:
+        return {"error": "Nessun nome cliente fornito.", "ordini": []}
+    res = search_custom_orders_by_name(nome)
+    if res.get("error"):
+        return {"error": res["error"], "ordini": []}
+    ordini = []
+    for o in res.get("results", []):
+        ordini.append({
+            "order_number": o.get("order_number") or o.get("id"),
+            "customer_name": o.get("customer_name"),
+            "status": o.get("status"),
+            "payment_status": o.get("payment_status"),
+            "created_at": o.get("created_at"),
+            "products": [
+                {
+                    "name": p.get("name"),
+                    "category": p.get("category"),
+                    "subcategory": p.get("subcategory"),
+                    "quantity": p.get("quantity"),
+                }
+                for p in (o.get("products") or [])
+            ],
+        })
+    return {"cliente": nome, "totale": len(ordini), "ordini": ordini}
+
+
+def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> str:
+    query = argomento or user_message or ""
+    context = get_knowledge_context(query)
+    if not context:
+        return "NESSUN_CONTENUTO: il manuale non contiene informazioni su questo argomento."
+    return context
+
+
+def _execute_chat_tool(name: str, tool_input: dict, user_message: str):
+    try:
+        if name == "cerca_ordine_per_numero":
+            return tool_cerca_ordine_per_numero(tool_input.get("numero"), tool_input.get("piattaforma"))
+        if name == "cerca_ordini_per_cliente":
+            return tool_cerca_ordini_per_cliente(tool_input.get("nome"))
+        if name == "rispondi_dal_manuale":
+            return tool_rispondi_dal_manuale(tool_input.get("argomento"), user_message)
+        return {"error": f"Strumento sconosciuto: {name}"}
+    except Exception as e:
+        return {"error": f"Errore nell'esecuzione di {name}: {str(e)}"}
+
+
+def chat_with_tools(chat_id: str, user_message: str) -> str:
+    """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
+    if not ANTHROPIC_API_KEY:
+        return "Errore: ANTHROPIC_API_KEY non configurata."
+
+    history = get_recent_messages(chat_id)
+    system = SYSTEM_PROMPT + "\n\n" + TOOL_SYSTEM_SUFFIX
+
+    messages = list(history)
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        for _ in range(4):  # cap iterazioni tool
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=1024,
+                system=system,
+                tools=CHAT_TOOLS,
+                messages=messages,
+            )
+
+            if response.stop_reason != "tool_use":
+                text_parts = [b.text for b in response.content if b.type == "text"]
+                return "\n".join(text_parts).strip() or "Non ho una risposta per questo."
+
+            # Esegui gli strumenti richiesti e rimanda i risultati a Haiku
+            messages.append({"role": "assistant", "content": response.content})
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                result = _execute_chat_tool(block.name, block.input or {}, user_message)
+                if not isinstance(result, str):
+                    result = json.dumps(result, ensure_ascii=False, default=str)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+            messages.append({"role": "user", "content": tool_results})
+
+        # Superato il cap: ultima chiamata senza tool per forzare una risposta testuale
+        final = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=1024,
+            system=system,
+            messages=messages,
+        )
+        text_parts = [b.text for b in final.content if b.type == "text"]
+        return "\n".join(text_parts).strip() or "Non sono riuscito a completare la richiesta."
+
+    except Exception as e:
+        return f"Errore AI: {str(e)}"
+
+
 @app.get("/")
 def home():
     return {"status": "BambuUp Bot running"}
@@ -1103,51 +1364,9 @@ def chat(request: ChatRequest):
         cur.close()
         conn.close()
 
-        bot_reply = None
-
-        if is_order_request(request.message):
-            order_id = try_extract_order_id(request.message)
-            if order_id:
-                # Prima cerca su kanokimonos.app (ordini custom)
-                custom_result = search_custom_orders_by_number(order_id)
-                if custom_result.get("results"):
-                    bot_reply = format_custom_order_for_human(custom_result["results"][0])
-                else:
-                    # Se non trovato tra i custom e il numero è puramente numerico, prova WooCommerce
-                    if order_id.isdigit():
-                        wc_result = search_orders_by_id(order_id)
-                        if wc_result.get("results"):
-                            bot_reply = format_order_for_human(wc_result["results"][0])
-                        elif wc_result.get("error"):
-                            bot_reply = f"Errore ricerca ordine: {wc_result['error']}"
-                        else:
-                            bot_reply = f"Non ho trovato l'ordine {order_id} né su kanokimonos.app né su WooCommerce."
-                    else:
-                        bot_reply = f"Non ho trovato l'ordine custom {order_id} su kanokimonos.app."
-
-        if not bot_reply:
-            bto = try_parse_bto_request(request.message)
-            if bto:
-                kind, value = bto
-                if kind == "status":
-                    bto_result = search_bto_orders_by_status(value)
-                elif kind == "producer":
-                    bto_result = search_bto_orders_by_producer(value)
-                else:
-                    bto_result = search_bto_orders_all()
-                bot_reply = format_bto_orders_summary(bto_result)
-
-        if not bot_reply:
-            customer_name = try_extract_customer_name(request.message)
-            if customer_name:
-                name_result = search_custom_orders_by_name(customer_name)
-                if name_result.get("results"):
-                    bot_reply = format_custom_orders_summary(name_result["results"])
-                else:
-                    bot_reply = f"Nessun ordine trovato per '{customer_name}'."
-
-        if not bot_reply:
-            bot_reply = get_ai_reply(request.chat_id, request.message)
+        # Routing via tool use: Haiku decide quale strumento chiamare e con
+        # quali parametri (sostituisce la vecchia cascata di regex).
+        bot_reply = chat_with_tools(request.chat_id, request.message)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
