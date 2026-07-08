@@ -723,6 +723,7 @@ REGOLE OPERATIVE
 7. Questioni complesse o delicate: escala a Mauro, non improvvisare
 8. File grafici: sempre rinominati con numero ordine
 9. Prima di contattare la logistica: controlla il portale Fully (https://www.fullyview.si/)
+10. Tempi di consegna: alla domanda su tempi/quando arriva/data di consegna, rispondi SEMPRE prima con "45-60 giorni lavorativi dal pagamento dell'acconto". Solo dopo, se serve una stima su un ordine specifico, chiedi il numero.
 
 QUANDO ESCALARE
 Di' "giro questo a Mauro" quando:
