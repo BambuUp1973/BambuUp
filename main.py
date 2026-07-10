@@ -689,9 +689,9 @@ Prodotti personalizzati (custom):
 - Pezzi extra (max 10% ordine, min 3 pz): cliente li acquista al 65% prezzo unitario
 
 Team Gi (sistema patch):
-- Patch standard: min 20 pz, produzione 45–60 gg (come tutti i custom)
-- Patch DTF su kimono Team Gi (modello da catalogo): consegna 7–10 gg, nessun minimo
-- Patch DTF su altri modelli kimono: 7–10 gg + 2–3 gg aggiuntivi per il modello, nessun minimo
+- Patch standard: min 10 pz, produzione 45–60 gg (come tutti i custom)
+- Patch DTF su kimono Team Gi (modello da catalogo): consegna 7–10 gg, min 10 pz
+- Patch DTF su altri modelli kimono: 7–10 gg + 2–3 gg aggiuntivi per il modello, min 10 pz
 
 Resi e rimborsi:
 - Procedura entro 14 giorni dalla ricezione
@@ -770,9 +770,12 @@ TEMPI E PRODUZIONE
 - Kimono femminili da catalogo: si possono personalizzare con patch standard o DTF
 
 MINIMI ORDINE CUSTOM
-- Kimono, rashguard, shorts personalizzati: minimo 10 pezzi
-- Patch standard: minimo 20 pezzi
-- Patch DTF: nessun minimo
+- Minimo 10 pezzi dello stesso modello per TUTTI i prodotti (kimono, rashguard, shorts, t-shirt, felpe, patch da catalogo incluse)
+- UNICA ECCEZIONE: le CINTURE, minimo 100 pezzi totali — colori e taglie mischiabili liberamente nel totale
+- Rashguard: taglie e colori diversi ammessi nello stesso minimo di 10
+- Kimono: taglie diverse ok, MA ogni colore fa minimo a sé
+- Non esiste più il "minimo 20" per le patch né il "nessun minimo" per le DTF: tutte le patch seguono il minimo di 10
+- Attenzione ai piccoli quantitativi: il prezzo unitario cambia con la quantità (10 pz è molto meno conveniente di 20). Prezzi esatti nel listino personale su kanokimonos.app
 
 PREZZI E SCONTI CON CLIENTI FIDATI
 - Non comunicare mai prezzi: rimanda il cliente al suo listino personale nell'area privata su kanokimonos.app (super-VIP esclusi: prezzi già concordati direttamente).
