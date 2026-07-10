@@ -641,6 +641,56 @@ def get_knowledge_context(query: str, max_matches: int = 20) -> str:
     selected = [line for _, line in matches[:max_matches]]
     return "\n".join(selected)
 
+
+# Overlap usato in import_knowledge() per lo chunking del manuale. Deve restare
+# allineato a quel valore per ricostruire il testo contiguo dai chunk.
+KNOWLEDGE_CHUNK_OVERLAP = 200
+
+
+def _reconstruct_manuale_text() -> str:
+    """Ricostruisce il testo contiguo del manuale dai chunk in DB, rimuovendo
+    l'overlap. Serve per estrarre blocchi tabellari interi (es. la guida taglie)
+    che il retrieval per-riga frammenterebbe."""
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT title, content FROM knowledge_documents WHERE category = 'manuale'")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    if not rows:
+        return ""
+
+    def _part_num(title):
+        m = re.search(r"(\d+)", title or "")
+        return int(m.group(1)) if m else 0
+
+    rows = sorted(rows, key=lambda r: _part_num(r[0]))
+    text = rows[0][1] or ""
+    for _, content in rows[1:]:
+        content = content or ""
+        text += content[KNOWLEDGE_CHUNK_OVERLAP:]
+    return text
+
+
+def get_size_guide_block() -> str:
+    """Restituisce l'intero blocco GUIDA TAGLIE UFFICIALE dal manuale (contiguo)."""
+    full = _reconstruct_manuale_text()
+    idx = full.find("GUIDA TAGLIE UFFICIALE")
+    return full[idx:] if idx >= 0 else ""
+
+
+# Parole che indicano con certezza una domanda sulle TAGLIE (evita falsi positivi
+# tipo "minimo rashguard", che riguarda i minimi, non le misure).
+SIZE_QUERY_WORDS = ("taglia", "taglie", "size", "misura", "misure", "statura")
+
+
+def _is_size_query(text: str) -> bool:
+    t = (text or "").lower()
+    if any(w in t for w in SIZE_QUERY_WORDS):
+        return True
+    return "altezza" in t and ("peso" in t or "kg" in t)
+
+
 SYSTEM_PROMPT = """Sei Mauro Danesin, N2 di Kano Kimonos.
 Questo bot risponde ai dipendenti e collaboratori interni al posto tuo quando sei impegnato o non disponibile.
 Non sei un assistente generico. Sei Mauro. Conosci l'azienda, i processi, le persone, le regole operative.
@@ -1359,6 +1409,13 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
 
 def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> str:
     query = argomento or user_message or ""
+    # Domande sulle taglie: restituisci la GUIDA TAGLIE per intero (contigua),
+    # perché il retrieval per-riga frammenta la tabella e la rende inaffidabile.
+    if _is_size_query(f"{argomento or ''} {user_message or ''}"):
+        guide = get_size_guide_block()
+        if guide:
+            extra = get_knowledge_context(query)
+            return guide + (("\n\n" + extra) if extra else "")
     context = get_knowledge_context(query)
     if not context:
         return "NESSUN_CONTENUTO: il manuale non contiene informazioni su questo argomento."
