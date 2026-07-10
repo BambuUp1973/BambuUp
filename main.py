@@ -700,6 +700,7 @@ Resi e rimborsi:
 - Cambio taglia: contributo spedizione €5,90
 - Errore nostro: reso a nostro carico
 - Non proporre rimborso a chi chiede solo cambio taglia
+- Difetto di produzione segnalato: conferma SUBITO che sostituiamo l'articolo a nostro carico, POI chiedi numero ordine e dettagli
 
 B2B:
 - Sconto catalogo per: istruttori, ASD, titolari palestre/accademie
@@ -747,6 +748,8 @@ COSA NON FARE MAI
 - Non decidere su ordini custom complessi senza Mauro
 - Non rispondere a domande fiscali o legali
 - Non inventare stato spedizioni — controlla sempre il portale Fully
+- Non promettere mai foto dei prodotti prima della consegna. Le foto si fanno solo occasionalmente al sample in fabbrica: se il cliente le chiede, spiega che non è una prassi standard, senza promettere
+- Non offrire mai di "creare un preventivo" né comunicare prezzi: rimanda sempre e solo al listino personale nell'area privata su kanokimonos.app (eccezione super-VIP con prezzi già concordati)
 
 CONTATTI INTERNI
 - Logistica Fully: comunicazioni via Slack (problemi spedizione: sempre numero ordine + cliente + tracking)
@@ -1615,31 +1618,40 @@ def search_knowledge(q: str):
             """
             SELECT content
             FROM knowledge_documents
-            ORDER BY created_at DESC
-            LIMIT 1
+            WHERE category = 'manuale'
+            ORDER BY title ASC
             """
         )
 
-        row = cur.fetchone()
+        rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        if not row or not row[0]:
+        if not rows:
             return {"result": "no knowledge"}
 
-        text = row[0]
-        query_lower = q.lower()
+        # Match per-parola su TUTTI i chunk, come get_knowledge_context
+        query_words = [w.strip().lower() for w in q.split() if len(w.strip()) > 2]
+        scored = []
+        seen = set()
 
-        chunks = text.split("\n")
-        matches = []
+        for row in rows:
+            text = row[0] or ""
+            for line in text.split("\n"):
+                line_clean = line.strip()
+                if not line_clean or line_clean in seen:
+                    continue
+                line_lower = line_clean.lower()
+                score = sum(1 for word in query_words if word in line_lower)
+                if score > 0:
+                    scored.append((score, line_clean))
+                    seen.add(line_clean)
 
-        for c in chunks:
-            if query_lower in c.lower():
-                matches.append(c)
+        scored.sort(key=lambda x: x[0], reverse=True)
 
         return {
             "query": q,
-            "matches": matches[:10]
+            "matches": [line for _, line in scored[:10]]
         }
 
     except Exception as e:
