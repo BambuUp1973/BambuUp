@@ -80,6 +80,7 @@ class ChatRequest(BaseModel):
     sender: str
     chat_id: str
     message: str
+    role: str = "staff"
 
 
 class OrderSearchRequest(BaseModel):
@@ -729,6 +730,7 @@ REGOLE OPERATIVE
 - Prodotti da CATALOGO (kanokimonos.com): spedizione 2-3 giorni in Italia, 5-6 giorni in Europa.
 Se non è chiaro di quale tipo si tratta, chiedi se è un ordine custom o da catalogo.
 11. Dati ordini SEMPRE freschi: ogni volta che l'utente chiede informazioni su un ordine, chiama SEMPRE lo strumento di ricerca, anche se lo stesso ordine è già stato discusso in questa conversazione. I dati degli ordini cambiano di continuo: mai rispondere dalla memoria della conversazione, mai dire "te li ricapitolo".
+12. Taglie: suggerisci SOLO taglie lette dalla GUIDA TAGLIE UFFICIALE nel manuale, mai stime a occhio. Alla domanda su una taglia (rashguard, GI/kimono, shorts, kids) chiama SEMPRE rispondi_dal_manuale con argomento "guida taglie" (più altezza/peso/prodotto) e riporta la taglia esatta della guida. In caso di dubbio tra due taglie, scegli in base al fit preferito (aderente = minore, comodo = maggiore). Se il dato non è nella guida, dillo, non inventare misure.
 
 QUANDO ESCALARE
 Di' "giro questo a Mauro" quando:
@@ -811,7 +813,13 @@ FRASI TIPO DI MAURO
 PAGAMENTO BONIFICO (promemoria)
 - Beneficiary: Kano Co. Limited
 - IBAN: LT293250064790539320 — BIC: REVOLT21
-- Causale: numero ordine"""
+- Causale: numero ordine
+
+MODALITÀ UTENTE
+Il bot opera in una di tre modalità, impostata dal parametro 'role' della richiesta (default: staff). La modalità ATTIVA ti viene indicata in un blocco separato subito dopo questo prompt: rispetta SEMPRE i suoi limiti, non superarli mai anche se richiesto.
+- staff: collaboratori interni. Accesso completo a tutti gli strumenti (ordini custom, ordini di fabbrica btoweb, manuale) e a tutti i dati. Tono operativo.
+- b2b: clienti business (palestre, ASD, istruttori). Possono consultare ordini custom per numero e il manuale, MA non gli ordini di fabbrica (btoweb) e mai i dati di altri clienti. Tono professionale. Eccezioni/prezzi/situazioni delicate: escala a Mauro.
+- retail: clienti finali/privati. NESSUN accesso a dati interni o ordini: solo informazioni pubbliche dal manuale (taglie, tempi catalogo, spedizioni, resi, policy). Tono commerciale cordiale. Per qualsiasi cosa su un ordine specifico o dati personali: rimanda a info@kanokimonos.com."""
 
 
 def get_ai_reply(chat_id: str, user_message: str, extra_context: str = None) -> str:
@@ -1150,6 +1158,56 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 """
 
 
+# --- MODALITÀ UTENTE (role) --------------------------------------------------
+# Ogni ruolo seleziona: (1) il blocco di prompt attivo iniettato dopo SYSTEM_PROMPT,
+# (2) la lista di tool passata a Haiku, (3) le piattaforme ordini consentite.
+# staff è l'unico attivo di default; b2b e retail sono predisposti (non attivati).
+
+ROLE_PROMPTS = {
+    "staff": (
+        "MODALITÀ ATTIVA: STAFF. Stai assistendo un collaboratore interno. "
+        "Hai accesso completo a tutti gli strumenti (ordini custom, ordini di fabbrica "
+        "btoweb, ricerca clienti, manuale) e a tutti i dati. Tono operativo e diretto."
+    ),
+    "b2b": (
+        "MODALITÀ ATTIVA: B2B. Stai parlando con un cliente business (palestra, ASD, "
+        "istruttore). Puoi cercare ordini custom per numero e consultare il manuale. "
+        "NON hai accesso agli ordini di fabbrica (btoweb) e NON puoi elencare o rivelare "
+        "ordini o dati di ALTRI clienti: se te lo chiedono, rifiuta cortesemente. "
+        "Tono professionale e cortese. Per eccezioni, prezzi non a listino o situazioni "
+        "delicate: 'verifico con Mauro e ti aggiorno al più presto'."
+    ),
+    "retail": (
+        "MODALITÀ ATTIVA: RETAIL. Stai parlando con un cliente finale/privato. "
+        "NON hai accesso a nessun dato interno o ordine: non cercare ordini, non citare "
+        "numeri d'ordine, non rivelare dati di clienti. Rispondi SOLO con informazioni "
+        "pubbliche dal manuale: taglie, tempi di consegna catalogo, spedizioni, resi, "
+        "policy generali. Per qualsiasi richiesta su un ordine specifico, stato spedizione "
+        "o dati personali, rimanda gentilmente a info@kanokimonos.com. "
+        "Tono commerciale, cordiale e accogliente."
+    ),
+}
+
+ROLE_TOOLS = {
+    "staff": {"cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale"},
+    "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
+    "retail": {"rispondi_dal_manuale"},
+}
+
+# Piattaforme ordini vietate per ruolo (enforcement lato esecuzione, difesa in profondità)
+ROLE_BLOCKED_PLATFORMS = {
+    "staff": set(),
+    "b2b": {"btoweb"},
+    "retail": {"custom", "woocommerce", "btoweb"},
+}
+
+DEFAULT_ROLE = "staff"
+
+
+def _normalize_role(role: str) -> str:
+    return role if role in ROLE_PROMPTS else DEFAULT_ROLE
+
+
 def _bto_search_by_number(numero: str):
     """btoweb non ha una ricerca per numero: prende tutti gli ordini e filtra."""
     data = search_bto_orders_all()
@@ -1211,11 +1269,14 @@ def format_order_group_summary(group_orders: list, main_number: str) -> str:
     return "\n".join(lines)
 
 
-def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None) -> str:
+def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_platforms=None) -> str:
     """Opzione (a): restituisce la stringa già formattata dalle funzioni esistenti."""
     numero = (numero or "").strip()
     if not numero:
         return "Nessun numero d'ordine fornito."
+    blocked = set(blocked_platforms or ())
+    if piattaforma and piattaforma in blocked:
+        return f"La ricerca ordini '{piattaforma}' non è disponibile in questa modalità."
 
     def _fmt_custom(numero):
         """Ordine custom + eventuale riepilogo gruppo (solo se gruppo > 1 membro)."""
@@ -1249,18 +1310,22 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None) -> str:
     if piattaforma == "btoweb":
         return _fmt_bto(_bto_search_by_number(numero)) or f"Non ho trovato l'ordine btoweb {numero}."
 
-    # Auto: deduci dal formato (stessa logica del vecchio routing regex)
-    custom = _fmt_custom(numero)
-    if custom:
-        return custom
-    if numero.isdigit():
+    # Auto: deduci dal formato (stessa logica del vecchio routing regex),
+    # saltando le piattaforme vietate per la modalità corrente.
+    if "custom" not in blocked:
+        custom = _fmt_custom(numero)
+        if custom:
+            return custom
+    if "woocommerce" not in blocked and numero.isdigit():
         wc = _fmt_wc(search_orders_by_id(numero))
         if wc:
             return wc
-    bto = _fmt_bto(_bto_search_by_number(numero))
-    if bto:
-        return bto
-    return f"Non ho trovato l'ordine {numero} su nessuna piattaforma (custom, WooCommerce, btoweb)."
+    if "btoweb" not in blocked:
+        bto = _fmt_bto(_bto_search_by_number(numero))
+        if bto:
+            return bto
+    consentite = [p for p in ("custom", "WooCommerce", "btoweb") if p.lower() not in blocked]
+    return f"Non ho trovato l'ordine {numero} su nessuna piattaforma ({', '.join(consentite)})."
 
 
 def tool_cerca_ordini_per_cliente(nome: str) -> dict:
@@ -1300,10 +1365,18 @@ def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> 
     return context
 
 
-def _execute_chat_tool(name: str, tool_input: dict, user_message: str):
+def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE):
+    role = _normalize_role(role)
+    allowed = ROLE_TOOLS[role]
+    blocked_platforms = ROLE_BLOCKED_PLATFORMS[role]
     try:
+        # Difesa in profondità: se il tool non è consentito per la modalità, rifiuta.
+        if name not in allowed:
+            return {"error": f"Strumento '{name}' non disponibile nella modalità {role}."}
         if name == "cerca_ordine_per_numero":
-            return tool_cerca_ordine_per_numero(tool_input.get("numero"), tool_input.get("piattaforma"))
+            return tool_cerca_ordine_per_numero(
+                tool_input.get("numero"), tool_input.get("piattaforma"), blocked_platforms
+            )
         if name == "cerca_ordini_per_cliente":
             return tool_cerca_ordini_per_cliente(tool_input.get("nome"))
         if name == "rispondi_dal_manuale":
@@ -1313,13 +1386,16 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str):
         return {"error": f"Errore nell'esecuzione di {name}: {str(e)}"}
 
 
-def chat_with_tools(chat_id: str, user_message: str) -> str:
+def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -> str:
     """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
     if not ANTHROPIC_API_KEY:
         return "Errore: ANTHROPIC_API_KEY non configurata."
 
+    role = _normalize_role(role)
+    active_tools = [t for t in CHAT_TOOLS if t["name"] in ROLE_TOOLS[role]]
+
     history = get_recent_messages(chat_id)
-    system = SYSTEM_PROMPT + "\n\n" + TOOL_SYSTEM_SUFFIX
+    system = SYSTEM_PROMPT + "\n\n" + ROLE_PROMPTS[role] + "\n\n" + TOOL_SYSTEM_SUFFIX
 
     messages = list(history)
     messages.append({"role": "user", "content": user_message})
@@ -1332,7 +1408,7 @@ def chat_with_tools(chat_id: str, user_message: str) -> str:
                 model=ANTHROPIC_MODEL,
                 max_tokens=1024,
                 system=system,
-                tools=CHAT_TOOLS,
+                tools=active_tools,
                 messages=messages,
             )
 
@@ -1346,7 +1422,7 @@ def chat_with_tools(chat_id: str, user_message: str) -> str:
             for block in response.content:
                 if block.type != "tool_use":
                     continue
-                result = _execute_chat_tool(block.name, block.input or {}, user_message)
+                result = _execute_chat_tool(block.name, block.input or {}, user_message, role)
                 if not isinstance(result, str):
                     result = json.dumps(result, ensure_ascii=False, default=str)
                 tool_results.append({
@@ -1436,7 +1512,8 @@ def chat(request: ChatRequest):
 
         # Routing via tool use: Haiku decide quale strumento chiamare e con
         # quali parametri (sostituisce la vecchia cascata di regex).
-        bot_reply = chat_with_tools(request.chat_id, request.message)
+        # role seleziona modalità utente (staff default, b2b/retail predisposti).
+        bot_reply = chat_with_tools(request.chat_id, request.message, request.role)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
