@@ -1883,10 +1883,11 @@ def custom_orders(limit: int = 20):
         return {"error": str(e)}
 
 @app.get("/custom-debug")
-def custom_debug(limit: int = 3):
+def custom_debug(limit: int = 3, resource: str = "orders"):
     try:
-        data = get_custom_resource("orders", limit)
+        data = get_custom_resource(resource, limit)
         return {
+            "resource": resource,
             "type": str(type(data)),
             "preview": data
         }
