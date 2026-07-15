@@ -5,6 +5,8 @@ from pydantic import BaseModel
 import os
 import re
 import json
+from datetime import datetime
+from collections import Counter
 import psycopg2
 import requests
 import anthropic
@@ -1176,6 +1178,69 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "statistiche_ordini_custom",
+        "description": (
+            "Conteggi AGGREGATI sugli ordini custom (kanokimonos.app). Usalo per domande "
+            "quantitative/di riepilogo tipo: 'quanti ordini non pagati?', 'quanti in "
+            "produzione?', 'quanti spediti ai clienti?', 'quanti ordini questo mese?', "
+            "oppure per sapere se un cliente ha pagato / se i suoi ordini sono partiti.\n"
+            "Filtri opzionali:\n"
+            "- 'cliente': nome persona, azienda/palestra o parte dell'email (sottostringa). "
+            "Se lo passi, ricevi anche l'elenco per-ordine (stato + pagamento) del cliente.\n"
+            "- 'mese': 'corrente' per il mese in corso, un nome di mese (es. 'giugno') o "
+            "'YYYY-MM'. Filtra per data di creazione dell'ordine.\n"
+            "Stati ordine (order_status) e loro significato: pending=in lavorazione grafica/"
+            "taglie, processing=in produzione, shipped_to_logistics=in viaggio verso la "
+            "logistica (Fully), at_logistics=da Fully pronti a partire, shipped_to_customer="
+            "spediti al cliente, shipped=stato storico legacy (conta come spedito ma va "
+            "dichiarato a parte), cancelled=annullati. Pagamenti (payment_status): "
+            "fully_paid=pagati, advance_paid=acconto, unpaid=non pagati.\n"
+            "IMPORTANTE: questo strumento NON fornisce importi in euro. Se ti chiedono "
+            "'quanto abbiamo incassato' o importi economici, NON usarlo per inventare numeri: "
+            "rispondi che i dati economici si consultano solo su kanokimonos.app."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cliente": {
+                    "type": "string",
+                    "description": "Nome/azienda/email del cliente per filtrare (sottostringa). Ometti per il totale.",
+                },
+                "mese": {
+                    "type": "string",
+                    "description": "'corrente', nome mese italiano, o 'YYYY-MM'. Ometti per tutti i mesi.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "prezzi_listino",
+        "description": (
+            "Prezzi di LISTINO ufficiali dei prodotti e delle patch (kanokimonos.app). Usalo "
+            "SOLO quando serve un prezzo di listino interno (es. 'quanto costa una patch DTF "
+            "10x10 a listino?', 'prezzo listino rashguard'). Passa in 'query' le parole chiave "
+            "del prodotto/patch (materiale, misura, tipo). Usa 'tipo'='patch' per le patch, "
+            "'prodotti' per i capi; ometti per cercare in entrambi. Restituisce le righe di "
+            "listino grezze: leggi i campi prezzo pertinenti e riporta il valore giusto."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Parole chiave del prodotto/patch (es. 'DTF 10x10', 'rashguard manica lunga').",
+                },
+                "tipo": {
+                    "type": "string",
+                    "enum": ["patch", "prodotti"],
+                    "description": "'patch' per patch_pricing, 'prodotti' per product_pricing. Ometti per entrambi.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "rispondi_dal_manuale",
         "description": (
             "Recupera informazioni dal manuale operativo interno / knowledge base "
@@ -1205,6 +1270,9 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A). Se l'utente fornisce solo una parte (es. solo "0495"), NON chiamare lo strumento con il valore parziale: chiedi il numero completo invece di indovinare.
 - Per QUALSIASI domanda procedurale o di policy (sconti, prezzi a quantità, spedizioni, resi, tempi, "come si fa X", regole interne) DEVI chiamare rispondi_dal_manuale PRIMA di rispondere. Non rispondere mai a memoria su questi temi: il manuale è la fonte di verità. Solo se rispondi_dal_manuale restituisce NESSUN_CONTENUTO puoi dire onestamente che non trovi la procedura nel manuale.
 - Se nessuno strumento è adatto e non conosci la risposta con certezza, dillo con onestà spiegando cosa non sai fare. NON rispondere mai con "Nessun ordine trovato per '<parola a caso>'" raschiando parole a caso dalla domanda.
+- Per domande AGGREGATE/di riepilogo sugli ordini custom ("quanti ordini...", "quanti pagati/non pagati/in produzione/spediti", "il cliente X ha pagato / è partito", conteggi per mese) usa statistiche_ordini_custom. Quando riporti gli spediti al cliente e sono presenti ordini con stato storico 'shipped', dichiara SEMPRE la distinzione (es. "123 spediti al cliente + 46 con stato storico legacy 'shipped'").
+- DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli.
+- PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 """
 
 
@@ -1239,7 +1307,10 @@ ROLE_PROMPTS = {
 }
 
 ROLE_TOOLS = {
-    "staff": {"cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale"},
+    "staff": {
+        "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
+        "statistiche_ordini_custom", "prezzi_listino",
+    },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
     "retail": {"rispondi_dal_manuale"},
 }
@@ -1422,6 +1493,190 @@ def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> 
     return context
 
 
+# --- STATISTICHE AGGREGATE ORDINI CUSTOM (solo staff) ------------------------
+# Mappatura order_status → etichetta di business (dalla macchina a stati kanokimonos.app).
+# Nota: 'shipped' è uno stato STORICO/legacy; conta come "spedito" ma va dichiarato a parte.
+CUSTOM_STATUS_LABELS = {
+    "pending": "in lavorazione (grafica/taglie)",
+    "processing": "in produzione",
+    "shipped_to_logistics": "in viaggio verso la logistica (Fully)",
+    "at_logistics": "da Fully, pronti a partire",
+    "shipped_to_customer": "spediti al cliente",
+    "shipped": "spediti (stato storico legacy)",
+    "cancelled": "annullati",
+}
+
+_MESI_IT = {
+    "gennaio": 1, "febbraio": 2, "marzo": 3, "aprile": 4, "maggio": 5, "giugno": 6,
+    "luglio": 7, "agosto": 8, "settembre": 9, "ottobre": 10, "novembre": 11, "dicembre": 12,
+}
+
+
+def _custom_orders_dataset():
+    """Scarica gli ordini custom GREZZI (limit 5000) per l'aggregazione.
+    Usa i campi raw (order_status, payment_status, customers, ...), NON la normalizzazione
+    (che rimappa 'status' sul workflow). Ritorna (righe, None) oppure (None, errore)."""
+    data = get_custom_resource("orders", 5000)
+    if isinstance(data, dict) and data.get("error"):
+        return None, data
+    if isinstance(data, list):
+        raw = data
+    elif isinstance(data, dict):
+        raw = data.get("data") or data.get("orders") or []
+    else:
+        raw = []
+    return [o for o in raw if isinstance(o, dict)], None
+
+
+def _custom_customer_haystack(o: dict) -> str:
+    c = o.get("customers") or {}
+    if not isinstance(c, dict):
+        c = {}
+    parts = [c.get("first_name"), c.get("last_name"), c.get("business_name"), c.get("email")]
+    return " ".join(str(p) for p in parts if p).lower()
+
+
+def _normalize_mese(mese: str):
+    """Normalizza il filtro mese in 'YYYY-MM' (o None). Accetta 'corrente'/'questo mese',
+    'YYYY-MM', o un nome di mese italiano (anno corrente)."""
+    if not mese:
+        return None
+    m = str(mese).strip().lower()
+    now = datetime.now()
+    if m in ("corrente", "questo mese", "mese corrente", "current", "this month"):
+        return now.strftime("%Y-%m")
+    if re.fullmatch(r"\d{4}-\d{2}", m):
+        return m
+    if m in _MESI_IT:
+        return f"{now.year:04d}-{_MESI_IT[m]:02d}"
+    return None
+
+
+def tool_statistiche_ordini_custom(cliente: str = None, mese: str = None) -> dict:
+    """Conteggi aggregati sugli ordini custom (kanokimonos.app), filtrabili per cliente
+    e per mese. NON restituisce MAI importi in euro: solo conteggi. Se è indicato un
+    cliente, allega l'elenco per-ordine per rispondere 'ha pagato?' / 'sono partiti?'."""
+    rows, err = _custom_orders_dataset()
+    if err:
+        return {"error": err.get("error", "Errore API custom")}
+
+    mese_norm = _normalize_mese(mese)
+    cliente_clean = (cliente or "").strip().lower()
+
+    def keep(o):
+        if cliente_clean and cliente_clean not in _custom_customer_haystack(o):
+            return False
+        if mese_norm and not str(o.get("created_at") or "").startswith(mese_norm):
+            return False
+        return True
+
+    sel = [o for o in rows if keep(o)]
+
+    filtro = {}
+    if cliente:
+        filtro["cliente"] = cliente
+    if mese_norm:
+        filtro["mese"] = mese_norm
+
+    os_counter = Counter(o.get("order_status") for o in sel)
+    ps_counter = Counter(o.get("payment_status") for o in sel)
+
+    per_order_status = {
+        (k or "sconosciuto"): {
+            "conteggio": v,
+            "descrizione": CUSTOM_STATUS_LABELS.get(k, k or "sconosciuto"),
+        }
+        for k, v in os_counter.items()
+    }
+
+    result = {
+        "totale_ordini": len(sel),
+        "filtro": filtro,
+        "per_order_status": per_order_status,
+        "per_payment_status": {
+            "fully_paid": ps_counter.get("fully_paid", 0),
+            "advance_paid": ps_counter.get("advance_paid", 0),
+            "unpaid": ps_counter.get("unpaid", 0),
+        },
+        "legenda_pagamenti": {
+            "fully_paid": "pagati per intero",
+            "advance_paid": "acconto versato",
+            "unpaid": "non ancora pagati",
+        },
+        "nota_importi": (
+            "I dati economici in euro (incassi, importi pagati, totali) NON sono disponibili "
+            "qui e non vanno comunicati: si consultano solo su kanokimonos.app."
+        ),
+    }
+
+    if "shipped" in os_counter:
+        result["nota_legacy_shipped"] = (
+            f"{os_counter.get('shipped_to_customer', 0)} ordini hanno stato 'spediti al cliente' "
+            f"e {os_counter['shipped']} hanno lo stato storico legacy 'shipped'. Entrambi contano "
+            "come spediti, ma vanno dichiarati separatamente."
+        )
+
+    if cliente:
+        elenco = []
+        for o in sorted(sel, key=lambda x: str(x.get("order_number") or "")):
+            elenco.append({
+                "order_number": o.get("order_number"),
+                "order_status": o.get("order_status"),
+                "stato_descrizione": CUSTOM_STATUS_LABELS.get(
+                    o.get("order_status"), o.get("order_status")
+                ),
+                "payment_status": o.get("payment_status"),
+                "partito_al_cliente": o.get("order_status") in ("shipped_to_customer", "shipped"),
+                "created_at": o.get("created_at"),
+            })
+        result["ordini"] = elenco
+
+    return result
+
+
+def tool_prezzi_listino(query: str = None, tipo: str = None) -> dict:
+    """Prezzi di listino ufficiali dalle risorse product_pricing / patch_pricing dell'edge
+    function (solo staff). Schema-agnostico: filtra le righe per sottostringa su tutti i
+    valori testuali e le restituisce grezze così Haiku legge i campi rilevanti."""
+    if tipo == "patch":
+        resources = ["patch_pricing"]
+    elif tipo in ("prodotti", "prodotto", "product", "products"):
+        resources = ["product_pricing"]
+    else:
+        resources = ["product_pricing", "patch_pricing"]
+
+    q = (query or "").strip().lower()
+    tokens = [t for t in q.split() if t]
+    out = {}
+
+    for res in resources:
+        data = get_custom_resource(res, 5000)
+        if isinstance(data, dict) and data.get("error"):
+            out[res] = {"error": data.get("error"), "details": data.get("details")}
+            continue
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            rows = data.get("data") or data.get("orders") or []
+        else:
+            rows = []
+        rows = [r for r in rows if isinstance(r, dict)]
+
+        if tokens:
+            def match(r):
+                blob = " ".join(
+                    str(v) for v in r.values() if isinstance(v, (str, int, float))
+                ).lower()
+                return all(tok in blob for tok in tokens)
+            filt = [r for r in rows if match(r)]
+        else:
+            filt = rows
+
+        out[res] = {"totale": len(filt), "prezzi": filt[:50]}
+
+    return out
+
+
 def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE):
     role = _normalize_role(role)
     allowed = ROLE_TOOLS[role]
@@ -1436,6 +1691,12 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         if name == "cerca_ordini_per_cliente":
             return tool_cerca_ordini_per_cliente(tool_input.get("nome"))
+        if name == "statistiche_ordini_custom":
+            return tool_statistiche_ordini_custom(
+                tool_input.get("cliente"), tool_input.get("mese")
+            )
+        if name == "prezzi_listino":
+            return tool_prezzi_listino(tool_input.get("query"), tool_input.get("tipo"))
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(tool_input.get("argomento"), user_message)
         return {"error": f"Strumento sconosciuto: {name}"}
