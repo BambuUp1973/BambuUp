@@ -1219,10 +1219,13 @@ CHAT_TOOLS = [
         "description": (
             "Prezzi di LISTINO ufficiali dei prodotti e delle patch (kanokimonos.app). Usalo "
             "SOLO quando serve un prezzo di listino interno (es. 'quanto costa una patch DTF "
-            "10x10 a listino?', 'prezzo listino rashguard'). Passa in 'query' le parole chiave "
-            "del prodotto/patch (materiale, misura, tipo). Usa 'tipo'='patch' per le patch, "
-            "'prodotti' per i capi; ometti per cercare in entrambi. Restituisce le righe di "
-            "listino grezze: leggi i campi prezzo pertinenti e riporta il valore giusto."
+            "10x10 a listino?', 'prezzo listino leggings'). Passa in 'query' le parole chiave: "
+            "per le PATCH la misura (es. '10x10' o '10 cm' -> lato in cm; il tipo di stampa "
+            "come DTF NON incide sul prezzo); per i PRODOTTI il nome del capo (es. 'leggings', "
+            "'rashguard'). Usa 'tipo'='patch' per le patch, 'prodotti' per i capi; ometti per "
+            "entrambi. Il prezzo dipende dalla FASCIA DI QUANTITÀ: lo strumento restituisce "
+            "tutta la scala prezzi/quantità. Riporta la fascia giusta se conosci la quantità, "
+            "altrimenti presenta la scala (per i prodotti c'è anche il prezzo VIP)."
         ),
         "input_schema": {
             "type": "object",
@@ -1634,45 +1637,109 @@ def tool_statistiche_ordini_custom(cliente: str = None, mese: str = None) -> dic
     return result
 
 
+def _pricing_rows(res: str):
+    """Righe grezze di una risorsa pricing, oppure ('error', payload)."""
+    data = get_custom_resource(res, 5000)
+    if isinstance(data, dict) and data.get("error"):
+        return None, {"error": data.get("error"), "details": data.get("details")}
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get("data") or data.get("orders") or []
+    else:
+        rows = []
+    return [r for r in rows if isinstance(r, dict)], None
+
+
+def _patch_size_hint(query: str):
+    """Estrae la misura in cm da una query patch: '10x10'->10, '10 cm'->10, '10'->10.
+    Le patch sono quadrate: la misura è il lato (size_cm)."""
+    if not query:
+        return None
+    m = re.search(r"(\d+)\s*[x×]\s*\d+", query)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(\d+)\s*cm", query.lower())
+    if m:
+        return int(m.group(1))
+    nums = re.findall(r"\d+", query)
+    return int(nums[0]) if nums else None
+
+
+def _product_name(r: dict) -> str:
+    p = r.get("products") or {}
+    return (p.get("name") if isinstance(p, dict) else "") or ""
+
+
 def tool_prezzi_listino(query: str = None, tipo: str = None) -> dict:
-    """Prezzi di listino ufficiali dalle risorse product_pricing / patch_pricing dell'edge
-    function (solo staff). Schema-agnostico: filtra le righe per sottostringa su tutti i
-    valori testuali e le restituisce grezze così Haiku legge i campi rilevanti."""
+    """Prezzi di listino ufficiali (solo staff) dalle risorse patch_pricing / product_pricing.
+    - patch_pricing: prezzate per size_cm (patch quadrate) + fascia di quantità; il tipo di
+      stampa (es. DTF) NON cambia il prezzo di listino. Estrae la misura dalla query.
+    - product_pricing: filtra per NOME prodotto (annidato in products.name); restituisce
+      prezzo standard e prezzo VIP per fascia di quantità.
+    Restituisce la scala prezzi/quantità così Haiku riporta la fascia giusta."""
     if tipo == "patch":
         resources = ["patch_pricing"]
     elif tipo in ("prodotti", "prodotto", "product", "products"):
         resources = ["product_pricing"]
     else:
-        resources = ["product_pricing", "patch_pricing"]
+        resources = ["patch_pricing", "product_pricing"]
 
     q = (query or "").strip().lower()
-    tokens = [t for t in q.split() if t]
     out = {}
 
     for res in resources:
-        data = get_custom_resource(res, 5000)
-        if isinstance(data, dict) and data.get("error"):
-            out[res] = {"error": data.get("error"), "details": data.get("details")}
+        rows, err = _pricing_rows(res)
+        if err:
+            out[res] = err
             continue
-        if isinstance(data, list):
-            rows = data
-        elif isinstance(data, dict):
-            rows = data.get("data") or data.get("orders") or []
-        else:
-            rows = []
-        rows = [r for r in rows if isinstance(r, dict)]
 
-        if tokens:
-            def match(r):
-                blob = " ".join(
-                    str(v) for v in r.values() if isinstance(v, (str, int, float))
-                ).lower()
-                return all(tok in blob for tok in tokens)
-            filt = [r for r in rows if match(r)]
-        else:
-            filt = rows
-
-        out[res] = {"totale": len(filt), "prezzi": filt[:50]}
+        if res == "patch_pricing":
+            size = _patch_size_hint(query)
+            sel = [r for r in rows if size is None or r.get("size_cm") == size]
+            sel = sorted(sel, key=lambda r: (r.get("size_cm") or 0, r.get("min_quantity") or 0))
+            out[res] = {
+                "filtro_misura_cm": size,
+                "nota": (
+                    "Patch quadrate: la misura è il lato in cm (size_cm). Il prezzo unitario "
+                    "dipende dalla fascia di quantità. Il tipo di stampa (es. DTF) non cambia "
+                    "il prezzo di listino."
+                ),
+                "totale": len(sel),
+                "listino": [
+                    {
+                        "size_cm": r.get("size_cm"),
+                        "quantita_da": r.get("min_quantity"),
+                        "quantita_a": r.get("max_quantity"),
+                        "prezzo_unitario": r.get("price"),
+                        "customer_type": r.get("customer_type"),
+                    }
+                    for r in sel[:60]
+                ],
+            }
+        else:  # product_pricing
+            tokens = [t for t in q.split() if t and not t.isdigit()]
+            if tokens:
+                sel = [r for r in rows if all(t in _product_name(r).lower() for t in tokens)]
+            else:
+                sel = rows
+            sel = sorted(sel, key=lambda r: (_product_name(r), r.get("min_quantity") or 0))
+            out[res] = {
+                "nota": "Prezzo per fascia di quantità. 'prezzo_vip' è il prezzo riservato ai clienti VIP.",
+                "totale": len(sel),
+                "listino": [
+                    {
+                        "prodotto": _product_name(r),
+                        "quantita_da": r.get("min_quantity"),
+                        "quantita_a": r.get("max_quantity"),
+                        "prezzo": r.get("price"),
+                        "prezzo_vip": r.get("vip_price"),
+                        "size_variation": r.get("size_variation"),
+                        "customer_type": r.get("customer_type"),
+                    }
+                    for r in sel[:60]
+                ],
+            }
 
     return out
 
