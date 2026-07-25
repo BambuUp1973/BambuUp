@@ -163,11 +163,19 @@ def normalize_custom_order(order: dict):
     selected_variations = order.get("selected_variations")
     admin_design_url = None
     admin_design_uploaded_at = None
+    design_confirmed = None
+    design_confirmed_at = None
+    sizes_selected_at = None
+    selected_sizes = None
 
-    # In alcuni record admin_design_url è dentro selected_variations
+    # In alcuni record admin_design_url + i flag checklist sono dentro selected_variations
     if isinstance(selected_variations, dict):
         admin_design_url = selected_variations.get("admin_design_url")
         admin_design_uploaded_at = selected_variations.get("admin_design_uploaded_at")
+        design_confirmed = selected_variations.get("design_confirmed")
+        design_confirmed_at = selected_variations.get("design_confirmed_at")
+        sizes_selected_at = selected_variations.get("sizes_selected_at")
+        selected_sizes = selected_variations.get("selected_sizes")
 
     return {
         "id": order.get("id"),
@@ -175,6 +183,7 @@ def normalize_custom_order(order: dict):
         "order_group_id": order.get("order_group_id"),
         "quantity": order.get("quantity"),
         "status": order.get("status"),
+        "order_status": order.get("order_status"),
         "payment_status": order.get("payment_status"),
         "customer_name": f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
         "customer_email": customer.get("email"),
@@ -206,8 +215,16 @@ def normalize_custom_order(order: dict):
         "selected_variations": selected_variations,
         "admin_design_url": admin_design_url,
         "admin_design_uploaded_at": admin_design_uploaded_at,
+        "design_confirmed": design_confirmed,
+        "design_confirmed_at": design_confirmed_at,
+        "sizes_selected_at": sizes_selected_at,
+        "selected_sizes": selected_sizes,
+        "customer_files": order.get("customer_files"),
+        "image_url": order.get("image_url"),
         "producer_assigned_at": order.get("producer_assigned_at"),
+        "producer_file_path": order.get("producer_file_path"),
         "producer_file_uploaded_at": order.get("producer_file_uploaded_at"),
+        "producer_courier": order.get("producer_courier"),
         "producer_csv_uploaded_at": order.get("producer_csv_uploaded_at"),
         "producer_csv_version": order.get("producer_csv_version"),
         "final_approval_status": order.get("final_approval_status"),
@@ -433,7 +450,11 @@ def yes_no_unknown(value):
 def format_custom_order_for_human(order: dict) -> str:
     lines = []
     lines.append(f"Ordine custom: {order.get('order_number') or order.get('id')}")
-    lines.append(f"Status: {order.get('status') or 'N/A'}")
+    # Stato di business REALE = order_status (con etichette usate anche nelle statistiche),
+    # NON il campo workflow 'status' (spesso fermo su 'pending_confirmation' e fuorviante).
+    os_code = order.get("order_status")
+    os_label = CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A")
+    lines.append(f"Stato ordine: {os_label}" + (f" [{os_code}]" if os_code else ""))
     lines.append(f"Pagamento: {order.get('payment_status') or 'N/A'}")
     lines.append(f"Creato il: {order.get('created_at') or 'N/A'}")
     lines.append("")
@@ -478,11 +499,34 @@ def format_custom_order_for_human(order: dict) -> str:
         lines.append("- Nessun prodotto trovato")
 
     lines.append("")
-    lines.append(f"Bozza admin inserita: {'Sì' if order.get('admin_design_url') else 'No'}")
+    # Checklist avanzamento: flag espliciti Sì/No ricavati da selected_variations
+    # (design/taglie) e dai campi producer_*.
+    si = lambda b: "Sì" if b else "No"
+    design_caricato = bool(order.get("admin_design_url"))
+    design_approvato = order.get("design_confirmed") is True
+    taglie_confermate = bool(order.get("sizes_selected_at")) or bool(order.get("selected_sizes"))
+    producer_file_pronto = bool(order.get("producer_file_uploaded_at")) or bool(order.get("producer_file_path"))
+    spedito_produttore = bool(order.get("producer_shipped_at"))
+    ship_extra = ""
+    if spedito_produttore:
+        extra = " | ".join(filter(None, [order.get("producer_courier"), order.get("producer_tracking")]))
+        ship_extra = f" ({extra})" if extra else ""
+
+    lines.append("Checklist avanzamento:")
+    # customer_files/image_url risultano vuoti anche su ordini avanzati:
+    # un Sì/No sarebbe fuorviante, quindi voce fissa.
+    lines.append("- Logo cliente: non tracciato a sistema")
+    lines.append(f"- Design caricato: {si(design_caricato)}")
+    lines.append(f"- Design approvato dal cliente: {si(design_approvato)}")
+    lines.append(f"- Taglie confermate: {si(taglie_confermate)}")
+    lines.append(f"- Producer file pronto: {si(producer_file_pronto)}")
+    lines.append(f"- Spedito dal produttore: {si(spedito_produttore)}{ship_extra}")
+    lines.append("")
     lines.append(f"URL bozza admin: {order.get('admin_design_url') or 'N/A'}")
     lines.append(f"Bozza admin caricata il: {order.get('admin_design_uploaded_at') or 'N/A'}")
-    lines.append(f"Varianti/taglie inserite: {'Sì' if order.get('selected_variations') else 'No'}")
-    lines.append(f"Dettaglio varianti/taglie: {order.get('selected_variations') or 'N/A'}")
+    lines.append(f"Design approvato il: {order.get('design_confirmed_at') or 'N/A'}")
+    lines.append(f"Taglie inserite il: {order.get('sizes_selected_at') or 'N/A'}")
+    lines.append(f"Dettaglio taglie: {order.get('selected_sizes') or 'N/A'}")
     lines.append("")
     lines.append(f"Produttore scelto: {'Sì' if order.get('producer_assigned_at') else 'No'}")
     lines.append(f"Produttore assegnato il: {order.get('producer_assigned_at') or 'N/A'}")
@@ -1389,7 +1433,11 @@ def format_order_group_summary(group_orders: list, main_number: str) -> str:
         qty = o.get("quantity")
         qty_str = f"{qty} pz" if qty is not None else "N/A"
         marker = "  ← ordine richiesto" if str(num).strip().lower() == main_clean else ""
-        lines.append(f"• {num} | {_first_product_name(o)} | {qty_str} | {o.get('status') or 'N/A'}{marker}")
+        # Coerente con la scheda ordine: mostra lo stato di business (order_status),
+        # non il campo workflow stale 'status'.
+        os_code = o.get("order_status")
+        os_label = CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A")
+        lines.append(f"• {num} | {_first_product_name(o)} | {qty_str} | {os_label}{marker}")
     return "\n".join(lines)
 
 
