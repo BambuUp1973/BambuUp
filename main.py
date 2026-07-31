@@ -344,6 +344,38 @@ def get_bto_resource(params: dict):
     return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
 
 
+def _bto_get(params: dict):
+    """Chiamata grezza alla edge function btoweb: restituisce il JSON completo
+    (data + count/total/disclaimer/source). get_bto_resource appiattisce tutto in
+    'results' e perde il disclaimer di stock, che qui va invece propagato."""
+    if not BTO_API_KEY:
+        return {"error": "BTO_API_KEY non configurata."}
+
+    try:
+        response = requests.get(
+            BTO_API_URL,
+            headers={"x-api-key": BTO_API_KEY},
+            params=params,
+            timeout=60,
+        )
+    except Exception as e:
+        return {"error": f"Errore connessione btoweb: {str(e)}"}
+
+    if response.status_code != 200:
+        return {"error": f"btoweb API error {response.status_code}", "details": response.text}
+
+    try:
+        data = response.json()
+    except Exception:
+        return {"error": "Risposta btoweb non valida (non JSON)", "details": response.text}
+
+    if isinstance(data, list):
+        return {"data": data}
+    if isinstance(data, dict):
+        return data
+    return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
+
+
 def search_bto_orders_by_producer(producer: str):
     return get_bto_resource({"producer": producer})
 
@@ -1288,6 +1320,48 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "catalogo_btoweb",
+        "description": (
+            "Catalogo di fabbrica btoweb: (1) ANAGRAFICA PRODOTTI — SKU/EAN, nome, taglia, "
+            "colore; (2) PRODUZIONE — contatori della pipeline di produzione. Usalo per "
+            "'che taglie esistono per <prodotto>?', 'a che prodotto corrisponde lo SKU/EAN "
+            "<numero>?', 'quanti <prodotto> sono in produzione?'. "
+            "Passa 'sku' per la ricerca esatta di uno SKU/EAN, altrimenti 'query' con le "
+            "parole chiave del nome prodotto. "
+            "tipo='prodotti' (default) = anagrafica; tipo='produzione' = contatori di produzione. "
+            "REGOLA CRITICA su tipo='produzione': i numeri restituiti sono contatori della "
+            "PIPELINE DI PRODUZIONE, NON la giacenza vendibile a magazzino. 'in_produzione' = "
+            "ordinato al fornitore e non ancora spedito; 'prodotti_e_spediti_dal_fornitore' = "
+            "prodotto su spedizioni già partite; 'ricevuti_conformi'/'mancanti'/'danneggiati' = "
+            "riconciliazione in ingresso su Fully. Non dire MAI che un capo è 'disponibile', "
+            "'in stock' o 'pronto da vendere' sulla base di questi numeri, e riporta sempre "
+            "esplicitamente il disclaimer che si tratta di dati di produzione e non di "
+            "disponibilità di magazzino. Anche l'anagrafica indica solo che il prodotto esiste "
+            "a catalogo, non che sia disponibile. "
+            "Questa fonte NON contiene PREZZI: non dedurre né stimare prezzi da qui; per i "
+            "prezzi usa prezzi_listino."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Parole chiave del nome prodotto (es. 'BJJ Belt Competition', 't-shirt kano').",
+                },
+                "sku": {
+                    "type": "string",
+                    "description": "SKU/EAN esatto da cercare (es. '7427115006810'). Ha priorità su 'query'.",
+                },
+                "tipo": {
+                    "type": "string",
+                    "enum": ["prodotti", "produzione"],
+                    "description": "'prodotti' = anagrafica/taglie (default); 'produzione' = contatori pipeline di produzione.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "rispondi_dal_manuale",
         "description": (
             "Recupera informazioni dal manuale operativo interno / knowledge base "
@@ -1320,6 +1394,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - Per domande AGGREGATE/di riepilogo sugli ordini custom ("quanti ordini...", "quanti pagati/non pagati/in produzione/spediti", "il cliente X ha pagato / è partito", conteggi per mese) usa statistiche_ordini_custom. Quando riporti gli spediti al cliente e sono presenti ordini con stato storico 'shipped', dichiara SEMPRE la distinzione (es. "123 spediti al cliente + 46 con stato storico legacy 'shipped'").
 - DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli.
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
+- CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
 """
 
 
@@ -1356,7 +1431,7 @@ ROLE_PROMPTS = {
 ROLE_TOOLS = {
     "staff": {
         "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
-        "statistiche_ordini_custom", "prezzi_listino",
+        "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
     "retail": {"rispondi_dal_manuale"},
@@ -1792,6 +1867,237 @@ def tool_prezzi_listino(query: str = None, tipo: str = None) -> dict:
     return out
 
 
+_SIZE_SUFFIX_RE = re.compile(r"\s*-\s*[A-Za-z0-9]{1,4}\s*$")
+
+
+def _bto_base_name(name: str) -> str:
+    """'BJJ RASHGUARD COMPETITION ... - XL' -> 'BJJ RASHGUARD COMPETITION ...'.
+    Ogni taglia è una riga separata: il nome base serve per raggruppare le varianti."""
+    return _SIZE_SUFFIX_RE.sub("", (name or "").strip()).strip()
+
+
+def _bto_match(name: str, tokens: list) -> bool:
+    """AND su tutti i token della query nel nome prodotto (come product_pricing)."""
+    n = (name or "").lower()
+    return all(t in n for t in tokens)
+
+
+# La risorsa 'stock' ignora il parametro q lato server (verificato): va scaricata
+# intera e filtrata qui. 'products' invece filtra davvero su q e sku.
+# La edge function tronca comunque a 500 righe per chiamata: senza paginazione su
+# offset si perdono righe (es. 'T-SHIRT KANO PLAIN BLACK' sta oltre la 500ª riga).
+_BTO_PAGE_SIZE = 500
+_BTO_MAX_ROWS = 3000
+
+
+def _bto_get_paged(params: dict):
+    """Scarica tutte le righe di una risorsa btoweb paginando su offset.
+    Restituisce (righe, meta) oppure (None, errore)."""
+    rows = []
+    meta = {}
+    offset = 0
+    while offset < _BTO_MAX_ROWS:
+        page = dict(params)
+        page["limit"] = _BTO_PAGE_SIZE
+        page["offset"] = offset
+        res = _bto_get(page)
+        if res.get("error"):
+            return None, res
+        if not meta:
+            meta = {k: v for k, v in res.items() if k != "data"}
+        batch = [r for r in (res.get("data") or []) if isinstance(r, dict)]
+        rows.extend(batch)
+        if len(batch) < _BTO_PAGE_SIZE:
+            break
+        total = res.get("total")
+        if isinstance(total, int) and len(rows) >= total:
+            break
+        offset += _BTO_PAGE_SIZE
+    return rows, meta
+
+
+def _bto_rank_key(base: str, q: str):
+    """Ordina i gruppi per pertinenza: prima chi contiene la frase esatta cercata,
+    poi il nome più corto (il prodotto 'puro' prima delle sue varianti estese).
+    Senza questo, cercando 'BJJ Belt Competition' i rashguard sommergono la cintura."""
+    b = (base or "").lower()
+    phrase = 0 if (q and q.strip().lower() in b) else 1
+    return (phrase, len(b), b)
+
+_BTO_NOTA_PREZZI = (
+    "Questa fonte NON contiene prezzi: non dedurre né stimare prezzi da qui. "
+    "Per i prezzi usa lo strumento prezzi_listino."
+)
+
+
+def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -> dict:
+    """Catalogo btoweb (solo staff): anagrafica prodotti (SKU/EAN, nome, taglia, colore)
+    e contatori della PIPELINE DI PRODUZIONE. Nessun prezzo in questa fonte.
+    - sku: lookup esatto sull'anagrafica (filtro server-side).
+    - tipo='prodotti': anagrafica, raggruppata per prodotto con l'elenco taglie.
+    - tipo='produzione': risorsa stock = contatori di produzione, NON giacenza vendibile."""
+    sku_clean = (sku or "").strip()
+    q = (query or "").strip()
+    tokens = [t for t in q.lower().split() if t]
+
+    if sku_clean:
+        res = _bto_get({"resource": "products", "sku": sku_clean})
+        if res.get("error"):
+            return res
+        rows = [r for r in (res.get("data") or []) if isinstance(r, dict)]
+        if not rows:
+            return {
+                "tipo": "anagrafica_prodotti",
+                "sku_cercato": sku_clean,
+                "trovato": False,
+                "totale": 0,
+                "risultati": [],
+                "nota": f"Nessun prodotto in anagrafica btoweb con SKU/EAN {sku_clean}.",
+                "nota_prezzi": _BTO_NOTA_PREZZI,
+            }
+        return {
+            "tipo": "anagrafica_prodotti",
+            "sku_cercato": sku_clean,
+            "trovato": True,
+            "totale": len(rows),
+            "risultati": [
+                {
+                    "sku": r.get("sku"),
+                    "ean": r.get("ean"),
+                    "prodotto": r.get("product_name"),
+                    "taglia": r.get("size"),
+                    "colore": r.get("colour"),
+                }
+                for r in rows[:20]
+            ],
+            "nota_prezzi": _BTO_NOTA_PREZZI,
+        }
+
+    if tipo in ("produzione", "stock", "production"):
+        rows, res = _bto_get_paged({"resource": "stock"})
+        if rows is None:
+            return res
+        sel = [r for r in rows if _bto_match(r.get("product_name"), tokens)] if tokens else rows
+
+        gruppi = {}
+        ordine = []
+        for r in sel:
+            base = _bto_base_name(r.get("product_name")) or "(senza nome)"
+            if base not in gruppi:
+                gruppi[base] = {
+                    "prodotto": base,
+                    "in_produzione": 0,
+                    "prodotti_e_spediti_dal_fornitore": 0,
+                    "ricevuti_conformi": 0,
+                    "mancanti": 0,
+                    "danneggiati": 0,
+                    "attesi_su_fully": 0,
+                    "dettaglio_taglie": [],
+                }
+                ordine.append(base)
+            g = gruppi[base]
+            g["in_produzione"] += r.get("qty_in_production") or 0
+            g["prodotti_e_spediti_dal_fornitore"] += r.get("qty_shipped") or 0
+            g["ricevuti_conformi"] += r.get("qty_received_good") or 0
+            g["mancanti"] += r.get("qty_missing") or 0
+            g["danneggiati"] += r.get("qty_hurt") or 0
+            g["attesi_su_fully"] += r.get("qty_expected_on_fully") or 0
+            g["dettaglio_taglie"].append(
+                {
+                    "taglia": r.get("size"),
+                    "in_produzione": r.get("qty_in_production") or 0,
+                    "prodotti_e_spediti_dal_fornitore": r.get("qty_shipped") or 0,
+                    "ricevuti_conformi": r.get("qty_received_good") or 0,
+                    "mancanti": r.get("qty_missing") or 0,
+                    "danneggiati": r.get("qty_hurt") or 0,
+                }
+            )
+
+        ordine.sort(key=lambda b: _bto_rank_key(b, q))
+        out_gruppi = [gruppi[k] for k in ordine[:25]]
+        for g in out_gruppi:
+            g["dettaglio_taglie"] = g["dettaglio_taglie"][:30]
+
+        return {
+            "tipo": "produzione_pipeline",
+            "query": q or None,
+            "righe_totali_fonte": res.get("total"),
+            "righe_scaricate": len(rows),
+            "righe_corrispondenti": len(sel),
+            "prodotti_trovati": len(ordine),
+            "gruppi_mostrati": len(out_gruppi),
+            "prodotti": out_gruppi,
+            "disclaimer": res.get("disclaimer"),
+            "avvertenza": (
+                "ATTENZIONE: questi sono contatori della PIPELINE DI PRODUZIONE, NON la "
+                "giacenza vendibile a magazzino. 'in_produzione' = ordinato al fornitore e non "
+                "ancora spedito; 'prodotti_e_spediti_dal_fornitore' = prodotto su spedizioni "
+                "partite; 'ricevuti_conformi'/'mancanti'/'danneggiati' = riconciliazione in "
+                "ingresso su Fully. Non dire mai che un capo è 'disponibile' o 'in stock' "
+                "sulla base di questi numeri: dichiara sempre che si tratta di dati di produzione."
+            ),
+            "nota_prezzi": _BTO_NOTA_PREZZI,
+        }
+
+    # default: anagrafica prodotti per parole chiave
+    params = {"resource": "products"}
+    if q:
+        params["q"] = q
+    rows, res = _bto_get_paged(params)
+    if rows is None:
+        return res
+    sel = [r for r in rows if _bto_match(r.get("product_name"), tokens)] if tokens else rows
+
+    gruppi = {}
+    ordine = []
+    for r in sel:
+        base = _bto_base_name(r.get("product_name")) or "(senza nome)"
+        if base not in gruppi:
+            gruppi[base] = {"prodotto": base, "taglie": [], "colori": [], "varianti": []}
+            ordine.append(base)
+        g = gruppi[base]
+        taglia = r.get("size")
+        colore = r.get("colour")
+        if taglia and taglia not in g["taglie"]:
+            g["taglie"].append(taglia)
+        if colore and colore not in g["colori"]:
+            g["colori"].append(colore)
+        g["varianti"].append(
+            {"sku": r.get("sku"), "taglia": taglia, "colore": colore}
+        )
+
+    ordine.sort(key=lambda b: _bto_rank_key(b, q))
+    out_gruppi = [gruppi[k] for k in ordine[:25]]
+    for g in out_gruppi:
+        g["numero_varianti"] = len(g["varianti"])
+        # Alcuni prodotti hanno size/colour a null nel CSV sorgente (es. le varianti
+        # UltraLight Kumo): distinguere "nessuna taglia" da "taglia non registrata".
+        if not g["taglie"] and g["varianti"]:
+            g["taglie_non_valorizzate"] = True
+            g["nota_taglie"] = (
+                "Questo prodotto ha %d SKU a catalogo ma la taglia NON è valorizzata "
+                "in anagrafica btoweb: non concludere che non esistano taglie, "
+                "il dato è mancante alla fonte." % len(g["varianti"])
+            )
+        g["varianti"] = g["varianti"][:40]
+
+    return {
+        "tipo": "anagrafica_prodotti",
+        "query": q or None,
+        "righe_corrispondenti": len(sel),
+        "prodotti_trovati": len(ordine),
+        "gruppi_mostrati": len(out_gruppi),
+        "prodotti": out_gruppi,
+        "fonte": (res.get("source") or {}).get("file_name"),
+        "nota": (
+            "Anagrafica prodotti/EAN. Ogni taglia è uno SKU distinto: 'taglie' elenca le "
+            "taglie effettivamente presenti a catalogo per quel prodotto. La presenza a "
+            "catalogo NON implica disponibilità a magazzino."
+        ),
+        "nota_prezzi": _BTO_NOTA_PREZZI,
+    }
+
+
 def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE):
     role = _normalize_role(role)
     allowed = ROLE_TOOLS[role]
@@ -1812,6 +2118,10 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         if name == "prezzi_listino":
             return tool_prezzi_listino(tool_input.get("query"), tool_input.get("tipo"))
+        if name == "catalogo_btoweb":
+            return tool_catalogo_btoweb(
+                tool_input.get("query"), tool_input.get("sku"), tool_input.get("tipo")
+            )
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(tool_input.get("argomento"), user_message)
         return {"error": f"Strumento sconosciuto: {name}"}
