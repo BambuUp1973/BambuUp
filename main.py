@@ -545,14 +545,16 @@ def format_custom_order_for_human(order: dict) -> str:
         ship_extra = f" ({extra})" if extra else ""
 
     lines.append("Checklist avanzamento:")
-    # customer_files/image_url risultano vuoti anche su ordini avanzati:
-    # un Sì/No sarebbe fuorviante, quindi voce fissa.
-    lines.append("- Logo cliente: non tracciato a sistema")
     lines.append(f"- Design caricato: {si(design_caricato)}")
     lines.append(f"- Design approvato dal cliente: {si(design_approvato)}")
     lines.append(f"- Taglie confermate: {si(taglie_confermate)}")
     lines.append(f"- Producer file pronto: {si(producer_file_pronto)}")
     lines.append(f"- Spedito dal produttore: {si(spedito_produttore)}{ship_extra}")
+    lines.append("")
+    # Fuori dalla checklist di proposito: customer_files/image_url sono vuoti
+    # anche su ordini avanzati, quindi non è un Sì/No. Dentro l'elenco veniva
+    # rimarcata con una ❌ e letta come "logo non ricevuto".
+    lines.append("Logo cliente: dato non presente a sistema (né ricevuto né mancante)")
     lines.append("")
     lines.append(f"URL bozza admin: {order.get('admin_design_url') or 'N/A'}")
     lines.append(f"Bozza admin caricata il: {order.get('admin_design_uploaded_at') or 'N/A'}")
@@ -1842,13 +1844,34 @@ def tool_prezzi_listino(query: str = None, tipo: str = None) -> dict:
             }
         else:  # product_pricing
             tokens = [t for t in q.split() if t and not t.isdigit()]
+            # Il match è in AND su tutti i token, ma il listino usa nomi generici
+            # ("T-SHIRT") mentre le domande aggiungono il brand ("t-shirt kano"):
+            # l'AND pieno restituiva 0 e il bot dichiarava il prezzo inesistente.
+            # Si scartano progressivamente i token finali finché si trova qualcosa.
+            sel, usati, ignorati = rows, [], []
             if tokens:
-                sel = [r for r in rows if all(t in _product_name(r).lower() for t in tokens)]
-            else:
-                sel = rows
+                for taglio in range(len(tokens)):
+                    usati = tokens[: len(tokens) - taglio]
+                    candidati = [
+                        r for r in rows if all(t in _product_name(r).lower() for t in usati)
+                    ]
+                    if candidati:
+                        sel = candidati
+                        ignorati = tokens[len(tokens) - taglio :]
+                        break
+                else:
+                    # nemmeno il primo token da solo trova nulla
+                    sel, usati, ignorati = [], [], tokens
             sel = sorted(sel, key=lambda r: (_product_name(r), r.get("min_quantity") or 0))
             out[res] = {
                 "nota": "Prezzo per fascia di quantità. 'prezzo_vip' è il prezzo riservato ai clienti VIP.",
+                "parole_cercate": usati or None,
+                "parole_ignorate": ignorati or None,
+                "nota_ricerca": (
+                    "Nessun prodotto a listino conteneva tutte le parole cercate: la ricerca è "
+                    "stata allargata ignorando %s. Verifica che il prodotto elencato sia quello "
+                    "giusto prima di comunicare il prezzo." % ", ".join("'%s'" % t for t in ignorati)
+                ) if ignorati and usati else None,
                 "totale": len(sel),
                 "listino": [
                     {
