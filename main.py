@@ -1,11 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 import re
 import json
-from datetime import datetime
+import difflib
+import unicodedata
+from datetime import datetime, timezone
 from collections import Counter
 import psycopg2
 import requests
@@ -110,7 +112,7 @@ def get_wcapi():
         timeout=30
     )
 
-def get_custom_resource(resource: str, limit: int = 50, status: str = None):
+def get_custom_resource(resource: str, limit: int = 50, status: str = None, extra_params: dict = None):
     headers = {
         "x-bot-api-key": KANOCUSTOM_API_KEY
     }
@@ -122,6 +124,14 @@ def get_custom_resource(resource: str, limit: int = 50, status: str = None):
 
     if status:
         params["status"] = status
+
+    # Filtri della edge function (es. order_number / shipment_number /
+    # only_discrepancies su fully_reconciliation). Senza questo inoltro i filtri
+    # venivano scartati in silenzio e la risposta tornava NON filtrata con HTTP 200.
+    if extra_params:
+        for k, v in extra_params.items():
+            if v is not None and k not in params:
+                params[k] = v
 
     response = requests.get(
         KANOCUSTOM_FUNCTION_URL,
@@ -376,32 +386,8 @@ def _bto_get(params: dict):
     return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
 
 
-def search_bto_orders_by_producer(producer: str):
-    return get_bto_resource({"producer": producer})
-
-
-def search_bto_orders_by_status(status: str):
-    return get_bto_resource({"status": status})
-
-
 def search_bto_orders_all():
     return get_bto_resource({})
-
-
-def try_parse_bto_request(message: str):
-    """Ritorna ("status"|"producer"|"all", valore) oppure None se non è una richiesta btoweb."""
-    msg = message.strip().lower()
-    if "bto" not in msg:
-        return None
-
-    m = re.search(r"produttore\s+(\S+)", msg)
-    if m:
-        return ("producer", m.group(1))
-
-    if re.search(r"\bin\s+produzione\b|produzione", msg):
-        return ("status", "in_produzione")
-
-    return ("all", None)
 
 
 def format_bto_orders_summary(result: dict) -> str:
@@ -1364,6 +1350,97 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "ordini_per_produttore",
+        "description": (
+            "Ordini di FABBRICA (btoweb) di un PRODUTTORE/FORNITORE: cosa deve ancora "
+            "arrivare da lui, con stato, data di arrivo prevista, prodotti e quantità. "
+            "Usalo per domande tipo 'cosa deve arrivare da <produttore>?', 'quali ordini "
+            "ha in produzione <produttore>?', 'quando arriva la merce di <produttore>?', "
+            "'ordini di <produttore>'.\n"
+            "PRODUTTORI (sono FORNITORI, NON clienti): Martin, 7punch (chiamato anche "
+            "Seventh Punch), Wearica, Tussle (nei dati di btoweb compare come "
+            "tusslesports@gmail.com), Fair Tex. Se l'utente nomina uno di questi NON usare "
+            "cerca_ordini_per_cliente: non sono clienti. Se nomina un produttore che non è "
+            "in questo elenco, passalo comunque: la ricerca funziona anche con produttori "
+            "nuovi, e se non esiste lo strumento te lo dice elencando quelli reali.\n"
+            "PASSA IL NOME COSÌ COM'È, anche se ti sembra scritto male: lo strumento tollera "
+            "maiuscole, accenti, spazi, punteggiatura e refusi (es. 'wearika', 'martn'). "
+            "Non correggerlo tu e non tirare a indovinare. Come leggere la risposta:\n"
+            "- 'nota_interpretazione' presente = il nome è stato risolto su un produttore "
+            "diverso da quello digitato: dichiaralo all'utente prima dei dati.\n"
+            "- 'richiesta_chiarimento': true = più produttori compatibili: NON scegliere e "
+            "NON mostrare ordini, elenca i 'candidati' e chiedi quale intende.\n"
+            "- 'trovato': false senza candidati = nessun produttore somigliante: dillo ed "
+            "elenca 'produttori_presenti_negli_ordini'.\n"
+            "Gli ordini tornano già ordinati con i più imminenti in cima. Stati: "
+            "'nuovo' = creato ma non ancora avviato, 'in_produzione' = in lavorazione dal "
+            "fornitore, 'spedito' = già partito dal produttore. Quando la data di arrivo "
+            "prevista o il dettaglio prodotti non sono valorizzati alla fonte, dillo "
+            "esplicitamente invece di stimarli. Questa fonte NON contiene prezzi."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "produttore": {
+                    "type": "string",
+                    "description": "Nome del produttore così come lo ha detto l'utente (es. 'Martin', 'Wearica', 'Tussle').",
+                },
+            },
+            "required": ["produttore"],
+        },
+    },
+    {
+        "name": "tracciamento_fully",
+        "description": (
+            "Tracciamento COMPLETO (dalla A alla Z) di un ordine custom kanokimonos: "
+            "contenuto e stato -> produttore e partenza dalla fabbrica (corriere/tracking) "
+            "-> spedizione ASN verso la logistica Fully (numero ASN + file) -> numero di "
+            "carico Fully -> conteggio di Fully riga per riga (buoni/mancanti/danneggiati/"
+            "in più) -> pronto o no per il cliente -> eventuale ripartenza verso il cliente. "
+            "Usalo per 'traccia l'ordine X', 'a che punto è X con Fully?', 'la merce di X è "
+            "arrivata? manca qualcosa?', 'com'è andato il carico/la spedizione ASN-...?'.\n"
+            "Ingresso: 'numero' = numero d'ordine custom (es. 0495-05-26-A) OPPURE un numero "
+            "di spedizione ASN (es. ASN-Martin-2026-07-20-001); in alternativa 'cliente' = "
+            "nome persona/azienda/email, tollerante a refusi e maiuscole: passalo così com'è, "
+            "non correggerlo (stesse regole di ordini_per_produttore per nota_interpretazione, "
+            "richiesta_chiarimento e candidati).\n"
+            "REGOLE OBBLIGATORIE quando riporti i risultati:\n"
+            "- Al cliente si spedisce quanto Fully ha CONTATO (buoni), ma il prezzo è sulla "
+            "quantità ORDINATA. Quindi: 'in_piu' > 0 va segnalato SEMPRE come pezzi in più "
+            "da consegnare E DA FATTURARE (anche se la fonte non lo marca come discrepanza); "
+            "'mancanti' o 'danneggiati' > 0 = il cliente riceve meno di quanto ha pagato: "
+            "dillo con queste parole; una riga con 0 pezzi buoni NON partirà affatto.\n"
+            "- Distingui SEMPRE le anomalie DA GESTIRE da quelle GIÀ GESTITE (campi "
+            "'anomalie_da_gestire' / 'anomalie_gia_gestite').\n"
+            "- 'verifica_manuale_bambu' è una verifica manuale fatta da Bambu, MAI una "
+            "conferma di Fully: usa esattamente queste parole.\n"
+            "- Il conteggio è una FOTOGRAFIA ('fotografia_del'), non una lettura in diretta: "
+            "se la nota dice che è vecchia, dichiaralo.\n"
+            "- Se mancano numero di carico, righe di conteggio o spedizione, lo strumento lo "
+            "dice esplicitamente: riportalo così, senza dedurre cosa sia successo."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "numero": {
+                    "type": "string",
+                    "description": (
+                        "Numero d'ordine custom (es. '0495-05-26-A') o numero di "
+                        "spedizione ASN (es. 'ASN-Martin-2026-07-20-001')."
+                    ),
+                },
+                "cliente": {
+                    "type": "string",
+                    "description": (
+                        "In alternativa al numero: nome persona, azienda/palestra o email "
+                        "del cliente, così come lo ha scritto l'utente."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "rispondi_dal_manuale",
         "description": (
             "Recupera informazioni dal manuale operativo interno / knowledge base "
@@ -1397,6 +1474,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli.
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 - CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
+- ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli.
+- TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
 """
 
 
@@ -1434,6 +1513,7 @@ ROLE_TOOLS = {
     "staff": {
         "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
         "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
+        "ordini_per_produttore", "tracciamento_fully",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
     "retail": {"rispondi_dal_manuale"},
@@ -2121,6 +2201,918 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
     }
 
 
+# --- ORDINI DI FABBRICA PER PRODUTTORE ---------------------------------------
+# I nomi dei produttori stanno SOLO nella descrizione del tool (CHAT_TOOLS) e in
+# questa tabella di alias: MAI in SYSTEM_PROMPT, che è iniettato anche per b2b e
+# retail e non deve esporre i fornitori.
+# La tabella serve solo a riconciliare chiavi diverse fra le fonti (btoweb salva
+# 'tusslesports@gmail.com' dove kanokimonos ha 'Tussle Production') e NON limita
+# la ricerca: un produttore non elencato qui viene comunque trovato dal confronto
+# diretto sui valori realmente presenti negli ordini.
+_BTO_PRODUCER_ALIASES = {
+    "martin": ["martin", "tc-garment", "martin@tc-garment.com"],
+    "7punch": ["7punch", "7 punch", "seventh punch", "seventhpunch", "seventhpunch@gmail.com"],
+    "wearica": ["wearica", "wearica.clothing", "wearica.clothing@gmail.com"],
+    "tussle": ["tussle", "tussle production", "tusslesports", "tusslesports@gmail.com"],
+    "fair tex": ["fair tex", "fairtex"],
+}
+
+_BTO_ORDER_STATUS_LABELS = {
+    "nuovo": "ordine creato, non ancora avviato in produzione",
+    "in_produzione": "in produzione dal fornitore",
+    "spedito": "già spedito dal produttore (in viaggio verso di noi)",
+}
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+
+# Soglia di somiglianza per i refusi ('wearika' -> 'Wearica'). Sotto questo valore
+# si preferisce dire che non si è trovato nulla piuttosto che tirare a indovinare.
+_BTO_SIMIL_MIN = 0.75
+
+
+def _bto_norm_producer(value: str) -> str:
+    """Minuscolo, senza accenti, senza spazi doppi né ai bordi: nel dato reale il
+    valore è 'FAIR TEX ' con lo spazio finale."""
+    v = unicodedata.normalize("NFKD", value or "")
+    v = "".join(c for c in v if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", v.strip().lower())
+
+
+def _bto_squash(value: str) -> str:
+    """Solo lettere e cifre: 'FAIR TEX ' e 'Fair-Tex' diventano entrambi 'fairtex'."""
+    return re.sub(r"[^a-z0-9]+", "", _bto_norm_producer(value))
+
+
+def _bto_producer_canon(value: str) -> str:
+    """Riconduce un valore (nome o email) alla chiave canonica del produttore.
+    Se non è in tabella restituisce il valore normalizzato, così i produttori nuovi
+    continuano a funzionare."""
+    v = _bto_norm_producer(value)
+    if not v:
+        return ""
+    for canon, aliases in _BTO_PRODUCER_ALIASES.items():
+        for a in aliases:
+            # Confine di parola, non sottostringa nuda: 'martin' deve riconoscere
+            # 'martin@tc-garment.com' ma NON 'martini', che è un altro nome (o un
+            # refuso) e va trattato come tale, non spacciato per match esatto.
+            if v == a or re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(a), v):
+                return canon
+    return v
+
+
+def _bto_producer_forms(value: str) -> list:
+    """Tutte le stringhe con cui confrontare un produttore: il suo valore reale più
+    gli alias noti (nome <-> email). Serve perché 'seventh punsh' possa somigliare a
+    '7punch', che come stringa non gli assomiglia per niente."""
+    forme = [_bto_norm_producer(value)]
+    for a in _BTO_PRODUCER_ALIASES.get(_bto_producer_canon(value), []):
+        if a not in forme:
+            forme.append(a)
+    return [f for f in forme if f]
+
+
+def _bto_similarity(query: str, value: str) -> float:
+    """Somiglianza sui refusi: il massimo fra tutte le forme note del produttore,
+    confrontate sia normalizzate sia senza punteggiatura."""
+    q, qs = _bto_norm_producer(query), _bto_squash(query)
+    best = 0.0
+    for f in _bto_producer_forms(value):
+        best = max(
+            best,
+            difflib.SequenceMatcher(None, q, f).ratio(),
+            difflib.SequenceMatcher(None, qs, _bto_squash(f)).ratio(),
+        )
+    return round(best, 3)
+
+
+def _bto_resolve_producer(query: str, presenti: list) -> dict:
+    """Risolve il nome digitato dall'utente su uno dei produttori realmente presenti
+    negli ordini, in tre livelli decrescenti:
+      esatto      = uguale, o uguale a meno di punteggiatura/accenti, o alias noto
+                    ('Tussle' -> 'tusslesports@gmail.com')
+      parziale    = uno contiene l'altro ('fair' -> 'FAIR TEX ')
+      somiglianza = refusi sopra la soglia ('wearika' -> 'Wearica')
+    Vince il livello più alto che produce almeno un candidato: la somiglianza non
+    entra mai in gioco se esiste già un match pieno. Nessuna lista chiusa: il
+    confronto è sui valori realmente presenti negli ordini, quindi un produttore
+    nuovo viene trovato lo stesso."""
+    q, qs = _bto_norm_producer(query), _bto_squash(query)
+    if not q:
+        return {"livello": None, "candidati": []}
+
+    esatti, parziali, simili = [], [], []
+    for p in presenti:
+        forme = _bto_producer_forms(p)
+        ps = _bto_squash(p)
+        if q in forme or (qs and qs == ps) or _bto_producer_canon(q) == _bto_producer_canon(p):
+            esatti.append({"produttore": p, "match": "esatto", "punteggio": 1.0})
+            continue
+        # Sottostringa solo da 3 caratteri in su: con 1-2 lettere matcherebbe chiunque.
+        if len(q) >= 3 and (
+            any(q in f or f in q for f in forme) or (len(qs) >= 3 and (qs in ps or ps in qs))
+        ):
+            parziali.append(
+                {"produttore": p, "match": "parziale", "punteggio": _bto_similarity(q, p)}
+            )
+            continue
+        s = _bto_similarity(q, p)
+        if s >= _BTO_SIMIL_MIN:
+            simili.append({"produttore": p, "match": "somiglianza", "punteggio": s})
+
+    for livello, gruppo in (("esatto", esatti), ("parziale", parziali), ("somiglianza", simili)):
+        if gruppo:
+            gruppo.sort(key=lambda c: -c["punteggio"])
+            return {"livello": livello, "candidati": gruppo}
+    return {"livello": None, "candidati": []}
+
+
+_BTO_MAX_PRODOTTI_PER_ORDINE = 40
+
+
+def tool_ordini_per_produttore(produttore: str = None) -> dict:
+    """Ordini di fabbrica btoweb di un produttore (solo staff), orientati a
+    'cosa deve arrivare da X': stato, data di arrivo prevista, prodotti e quantità.
+    Il parametro 'producer' della edge function è IGNORATO lato server (verificato:
+    qualsiasi valore restituisce comunque tutte le righe), quindi si scarica la
+    risorsa 'orders' con _bto_get_paged e si filtra qui."""
+    q = (produttore or "").strip()
+    if not q:
+        return {"error": "Serve il nome del produttore da cercare."}
+
+    rows, meta = _bto_get_paged({"resource": "orders"})
+    if rows is None:
+        return meta
+
+    presenti = []
+    for r in rows:
+        p = (r.get("producer") or "").strip()
+        if p and p not in presenti:
+            presenti.append(p)
+
+    ris = _bto_resolve_producer(q, presenti)
+    candidati = ris["candidati"]
+
+    if not candidati:
+        return {
+            "tipo": "ordini_per_produttore",
+            "produttore_cercato": q,
+            "trovato": False,
+            "richiesta_chiarimento": False,
+            "ordini_totali": 0,
+            "ordini": [],
+            "produttori_presenti_negli_ordini": presenti,
+            "nota": (
+                f"Nessun produttore corrisponde né somiglia a '{q}' negli ordini di fabbrica "
+                "btoweb. NON inventare ordini e non ripiegare sulla ricerca cliente: di' che "
+                "quel produttore non risulta ed elenca quelli effettivamente presenti."
+            ),
+        }
+
+    # Più valori grezzi possono essere lo STESSO produttore (nome + email): in quel
+    # caso non c'è ambiguità, si filtra su tutti. L'ambiguità vera è avere candidati
+    # con chiavi canoniche diverse: lì si chiede, non si sceglie.
+    canoni = []
+    for c in candidati:
+        k = _bto_producer_canon(c["produttore"])
+        if k not in canoni:
+            canoni.append(k)
+
+    if len(canoni) > 1:
+        return {
+            "tipo": "ordini_per_produttore",
+            "produttore_cercato": q,
+            "trovato": False,
+            "richiesta_chiarimento": True,
+            "tipo_match": ris["livello"],
+            "candidati": candidati,
+            "ordini": [],
+            "nota": (
+                f"Più produttori compatibili con '{q}' (match per {ris['livello']}). NON "
+                "sceglierne uno tu e NON mostrare ordini: elenca i candidati all'utente e "
+                "chiedi quale intende, poi richiama lo strumento con il nome scelto."
+            ),
+        }
+
+    corrispondenti = [c["produttore"] for c in candidati]
+    sel = [r for r in rows if (r.get("producer") or "").strip() in corrispondenti]
+
+    gruppi = {}
+    ordine_keys = []
+    viste = set()
+    for r in sel:
+        # La fonte ripete la stessa identica riga N volte per ordine (es. 072026-0004:
+        # 35 righe uguali): senza dedup le quantità verrebbero moltiplicate.
+        firma = json.dumps(r, ensure_ascii=False, sort_keys=True, default=str)
+        if firma in viste:
+            continue
+        viste.add(firma)
+
+        num = str(r.get("order_number") or "").strip() or "(senza numero)"
+        g = gruppi.get(num)
+        if g is None:
+            g = gruppi[num] = {
+                "produttore": (r.get("producer") or "").strip(),
+                "stato": r.get("status"),
+                "data": r.get("expected_arrival_date"),
+                "qty": {},
+                "keys": [],
+            }
+            ordine_keys.append(num)
+        for p in (r.get("products") or []):
+            if not isinstance(p, dict):
+                continue
+            nome = (p.get("name") or "").strip() or "(senza nome)"
+            taglia = (p.get("category") or "").strip() or None
+            k = (nome, taglia)
+            if k not in g["qty"]:
+                g["qty"][k] = 0
+                g["keys"].append(k)
+            try:
+                g["qty"][k] += int(p.get("quantity") or 0)
+            except (TypeError, ValueError):
+                pass
+
+    oggi = datetime.now().strftime("%Y-%m-%d")
+    ordini = []
+    for num in ordine_keys:
+        g = gruppi[num]
+        prodotti = [
+            {"prodotto": n, "taglia": t, "quantita": g["qty"][(n, t)]} for (n, t) in g["keys"]
+        ]
+        data = g["data"] or None
+        o = {
+            "numero_ordine": num,
+            "produttore": g["produttore"],
+            "stato": g["stato"],
+            "stato_descrizione": _BTO_ORDER_STATUS_LABELS.get(g["stato"], g["stato"]),
+            "data_arrivo_prevista": data,
+            "pezzi_totali": sum(x["quantita"] for x in prodotti),
+            "prodotti": prodotti[:_BTO_MAX_PRODOTTI_PER_ORDINE],
+        }
+        if len(prodotti) > _BTO_MAX_PRODOTTI_PER_ORDINE:
+            o["prodotti_non_mostrati"] = len(prodotti) - _BTO_MAX_PRODOTTI_PER_ORDINE
+        if not data:
+            o["nota_data"] = "Data di arrivo prevista NON valorizzata alla fonte btoweb."
+        elif data < oggi:
+            o["data_gia_passata"] = True
+        if not prodotti:
+            o["nota_prodotti"] = (
+                "Dettaglio prodotti/quantità NON valorizzato alla fonte per questo ordine: "
+                "dillo, non dedurre cosa contiene."
+            )
+        if _UUID_RE.match(num):
+            o["nota_numero"] = (
+                "Numero d'ordine non valorizzato alla fonte: questo è l'id tecnico interno."
+            )
+        ordini.append(o)
+
+    # I più imminenti in cima; gli ordini senza data prevista vanno in fondo, e lì
+    # (nessun criterio di imminenza disponibile) prima quelli che devono ancora
+    # arrivare, per ultimi quelli già partiti dal produttore.
+    _peso_stato = {"nuovo": 0, "in_produzione": 1, "spedito": 2}
+    ordini.sort(
+        key=lambda o: (0, o["data_arrivo_prevista"], 0)
+        if o["data_arrivo_prevista"]
+        else (1, "", _peso_stato.get(o["stato"], 1))
+    )
+
+    riepilogo = {}
+    for o in ordini:
+        k = o["stato"] or "(senza stato)"
+        riepilogo[k] = riepilogo.get(k, 0) + 1
+
+    out = {
+        "tipo": "ordini_per_produttore",
+        "produttore_cercato": q,
+        "trovato": True,
+        "richiesta_chiarimento": False,
+        "produttori_corrispondenti": corrispondenti,
+        "tipo_match": ris["livello"],
+        "punteggio_match": candidati[0]["punteggio"],
+        "ordini_totali": len(ordini),
+        "riepilogo_stati": riepilogo,
+        "pezzi_totali_elencati": sum(o["pezzi_totali"] for o in ordini),
+        "data_odierna": oggi,
+        "ordini": ordini,
+        "nota": (
+            "Ordini di FABBRICA (merce che deve arrivare dal produttore), non ordini "
+            "cliente. Sono ordinati per data di arrivo prevista crescente: i più "
+            "imminenti per primi, quelli senza data in fondo. 'spedito' = già partito "
+            "dal produttore; 'in_produzione' = ancora in lavorazione; 'nuovo' = non "
+            "ancora avviato. Riporta solo le date e le quantità presenti qui: dove "
+            "manca il dato dichiaralo, non stimarlo."
+        ),
+        "nota_prezzi": _BTO_NOTA_PREZZI,
+    }
+
+    # Se il nome usato non è quello digitato (alias o refuso), va dichiarato:
+    # l'utente deve sapere su chi ha risposto lo strumento.
+    if _bto_squash(q) != _bto_squash(corrispondenti[0]):
+        out["nota_interpretazione"] = (
+            f"L'utente ha scritto '{q}' e lo strumento l'ha risolto sul produttore "
+            f"'{corrispondenti[0]}' (match per {ris['livello']}). DICHIARALO nella risposta "
+            "prima dei dati, es. \"interpreto '%s' come %s\"." % (q, corrispondenti[0])
+        )
+    return out
+
+
+# --- TRACCIAMENTO FULLY (catena A-Z di un ordine custom) ----------------------
+
+_FULLY_LIMIT = 5000
+_FULLY_SYNC_STALE_ORE = 24
+_FULLY_MAX_ORDINI_CLIENTE = 6
+
+# Regola fissa, ripetuta nel payload perché il modello non la ammorbidisca:
+# fully_verified_on lo scrive Bambu a mano, non arriva da Fully.
+_FULLY_NOTA_VERIFICA = (
+    "verifica manuale fatta da Bambu, MAI una conferma di Fully"
+)
+
+
+def _fully_rows(resource: str, extra_params: dict = None):
+    """Scarica una risorsa della edge function e restituisce (righe, None) o
+    (None, errore). L'involucro è {resource, count, limit, offset, data}."""
+    data = get_custom_resource(resource, _FULLY_LIMIT, extra_params=extra_params)
+    if isinstance(data, dict) and data.get("error"):
+        return None, data
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)], None
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        return [r for r in data["data"] if isinstance(r, dict)], None
+    return None, {"error": f"Struttura inattesa dalla risorsa {resource}."}
+
+
+def _fully_norm_num(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def _fully_eta_fotografia(sync_iso: str) -> dict:
+    """Il conteggio Fully è una fotografia (fully_synced_at), non una lettura in
+    diretta: va sempre dichiarato, e se è vecchia va detto quanto."""
+    out = {
+        "fotografia_del": sync_iso,
+        "nota_fotografia": (
+            "Il conteggio Fully è una FOTOGRAFIA sincronizzata a questa data/ora, "
+            "non una lettura in diretta."
+        ),
+    }
+    try:
+        sync = datetime.fromisoformat(str(sync_iso).replace("Z", "+00:00"))
+        ore = (datetime.now(timezone.utc) - sync).total_seconds() / 3600
+        if ore > _FULLY_SYNC_STALE_ORE:
+            giorni = ore / 24
+            out["nota_fotografia"] += (
+                " ATTENZIONE: la fotografia è vecchia di %s: il dato reale su Fully "
+                "potrebbe essere cambiato, dichiaralo."
+                % (f"{giorni:.0f} giorni" if giorni >= 2 else f"{ore:.0f} ore")
+            )
+    except (ValueError, TypeError):
+        pass
+    return out
+
+
+def _fully_riga_conteggio(r: dict) -> dict:
+    """Una riga di fully_reconciliation resa leggibile, con le regole di business:
+    si spedisce quanto Fully ha contato (buoni), ma si fattura la quantità ORDINATA.
+    has_discrepancy alla fonte copre solo mancanti/danneggiati: gli eccessi vanno
+    intercettati qui su qty_surplus, altrimenti non emergerebbero mai."""
+    dem = r.get("qty_demanded") or 0
+    good = r.get("qty_good") or 0
+    surplus = r.get("qty_surplus") or 0
+    missing = r.get("qty_missing") or 0
+    hurt = r.get("qty_hurt") or 0
+
+    riga = {
+        "prodotto": r.get("product_name"),
+        "taglia": r.get("size_variation"),
+        "ean": r.get("ean_code"),
+        "richiesti_dal_cliente": dem,
+        "attesi_sul_carico": r.get("qty_expected"),
+        "contati_buoni_da_fully": good,
+        "mancanti": missing,
+        "danneggiati": hurt,
+        "in_piu": surplus,
+        "stato_riga": r.get("replenishment_state"),
+    }
+
+    avvisi = []
+    if surplus > 0:
+        avvisi.append(
+            f"PEZZI IN PIÙ: {surplus} da consegnare E DA FATTURARE (si spedisce "
+            "quanto contato da Fully, ma il prezzo è sulla quantità ordinata: "
+            "l'eccesso va fatturato a parte). Va segnalato SEMPRE, anche se la "
+            "fonte non lo marca come discrepanza."
+        )
+    if missing > 0:
+        avvisi.append(
+            f"MANCANTI: {missing}. Il cliente riceve meno di quanto ha pagato."
+        )
+    if hurt > 0:
+        avvisi.append(
+            f"DANNEGGIATI: {hurt}. Il cliente riceve meno di quanto ha pagato."
+        )
+    if good == 0 and dem > 0:
+        avvisi.append(
+            "Questa riga NON partirà affatto: 0 pezzi buoni contati da Fully."
+        )
+    if avvisi:
+        riga["avvisi"] = avvisi
+        # 'gestita' distingue le anomalie già sistemate da quelle ancora aperte.
+        if r.get("discrepancy_handled"):
+            riga["anomalia"] = "GIÀ GESTITA"
+            if r.get("discrepancy_handled_at"):
+                riga["anomalia_gestita_il"] = r.get("discrepancy_handled_at")
+            if r.get("discrepancy_note"):
+                riga["nota_gestione"] = r.get("discrepancy_note")
+        else:
+            riga["anomalia"] = "DA GESTIRE"
+    return riga
+
+
+def _fully_blocco_spedizione(s: dict) -> dict:
+    """La spedizione/ASN come blocco leggibile. I dati mancanti si dichiarano,
+    non si deducono."""
+    b = {
+        "asn": s.get("shipment_number"),
+        "file_asn": s.get("asn_file_path") or "file ASN non presente a sistema",
+        "destinazione": s.get("destination"),
+        "stato_spedizione": s.get("status"),
+        "inviata_il": s.get("shipped_at"),
+        "corriere": s.get("courier"),
+        "tracking": s.get("tracking_number"),
+        "numero_carico_fully": (
+            s.get("fully_replenishment_id")
+            or "NON registrato a sistema: senza numero di carico non esiste "
+               "riconciliazione Fully per questa spedizione"
+        ),
+        "ricevuta_a_destinazione_il": (
+            s.get("received_at") or "data di ricezione non registrata a sistema"
+        ),
+    }
+    if s.get("fully_verified_on"):
+        b["verifica_manuale_bambu"] = {
+            "data": s.get("fully_verified_on"),
+            "nota": _FULLY_NOTA_VERIFICA,
+        }
+    return b
+
+
+def _fully_forme_cliente(o: dict) -> list:
+    """Le identità con cui un cliente può essere cercato: nome persona,
+    ragione sociale, email (stessi campi della ricerca cliente esistente)."""
+    c = o.get("customers") or {}
+    if not isinstance(c, dict):
+        c = {}
+    nome = " ".join(f"{c.get('first_name', '')} {c.get('last_name', '')}".split())
+    return [f for f in (nome, c.get("business_name"), c.get("email")) if f]
+
+
+def _fully_match_cliente(query: str, forme: list):
+    """(livello, punteggio) migliore fra le forme note del cliente, con gli stessi
+    tre livelli del match produttori: esatto / parziale / somiglianza."""
+    q, qs = _bto_norm_producer(query), _bto_squash(query)
+    rango = {"esatto": 3, "parziale": 2, "somiglianza": 1, None: 0}
+    best = (None, 0.0)
+    for f in forme:
+        fn, fs = _bto_norm_producer(f), _bto_squash(f)
+        if q == fn or (qs and qs == fs):
+            return ("esatto", 1.0)
+        s = round(max(
+            difflib.SequenceMatcher(None, q, fn).ratio(),
+            difflib.SequenceMatcher(None, qs, fs).ratio(),
+        ), 3)
+        if len(q) >= 3 and (q in fn or fn in q or (len(qs) >= 3 and (qs in fs or fs in qs))):
+            liv = "parziale"
+        elif s >= _BTO_SIMIL_MIN:
+            liv = "somiglianza"
+        else:
+            continue
+        if (rango[liv], s) > (rango[best[0]], best[1]):
+            best = (liv, s)
+    return best
+
+
+def _fully_risolvi_cliente(query: str, raw_orders: list) -> dict:
+    """Risolve il nome digitato su uno dei clienti realmente presenti negli ordini,
+    raggruppando per cliente (email se c'è, altrimenti nome+azienda). Come per i
+    produttori: vince il livello più alto, più clienti allo stesso livello =
+    richiesta di chiarimento, mai una scelta al posto dell'utente."""
+    clienti = {}
+    for o in raw_orders:
+        forme = _fully_forme_cliente(o)
+        if not forme:
+            continue
+        c = o.get("customers") or {}
+        chiave = _bto_norm_producer(c.get("email") or " | ".join(forme))
+        g = clienti.get(chiave)
+        if g is None:
+            g = clienti[chiave] = {"forme": forme, "ordini": []}
+        g["ordini"].append(o)
+
+    rango = {"esatto": 3, "parziale": 2, "somiglianza": 1}
+    candidati = []
+    for chiave, g in clienti.items():
+        liv, punteggio = _fully_match_cliente(query, g["forme"])
+        if liv:
+            candidati.append({
+                "cliente": " | ".join(g["forme"]),
+                "match": liv,
+                "punteggio": punteggio,
+                "_ordini": g["ordini"],
+            })
+    if not candidati:
+        return {"livello": None, "candidati": []}
+    top = max(rango[c["match"]] for c in candidati)
+    vincenti = [c for c in candidati if rango[c["match"]] == top]
+    vincenti.sort(key=lambda c: -c["punteggio"])
+    return {"livello": vincenti[0]["match"], "candidati": vincenti}
+
+
+def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
+                          righe_lri: list) -> dict:
+    """La catena completa di UN ordine: contenuto -> stato -> fabbrica -> ASN ->
+    carico Fully -> conteggio riga per riga -> anomalie -> ripartenza."""
+    num = o.get("order_number")
+    c = o.get("customers") or {}
+    if not isinstance(c, dict):
+        c = {}
+    prodotti = o.get("products")
+    if isinstance(prodotti, dict):
+        prodotti = [prodotti]
+    elif not isinstance(prodotti, list):
+        prodotti = []
+    nomi_prodotti = [p.get("name") for p in prodotti if isinstance(p, dict) and p.get("name")]
+
+    os_code = o.get("order_status")
+    tr = {
+        "ordine": num,
+        "cliente": " | ".join(
+            v for v in (
+                " ".join(f"{c.get('first_name', '')} {c.get('last_name', '')}".split()),
+                c.get("business_name"),
+            ) if v
+        ) or None,
+        "stato_ordine": os_code,
+        "stato_descrizione": CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A"),
+        "pagamento": o.get("payment_status"),
+        "contenuto": {
+            "prodotti": nomi_prodotti or ["dettaglio prodotti non valorizzato alla fonte"],
+            "pezzi_ordinati": o.get("quantity"),
+        },
+        "produttore": ((o.get("producers") or {}).get("name") if isinstance(o.get("producers"), dict) else None),
+        "fabbrica": {
+            "file_produzione_confermato_il": o.get("producer_reception_confirmed_at"),
+            "partito_dalla_fabbrica_il": o.get("producer_shipped_at"),
+            "corriere": o.get("producer_courier"),
+            "tracking": o.get("producer_tracking"),
+        },
+    }
+
+    if spedizioni:
+        tr["spedizioni_asn"] = [_fully_blocco_spedizione(s) for s in spedizioni]
+    else:
+        tr["spedizioni_asn"] = []
+        tr["nota_spedizioni"] = (
+            "Nessuna spedizione/ASN collegata a questo ordine: non è ancora "
+            "partito verso la logistica. Dillo apertamente, non dedurre oltre."
+        )
+
+    problemi_aperti, problemi_gestiti = [], []
+    if righe_recon:
+        righe = [_fully_riga_conteggio(r) for r in righe_recon]
+        # Totali per RIGA D'ORDINE (ean+taglia), NON per riga di carico: un ordine
+        # può comparire su più carichi (es. ammanco sanato da un carico correttivo,
+        # come 0329-03-26) e la somma cieca duplicherebbe i richiesti e conterebbe
+        # come mancante merce già recuperata.
+        linee = {}
+        for r in righe_recon:
+            k = (r.get("ean_code"), r.get("size_variation"))
+            l = linee.setdefault(k, {"dem": 0, "good": 0, "hurt": 0, "surplus": 0, "miss": 0})
+            l["dem"] = max(l["dem"], r.get("qty_demanded") or 0)
+            l["good"] += r.get("qty_good") or 0
+            l["hurt"] += r.get("qty_hurt") or 0
+            l["surplus"] += r.get("qty_surplus") or 0
+            l["miss"] += r.get("qty_missing") or 0
+        tot = {
+            "richiesti_dal_cliente": sum(l["dem"] for l in linee.values()),
+            "contati_buoni_da_fully": sum(l["good"] for l in linee.values()),
+            # Quanto manca DAVVERO al cliente rispetto al pagato, al netto dei
+            # carichi correttivi già arrivati.
+            "mancanti_rispetto_al_pagato": sum(
+                max(0, l["dem"] - l["good"]) for l in linee.values()
+            ),
+            "mancanti_contati_da_fully": sum(l["miss"] for l in linee.values()),
+            "danneggiati": sum(l["hurt"] for l in linee.values()),
+            "in_piu": sum(l["surplus"] for l in linee.values()),
+        }
+        blocco = {"righe": righe, "totali": tot}
+        blocco.update(_fully_eta_fotografia(max(
+            str(r.get("fully_synced_at") or "") for r in righe_recon
+        )))
+        tr["conteggio_fully"] = blocco
+        for riga in righe:
+            if riga.get("avvisi"):
+                (problemi_gestiti if riga.get("anomalia") == "GIÀ GESTITA"
+                 else problemi_aperti).append(riga)
+    else:
+        tr["conteggio_fully"] = None
+        tr["nota_conteggio"] = (
+            "NESSUNA riga di riconciliazione Fully per questo ordine: il conteggio "
+            "riga per riga (buoni/mancanti/danneggiati) non esiste a sistema. "
+            "Dillo apertamente invece di dedurre se la merce è arrivata integra."
+        )
+        # Fallback storico: le ricezioni caricate a mano prima dell'integrazione
+        # Fully (era Kelmar) vivono in logistics_received_items.
+        if righe_lri:
+            tr["ricezione_storica_manuale"] = {
+                "righe": [
+                    {
+                        "prodotto": r.get("product_name"),
+                        "taglia": r.get("size"),
+                        "sku": r.get("sku"),
+                        "quantita_ricevuta": r.get("quantity_received"),
+                        "caricata_il": r.get("uploaded_at"),
+                    }
+                    for r in righe_lri
+                ],
+                "nota": (
+                    "Ricezione STORICA caricata a mano dalla logistica prima "
+                    "dell'integrazione Fully: NON è il conteggio Fully e non "
+                    "distingue mancanti o danneggiati."
+                ),
+            }
+
+    tr["anomalie_da_gestire"] = [
+        {"prodotto": r.get("prodotto"), "taglia": r.get("taglia"), "avvisi": r["avvisi"]}
+        for r in problemi_aperti
+    ]
+    tr["anomalie_gia_gestite"] = [
+        {"prodotto": r.get("prodotto"), "taglia": r.get("taglia"), "avvisi": r["avvisi"],
+         "gestita_il": r.get("anomalia_gestita_il"), "nota_gestione": r.get("nota_gestione")}
+        for r in problemi_gestiti
+    ]
+
+    if o.get("logistics_shipped_at"):
+        tr["ripartenza_verso_cliente"] = {
+            "spedito_da_fully_il": o.get("logistics_shipped_at"),
+            "corriere": o.get("logistics_courier"),
+            "tracking": o.get("logistics_tracking"),
+        }
+
+    # Valutazione "pronto o no per il cliente": SOLO composizione di fatti presenti,
+    # niente deduzioni dove il dato non c'è.
+    if os_code in ("shipped_to_customer", "shipped"):
+        val = "Già spedito al cliente" + (
+            f" il {o.get('logistics_shipped_at')}" if o.get("logistics_shipped_at") else ""
+        ) + "."
+    elif righe_recon:
+        tot = tr["conteggio_fully"]["totali"]
+        if not tot["mancanti_rispetto_al_pagato"] and not tot["danneggiati"]:
+            val = (
+                f"Fully ha contato {tot['contati_buoni_da_fully']} pezzi buoni su "
+                f"{tot['richiesti_dal_cliente']} richiesti. "
+                f"Stato ordine: {tr['stato_descrizione']}."
+            )
+        else:
+            val = (
+                f"Spedibile solo IN PARTE: {tot['contati_buoni_da_fully']} pezzi buoni su "
+                f"{tot['richiesti_dal_cliente']} richiesti/pagati (il cliente riceverebbe "
+                f"{tot['mancanti_rispetto_al_pagato']} pezzi in meno di quanto ha pagato; "
+                f"danneggiati {tot['danneggiati']})."
+            )
+        if tot["in_piu"]:
+            val += (
+                f" ATTENZIONE: {tot['in_piu']} pezzi in più da consegnare e da fatturare."
+            )
+    elif spedizioni:
+        val = (
+            "Spedizione verso la logistica presente ma NESSUN conteggio Fully: "
+            "non è possibile dire se la merce è completa. Non dedurre."
+        )
+    else:
+        val = "Non ancora partito verso la logistica: nessun ASN collegato."
+    tr["valutazione_spedibilita"] = val
+    return tr
+
+
+def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
+    """Tracciamento A-Z di un ordine custom (solo staff): ordine -> fabbrica ->
+    ASN -> carico Fully -> conteggio riga per riga -> anomalie -> ripartenza.
+    Accetta un numero d'ordine, un numero di spedizione/ASN o un nome cliente
+    (match tollerante come per i produttori). I filtri della edge function
+    vengono inoltrati MA il risultato è comunque rifiltrato qui: la correttezza
+    non dipende dal comportamento del server."""
+    numero = (numero or "").strip()
+    cliente = (cliente or "").strip()
+    if not numero and not cliente:
+        return {"error": "Serve un numero d'ordine, un numero ASN o un nome cliente."}
+
+    raw_orders, err = _fully_rows("orders")
+    if err:
+        return err
+    spedizioni_tutte, err = _fully_rows("shipments")
+    if err:
+        return err
+
+    # Mappe di collegamento: ordine.id -> spedizioni (dalla lista annidata
+    # shipment_orders dentro shipments) e numero ASN -> spedizione.
+    ship_per_ordine = {}
+    ship_per_asn = {}
+    for s in spedizioni_tutte:
+        ship_per_asn[_fully_norm_num(s.get("shipment_number"))] = s
+        for so in (s.get("shipment_orders") or []):
+            if isinstance(so, dict) and so.get("custom_order_id"):
+                ship_per_ordine.setdefault(so["custom_order_id"], []).append(s)
+
+    def _spedizioni_di(o, recon_ordine):
+        """Unione dei due agganci: link shipment_orders + ASN citati nelle righe
+        di riconciliazione (un carico correttivo può non avere il link diretto)."""
+        sped = list(ship_per_ordine.get(o.get("id"), []))
+        visti = {_fully_norm_num(s.get("shipment_number")) for s in sped}
+        for r in recon_ordine:
+            k = _fully_norm_num(r.get("shipment_number"))
+            if k and k not in visti and k in ship_per_asn:
+                sped.append(ship_per_asn[k])
+                visti.add(k)
+        sped.sort(key=lambda s: str(s.get("shipped_at") or ""))
+        return sped
+
+    def _recon_di(order_number=None, shipment_number=None):
+        """Righe di riconciliazione: il filtro viene inoltrato alla edge function
+        e comunque riapplicato qui (difesa: finché il filtro server non è
+        verificato in produzione, un server che lo ignorasse restituirebbe tutto)."""
+        extra = {}
+        if order_number:
+            extra["order_number"] = order_number
+        if shipment_number:
+            extra["shipment_number"] = shipment_number
+        righe, err2 = _fully_rows("fully_reconciliation", extra_params=extra or None)
+        if err2:
+            return None, err2
+        if order_number:
+            righe = [r for r in righe if _fully_norm_num(r.get("order_number")) == _fully_norm_num(order_number)]
+        if shipment_number:
+            righe = [r for r in righe if _fully_norm_num(r.get("shipment_number")) == _fully_norm_num(shipment_number)]
+        return righe, None
+
+    _lri_cache = {}
+
+    def _lri_di(order_number):
+        # Un solo scarico per invocazione anche se serve per più ordini.
+        if "righe" not in _lri_cache:
+            righe, err2 = _fully_rows("logistics_received_items")
+            _lri_cache["righe"] = righe or [] if not err2 else []
+        return [
+            r for r in _lri_cache["righe"]
+            if _fully_norm_num(r.get("order_number")) == _fully_norm_num(order_number)
+        ]
+
+    base = {"tipo": "tracciamento_fully", "nota_verifica": _FULLY_NOTA_VERIFICA}
+
+    # --- Caso ASN: si traccia la spedizione intera, con tutti i suoi ordini ---
+    nq = _fully_norm_num(numero)
+    if numero and (nq.startswith(("asn-", "cross-")) or nq in ship_per_asn):
+        s = ship_per_asn.get(nq)
+        if not s:
+            return {
+                **base, "cercato": numero, "trovato": False,
+                "nota": (
+                    f"Nessuna spedizione con numero '{numero}'. Non dedurre: chiedi "
+                    "il numero ASN esatto o il numero d'ordine."
+                ),
+            }
+        righe, err2 = _recon_di(shipment_number=s.get("shipment_number"))
+        if err2:
+            return err2
+        ordini_ids = [so.get("custom_order_id") for so in (s.get("shipment_orders") or []) if isinstance(so, dict)]
+        ordini = [o for o in raw_orders if o.get("id") in ordini_ids]
+        per_ordine = {}
+        for r in righe:
+            per_ordine.setdefault(r.get("order_number"), []).append(r)
+        dettaglio = []
+        for o in sorted(ordini, key=lambda x: str(x.get("order_number") or "")):
+            num_o = o.get("order_number")
+            recon_o = per_ordine.get(num_o, [])
+            righe_fmt = [_fully_riga_conteggio(r) for r in recon_o]
+            dettaglio.append({
+                "ordine": num_o,
+                "stato_ordine": o.get("order_status"),
+                "stato_descrizione": CUSTOM_STATUS_LABELS.get(o.get("order_status"), o.get("order_status")),
+                "righe_conteggio_fully": righe_fmt or "nessuna riga di riconciliazione per questo ordine",
+                "anomalie": [r for r in righe_fmt if r.get("avvisi")],
+            })
+        out = {
+            **base, "cercato": numero, "trovato": True,
+            "spedizione": _fully_blocco_spedizione(s),
+            "ordini_nella_spedizione": len(ordini),
+            "righe_conteggio_totali": len(righe),
+            "dettaglio_per_ordine": dettaglio,
+        }
+        if righe:
+            out.update(_fully_eta_fotografia(max(str(r.get("fully_synced_at") or "") for r in righe)))
+        else:
+            out["nota_conteggio"] = (
+                "Nessuna riga di riconciliazione Fully per questa spedizione "
+                "(manca il numero di carico?): dillo apertamente."
+            )
+        return out
+
+    # --- Caso numero d'ordine ---
+    if numero:
+        o = next(
+            (x for x in raw_orders if _fully_norm_num(x.get("order_number")) == nq),
+            None,
+        )
+        if not o:
+            return {
+                **base, "cercato": numero, "trovato": False,
+                "nota": (
+                    f"Nessun ordine custom con numero '{numero}'. NON dedurre e non "
+                    "ripiegare su altre piattaforme: chiedi il numero completo "
+                    "(formato NNNN-MM-YY, con eventuale suffisso)."
+                ),
+            }
+        recon_o, err2 = _recon_di(order_number=o.get("order_number"))
+        if err2:
+            return err2
+        lri_o = _lri_di(o.get("order_number")) if not recon_o else []
+        return {
+            **base, "cercato": numero, "trovato": True,
+            "tracciamento": _fully_traccia_ordine(
+                o, _spedizioni_di(o, recon_o), recon_o, lri_o
+            ),
+        }
+
+    # --- Caso cliente (match tollerante, stesso schema dei produttori) ---
+    ris = _fully_risolvi_cliente(cliente, raw_orders)
+    if not ris["candidati"]:
+        return {
+            **base, "cercato": cliente, "trovato": False,
+            "richiesta_chiarimento": False,
+            "nota": (
+                f"Nessun cliente corrisponde né somiglia a '{cliente}'. Dillo "
+                "apertamente e chiedi nome, azienda o email esatti."
+            ),
+        }
+    if len(ris["candidati"]) > 1:
+        return {
+            **base, "cercato": cliente, "trovato": False,
+            "richiesta_chiarimento": True,
+            "candidati": [
+                {"cliente": c["cliente"], "match": c["match"], "punteggio": c["punteggio"]}
+                for c in ris["candidati"]
+            ],
+            "nota": (
+                f"Più clienti compatibili con '{cliente}' (match per {ris['livello']}): "
+                "NON scegliere tu, elenca i candidati e chiedi quale intende."
+            ),
+        }
+
+    scelto = ris["candidati"][0]
+    ordini = sorted(
+        scelto["_ordini"], key=lambda x: str(x.get("created_at") or ""), reverse=True
+    )
+    righe_tutte, err2 = _recon_di()
+    if err2:
+        return err2
+    recon_per_num = {}
+    for r in righe_tutte:
+        recon_per_num.setdefault(_fully_norm_num(r.get("order_number")), []).append(r)
+
+    tracce = []
+    for o in ordini[:_FULLY_MAX_ORDINI_CLIENTE]:
+        recon_o = recon_per_num.get(_fully_norm_num(o.get("order_number")), [])
+        lri_o = _lri_di(o.get("order_number")) if not recon_o else []
+        tracce.append(_fully_traccia_ordine(o, _spedizioni_di(o, recon_o), recon_o, lri_o))
+
+    out = {
+        **base, "cercato": cliente, "trovato": True,
+        "cliente_risolto": scelto["cliente"],
+        "tipo_match": scelto["match"],
+        "punteggio_match": scelto["punteggio"],
+        "ordini_totali_cliente": len(ordini),
+        "tracciamenti": tracce,
+    }
+    if len(ordini) > _FULLY_MAX_ORDINI_CLIENTE:
+        out["ordini_non_tracciati"] = [
+            {"ordine": o.get("order_number"), "stato": o.get("order_status")}
+            for o in ordini[_FULLY_MAX_ORDINI_CLIENTE:]
+        ]
+        out["nota_limite"] = (
+            f"Tracciati in dettaglio solo i {_FULLY_MAX_ORDINI_CLIENTE} ordini più "
+            "recenti; gli altri sono elencati con il solo stato. Dichiaralo."
+        )
+    if scelto["match"] != "esatto":
+        out["nota_interpretazione"] = (
+            f"L'utente ha scritto '{cliente}' e lo strumento l'ha risolto sul cliente "
+            f"'{scelto['cliente']}' (match per {scelto['match']}). DICHIARALO prima dei dati."
+        )
+    return out
+
+
 def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE):
     role = _normalize_role(role)
     allowed = ROLE_TOOLS[role]
@@ -2144,6 +3136,12 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
         if name == "catalogo_btoweb":
             return tool_catalogo_btoweb(
                 tool_input.get("query"), tool_input.get("sku"), tool_input.get("tipo")
+            )
+        if name == "ordini_per_produttore":
+            return tool_ordini_per_produttore(tool_input.get("produttore"))
+        if name == "tracciamento_fully":
+            return tool_tracciamento_fully(
+                tool_input.get("numero"), tool_input.get("cliente")
             )
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(tool_input.get("argomento"), user_message)
@@ -2331,11 +3329,19 @@ def custom_orders(limit: int = 20):
         return {"error": str(e)}
 
 @app.get("/custom-debug")
-def custom_debug(limit: int = 3, resource: str = "orders"):
+def custom_debug(request: Request, limit: int = 3, resource: str = "orders"):
     try:
-        data = get_custom_resource(resource, limit)
+        # Inoltra alla edge function TUTTI i parametri extra della query string
+        # (order_number, shipment_number, only_discrepancies, ...): prima venivano
+        # scartati in silenzio da FastAPI e la risposta tornava non filtrata.
+        extra = {
+            k: v for k, v in request.query_params.items()
+            if k not in ("resource", "limit")
+        }
+        data = get_custom_resource(resource, limit, extra_params=extra or None)
         return {
             "resource": resource,
+            "forwarded_params": extra,
             "type": str(type(data)),
             "preview": data
         }
