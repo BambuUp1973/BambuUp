@@ -2695,20 +2695,28 @@ def _fully_blocco_arrivo(rep: dict, s: dict = None) -> dict:
     dest = s.get("destination") or (rep or {}).get("destination")
 
     # Le spedizioni dirette al cliente non passano da Fully: la vista arrivi non
-    # le contiene affatto (50/50 sono destination='fully'). Lì l'unico dato è
-    # quello della spedizione stessa, e received_at è legittimo.
+    # le contiene affatto (50/50 sono destination='fully'). E nemmeno la
+    # spedizione stessa dice quando il cliente ha ricevuto: received_at è la
+    # spunta del vecchio modulo logistico interno (confermato dal punto app),
+    # NON una consegna al cliente finale. Quindi la data di consegna NON esiste.
     if dest and dest != "fully":
-        b = {
+        return {
             "stato_arrivo": "non_applicabile",
             "in_parole": (
                 f"Spedizione con destinazione '{dest}': NON passa dalla logistica "
                 "Fully, quindi non esistono né conteggio Fully né stato di arrivo Fully."
             ),
+            "consegna_al_cliente": (
+                "NON esiste a sistema una data di consegna al cliente per le "
+                "spedizioni dirette: l'unico modo di saperlo è il tracking del "
+                "corriere. Eventuali date di ricezione presenti sulla spedizione "
+                "sono spunte del vecchio modulo logistico interno e NON vanno MAI "
+                "interpretate come consegna al cliente: non citarle come tali. "
+                "Vale anche per uno 'stato_asn' che dice 'received': è la stessa "
+                "spunta interna, non una conferma di consegna al cliente."
+            ),
             "stato_asn": s.get("status"),
         }
-        if s.get("received_at"):
-            b["consegnata_il"] = s.get("received_at")
-        return b
 
     if not rep:
         return {
