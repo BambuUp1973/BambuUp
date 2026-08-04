@@ -1227,6 +1227,10 @@ CHAT_TOOLS = [
             "la ricerca cerca la sottostringa in tutti e tre i campi. Usalo quando "
             "l'utente chiede gli ordini di una persona o di un'azienda. Estrai SOLO "
             "l'identificativo del cliente, mai parole come 'ordini', 'sopra', 'rashguard'. "
+            "USALO ANCHE quando l'utente butta lì un nome senza dire cosa sia ('dimmi tutto "
+            "su X', 'chi è X', 'X?'): in modalità staff prova PRIMA questo strumento invece "
+            "di chiedere chiarimenti: se X è un cliente lo trovi subito, e se non lo è "
+            "l'elenco torna vuoto e solo allora chiedi cosa intende. "
             "Restituisce dati strutturati (inclusi i prodotti) che puoi poi filtrare "
             "tu, ad esempio per mostrare solo gli ordini che contengono certi prodotti."
         ),
@@ -1360,9 +1364,12 @@ CHAT_TOOLS = [
             "PRODUTTORI (sono FORNITORI, NON clienti): Martin, 7punch (chiamato anche "
             "Seventh Punch), Wearica, Tussle (nei dati di btoweb compare come "
             "tusslesports@gmail.com), Fair Tex. Se l'utente nomina uno di questi NON usare "
-            "cerca_ordini_per_cliente: non sono clienti. Se nomina un produttore che non è "
-            "in questo elenco, passalo comunque: la ricerca funziona anche con produttori "
-            "nuovi, e se non esiste lo strumento te lo dice elencando quelli reali.\n"
+            "cerca_ordini_per_cliente: non sono clienti. I produttori sono POCHI e NOTI: "
+            "sono quelli qui sopra. Un nome che non somiglia a nessuno di loro NON è un "
+            "produttore nuovo, è quasi sempre un CLIENTE (persona, palestra, ASD, azienda) "
+            "e va cercato con cerca_ordini_per_cliente. Puoi comunque passarlo qui se hai "
+            "un dubbio, ma se ricevi 'trovato': false NON chiudere dicendo che non risulta: "
+            "riprova SUBITO con cerca_ordini_per_cliente.\n"
             "PASSA IL NOME COSÌ COM'È, anche se ti sembra scritto male: lo strumento tollera "
             "maiuscole, accenti, spazi, punteggiatura e refusi (es. 'wearika', 'martn'). "
             "Non correggerlo tu e non tirare a indovinare. Come leggere la risposta:\n"
@@ -1370,8 +1377,10 @@ CHAT_TOOLS = [
             "diverso da quello digitato: dichiaralo all'utente prima dei dati.\n"
             "- 'richiesta_chiarimento': true = più produttori compatibili: NON scegliere e "
             "NON mostrare ordini, elenca i 'candidati' e chiedi quale intende.\n"
-            "- 'trovato': false senza candidati = nessun produttore somigliante: dillo ed "
-            "elenca 'produttori_presenti_negli_ordini'.\n"
+            "- 'trovato': false senza candidati = quel nome non è un produttore: prima di "
+            "rispondere riprova con cerca_ordini_per_cliente (vedi la 'nota' nel risultato), "
+            "e solo se anche lì non c'è nulla dillo elencando "
+            "'produttori_presenti_negli_ordini'.\n"
             "Gli ordini tornano già ordinati con i più imminenti in cima. Stati: "
             "'nuovo' = creato ma non ancora avviato, 'in_produzione' = in lavorazione dal "
             "fornitore, 'spedito' = già partito dal produttore. Quando la data di arrivo "
@@ -1492,7 +1501,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli.
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 - CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
-- ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli.
+- ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli. ATTENZIONE al caso opposto: i produttori sono POCHI e NOTI (Martin, 7punch/Seventh Punch, Wearica, Tussle, Fair Tex), quindi se lo strumento risponde 'trovato: false' quel nome quasi certamente NON è un produttore ma un CLIENTE (persona, palestra, ASD, azienda): riprova SUBITO con cerca_ordini_per_cliente prima di dire all'utente che non risulta nulla. Non chiudere mai con "non lo trovo" avendo provato una sola delle due strade.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
 """
 
@@ -2383,9 +2392,14 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
             "ordini": [],
             "produttori_presenti_negli_ordini": presenti,
             "nota": (
-                f"Nessun produttore corrisponde né somiglia a '{q}' negli ordini di fabbrica "
-                "btoweb. NON inventare ordini e non ripiegare sulla ricerca cliente: di' che "
-                "quel produttore non risulta ed elenca quelli effettivamente presenti."
+                f"'{q}' NON è un produttore: nessuno dei produttori reali gli corrisponde "
+                "né gli somiglia. NON inventare ordini e NON attribuirgliene di altri "
+                "produttori. Ma NON fermarti qui: i produttori sono pochi e noti, quindi un "
+                f"nome che non è tra loro è quasi sempre un CLIENTE. Se '{q}' può essere un "
+                "cliente, una palestra, una ASD o un'azienda, RIPROVA SUBITO con "
+                "cerca_ordini_per_cliente prima di rispondere. Solo se anche quella ricerca "
+                "non trova nulla puoi dire che non risulta, elencando i produttori "
+                "effettivamente presenti."
             ),
         }
 
