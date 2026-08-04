@@ -1405,6 +1405,24 @@ CHAT_TOOLS = [
             "non correggerlo (stesse regole di ordini_per_produttore per nota_interpretazione, "
             "richiesta_chiarimento e candidati).\n"
             "REGOLE OBBLIGATORIE quando riporti i risultati:\n"
+            "- ARRIVO DELLA MERCE: l'unica fonte è il blocco 'arrivo_in_fully' "
+            "(stato_arrivo + in_parole + come_lo_sappiamo). NON dedurre l'arrivo dallo "
+            "'stato_asn' (che riguarda solo la partenza dalla fabbrica) né da date di "
+            "ricezione. I tre casi, da riportare con queste parole:\n"
+            "  * 'arrived' = Fully ha ricevuto E finito di contare (se 'come_lo_sappiamo' "
+            "dice spunta manuale, di' che risulta arrivata per verifica manuale di Bambu "
+            "e che il conteggio Fully non esiste);\n"
+            "  * 'counting_in_progress' = merce ARRIVATA in magazzino ma conteggio NON "
+            "ancora concluso da Fully: dillo esplicitamente, riporta 'avanzamento_conteggio_"
+            "fully' (righe contate su totale), di' che i numeri sono PROVVISORI e che si "
+            "può SOLLECITARE FULLY. Non dire mai che è 'arrivata e contata';\n"
+            "  * 'no_arrival_evidence' = nessuna prova di arrivo: dichiaralo così, senza "
+            "dedurre né che sia arrivata né che sia persa.\n"
+            "- Dichiara SEMPRE da dove viene il dato di arrivo ('come_lo_sappiamo'): "
+            "conteggio automatico di Fully, conteggio parziale in corso, o verifica "
+            "manuale dell'admin.\n"
+            "- 'dato_storico_spunta_manuale' è solo storia etichettata: NON è una prova "
+            "di arrivo, non usarlo per dire che la merce è arrivata.\n"
             "- Al cliente si spedisce quanto Fully ha CONTATO (buoni), ma il prezzo è sulla "
             "quantità ORDINATA. Quindi: 'in_piu' > 0 va segnalato SEMPRE come pezzi in più "
             "da consegnare E DA FATTURARE (anche se la fonte non lo marca come discrepanza); "
@@ -2531,6 +2549,43 @@ _FULLY_NOTA_VERIFICA = (
     "verifica manuale fatta da Bambu, MAI una conferma di Fully"
 )
 
+# --- ARRIVO MERCE: la fonte di verità è la vista fully_replenishments ---------
+# arrival_status / arrival_source / arrived_at sono l'UNICO indicatore di arrivo.
+# shipments.status e shipments.received_at NON lo sono: la fonte stessa lo
+# dichiara (received_at_note = "Not used for Fully shipments — ignore as arrival
+# indicator"). Il received_at storico resta solo come dato etichettato.
+_FULLY_ARRIVO_PAROLE = {
+    "arrived": (
+        "ARRIVATA E CONTATA: Fully ha ricevuto la merce E ha concluso il conteggio."
+    ),
+    # arrival_status=arrived ma la prova è una spunta a mano, non un conteggio:
+    # 27 carichi su 37 'arrived' sono di questo tipo, dirlo come sopra sarebbe falso.
+    "arrived_legacy": (
+        "RISULTA ARRIVATA in base a una spunta manuale storica di Bambu, NON a un "
+        "conteggio di Fully: per questo carico il conteggio riga per riga non esiste."
+    ),
+    "counting_in_progress": (
+        "ARRIVATA IN MAGAZZINO MA CONTEGGIO NON ANCORA CONCLUSO DA FULLY: la merce è "
+        "al magazzino, il conteggio è ancora APERTO e i numeri sono PROVVISORI (possono "
+        "cambiare). È il caso in cui si può SOLLECITARE FULLY perché chiuda il "
+        "conteggio: dillo esplicitamente."
+    ),
+    "no_arrival_evidence": (
+        "NESSUNA PROVA DI ARRIVO: non risulta né un conteggio di Fully né una spunta "
+        "manuale. NON dedurre che sia arrivata, e nemmeno che sia persa: il dato non c'è."
+    ),
+}
+
+_FULLY_ARRIVO_FONTE = {
+    "fully_count": "conteggio automatico di Fully, concluso",
+    "fully_count_partial": "conteggio automatico di Fully ANCORA IN CORSO (parziale)",
+    "legacy_manual_received_at": (
+        "verifica manuale di un admin Bambu (spunta storica), MAI una conferma di Fully"
+    ),
+    "none": "nessuna fonte: non esiste alcuna prova di arrivo",
+    "None": "nessuna fonte: non esiste alcuna prova di arrivo",
+}
+
 
 def _fully_rows(resource: str, extra_params: dict = None):
     """Scarica una risorsa della edge function e restituisce (righe, None) o
@@ -2632,14 +2687,107 @@ def _fully_riga_conteggio(r: dict) -> dict:
     return riga
 
 
-def _fully_blocco_spedizione(s: dict) -> dict:
-    """La spedizione/ASN come blocco leggibile. I dati mancanti si dichiarano,
-    non si deducono."""
+def _fully_blocco_arrivo(rep: dict, s: dict = None) -> dict:
+    """Lo stato di arrivo della merce, letto SOLO da fully_replenishments.
+    Restituisce sempre una frase esplicita: arrivata e contata / arrivata ma
+    conteggio non concluso / nessuna prova di arrivo."""
+    s = s or {}
+    dest = s.get("destination") or (rep or {}).get("destination")
+
+    # Le spedizioni dirette al cliente non passano da Fully: la vista arrivi non
+    # le contiene affatto (50/50 sono destination='fully'). Lì l'unico dato è
+    # quello della spedizione stessa, e received_at è legittimo.
+    if dest and dest != "fully":
+        b = {
+            "stato_arrivo": "non_applicabile",
+            "in_parole": (
+                f"Spedizione con destinazione '{dest}': NON passa dalla logistica "
+                "Fully, quindi non esistono né conteggio Fully né stato di arrivo Fully."
+            ),
+            "stato_asn": s.get("status"),
+        }
+        if s.get("received_at"):
+            b["consegnata_il"] = s.get("received_at")
+        return b
+
+    if not rep:
+        return {
+            "stato_arrivo": "non_presente_nella_vista_arrivi",
+            "in_parole": (
+                "Questa spedizione non compare nell'elenco arrivi di Fully "
+                "(fully_replenishments): non esiste alcuna prova di arrivo. "
+                "Dichiaralo, non dedurre."
+            ),
+        }
+
+    st = str(rep.get("arrival_status"))
+    src = str(rep.get("arrival_source"))
+    chiave = "arrived_legacy" if (
+        st == "arrived" and src == "legacy_manual_received_at"
+    ) else st
+    b = {
+        "stato_arrivo": st,
+        "in_parole": _FULLY_ARRIVO_PAROLE.get(chiave) or (
+            f"Stato di arrivo '{st}' non previsto dallo strumento: riportalo così "
+            "com'è, senza interpretarlo."
+        ),
+        "come_lo_sappiamo": _FULLY_ARRIVO_FONTE.get(src, f"fonte non prevista: '{src}'"),
+    }
+    if rep.get("arrived_at"):
+        b["arrivata_il"] = rep.get("arrived_at")
+
+    # Avanzamento del conteggio: ha senso solo se il carico ha righe da contare.
+    if (rep.get("fully_count_rows") or 0) > 0:
+        b["avanzamento_conteggio_fully"] = (
+            f"{rep.get('fully_count_rows_done') or 0} righe contate da Fully su "
+            f"{rep.get('fully_count_rows')} righe del carico"
+        )
+        b["conteggio_concluso"] = bool(rep.get("fully_count_complete"))
+
+    q = {k: rep.get("fully_qty_" + k) for k in ("expected", "good", "missing", "surplus")}
+    if any(v is not None for v in q.values()):
+        riep = {
+            "attesi_sul_carico": q["expected"],
+            "contati_buoni_da_fully": q["good"],
+            "mancanti": q["missing"],
+            "in_piu": q["surplus"],
+        }
+        if st == "counting_in_progress":
+            riep["nota"] = (
+                "NUMERI PROVVISORI: il conteggio di Fully non è concluso, questi "
+                "totali possono ancora cambiare. Non presentarli come definitivi."
+            )
+        b["riepilogo_carico_fully"] = riep
+
+    if rep.get("fully_last_synced_at"):
+        b["aggiornamento_dati_fully"] = _fully_eta_fotografia(rep["fully_last_synced_at"])
+
+    # Dato storico: etichettato, mai usato come prova di arrivo.
+    if rep.get("received_at_legacy_manual"):
+        b["dato_storico_spunta_manuale"] = {
+            "data": rep.get("received_at_legacy_manual"),
+            "nota": (
+                "DATO STORICO: spunta di ricezione messa a mano prima dell'integrazione "
+                "Fully. NON è una prova di arrivo e NON è una conferma di Fully."
+            ),
+        }
+    return b
+
+
+def _fully_blocco_spedizione(s: dict, rep: dict = None) -> dict:
+    """La spedizione/ASN come blocco leggibile. L'arrivo della merce viene da
+    fully_replenishments (rep), non da status/received_at di questa riga.
+    I dati mancanti si dichiarano, non si deducono."""
     b = {
         "asn": s.get("shipment_number"),
+        "arrivo_in_fully": _fully_blocco_arrivo(rep, s),
         "file_asn": s.get("asn_file_path") or "file ASN non presente a sistema",
         "destinazione": s.get("destination"),
-        "stato_spedizione": s.get("status"),
+        "stato_asn": s.get("status"),
+        "nota_stato_asn": (
+            "'stato_asn' descrive la spedizione partita dalla fabbrica: NON dice se la "
+            "merce è arrivata in Fully. Per l'arrivo usa solo 'arrivo_in_fully'."
+        ),
         "inviata_il": s.get("shipped_at"),
         "corriere": s.get("courier"),
         "tracking": s.get("tracking_number"),
@@ -2647,9 +2795,6 @@ def _fully_blocco_spedizione(s: dict) -> dict:
             s.get("fully_replenishment_id")
             or "NON registrato a sistema: senza numero di carico non esiste "
                "riconciliazione Fully per questa spedizione"
-        ),
-        "ricevuta_a_destinazione_il": (
-            s.get("received_at") or "data di ricezione non registrata a sistema"
         ),
     }
     if s.get("fully_verified_on"):
@@ -2732,7 +2877,7 @@ def _fully_risolvi_cliente(query: str, raw_orders: list) -> dict:
 
 
 def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
-                          righe_lri: list) -> dict:
+                          righe_lri: list, rep_per_asn: dict = None) -> dict:
     """La catena completa di UN ordine: contenuto -> stato -> fabbrica -> ASN ->
     carico Fully -> conteggio riga per riga -> anomalie -> ripartenza."""
     num = o.get("order_number")
@@ -2771,8 +2916,22 @@ def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
         },
     }
 
+    rep_per_asn = rep_per_asn or {}
+    reps_ordine = [
+        rep_per_asn.get(_fully_norm_num(s.get("shipment_number"))) for s in spedizioni
+    ]
+    stati_arrivo = [
+        str(r.get("arrival_status")) for r in reps_ordine if isinstance(r, dict)
+    ]
+    conteggio_aperto = [
+        r for r in reps_ordine
+        if isinstance(r, dict) and r.get("arrival_status") == "counting_in_progress"
+    ]
+
     if spedizioni:
-        tr["spedizioni_asn"] = [_fully_blocco_spedizione(s) for s in spedizioni]
+        tr["spedizioni_asn"] = [
+            _fully_blocco_spedizione(s, rep) for s, rep in zip(spedizioni, reps_ordine)
+        ]
     else:
         tr["spedizioni_asn"] = []
         tr["nota_spedizioni"] = (
@@ -2888,12 +3047,33 @@ def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
                 f" ATTENZIONE: {tot['in_piu']} pezzi in più da consegnare e da fatturare."
             )
     elif spedizioni:
-        val = (
-            "Spedizione verso la logistica presente ma NESSUN conteggio Fully: "
-            "non è possibile dire se la merce è completa. Non dedurre."
-        )
+        if stati_arrivo and all(x == "no_arrival_evidence" for x in stati_arrivo):
+            val = (
+                "Merce partita verso Fully ma NESSUNA PROVA DI ARRIVO (né conteggio "
+                "Fully né spunta manuale) e nessun conteggio riga per riga: non si può "
+                "dire che sia arrivata. Non dedurre."
+            )
+        else:
+            val = (
+                "Spedizione verso la logistica presente ma NESSUN conteggio Fully: "
+                "non è possibile dire se la merce è completa. Non dedurre."
+            )
     else:
         val = "Non ancora partito verso la logistica: nessun ASN collegato."
+
+    # Il conteggio aperto vince su qualunque verdetto "pronto": i numeri sopra
+    # sono una fotografia parziale, non il conteggio finale di Fully.
+    if conteggio_aperto:
+        dettagli = "; ".join(
+            f"{r.get('shipment_number')}: {r.get('fully_count_rows_done') or 0} righe "
+            f"contate su {r.get('fully_count_rows')}"
+            for r in conteggio_aperto
+        )
+        val += (
+            " ATTENZIONE: Fully NON ha ancora concluso il conteggio di questa merce "
+            f"({dettagli}). I numeri qui sopra sono PROVVISORI e possono cambiare: "
+            "non dare l'ordine per verificato e segnala che si può SOLLECITARE FULLY."
+        )
     tr["valutazione_spedibilita"] = val
     return tr
 
@@ -2916,6 +3096,15 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
     spedizioni_tutte, err = _fully_rows("shipments")
     if err:
         return err
+    # Vista arrivi: unica fonte di verità su "la merce è arrivata?".
+    # Copre le sole spedizioni verso Fully (destination='fully'); le dirette al
+    # cliente non ci sono e vengono gestite in _fully_blocco_arrivo.
+    arrivi, err = _fully_rows("fully_replenishments")
+    if err:
+        return err
+    rep_per_asn = {
+        _fully_norm_num(r.get("shipment_number")): r for r in arrivi
+    }
 
     # Mappe di collegamento: ordine.id -> spedizioni (dalla lista annidata
     # shipment_orders dentro shipments) e numero ASN -> spedizione.
@@ -3004,13 +3193,22 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
                 "righe_conteggio_fully": righe_fmt or "nessuna riga di riconciliazione per questo ordine",
                 "anomalie": [r for r in righe_fmt if r.get("avvisi")],
             })
+        rep = rep_per_asn.get(nq)
         out = {
             **base, "cercato": numero, "trovato": True,
-            "spedizione": _fully_blocco_spedizione(s),
+            "spedizione": _fully_blocco_spedizione(s, rep),
             "ordini_nella_spedizione": len(ordini),
             "righe_conteggio_totali": len(righe),
             "dettaglio_per_ordine": dettaglio,
         }
+        if isinstance(rep, dict) and rep.get("arrival_status") == "counting_in_progress":
+            out["nota_conteggio_in_corso"] = (
+                "Fully NON ha ancora concluso il conteggio di questo carico "
+                f"({rep.get('fully_count_rows_done') or 0} righe contate su "
+                f"{rep.get('fully_count_rows')}). Le righe qui sotto sono PROVVISORIE: "
+                "dillo prima dei numeri e segnala che si può SOLLECITARE FULLY perché "
+                "chiuda il conteggio. NON dire che la merce è arrivata e contata."
+            )
         if righe:
             out.update(_fully_eta_fotografia(max(str(r.get("fully_synced_at") or "") for r in righe)))
         else:
@@ -3042,7 +3240,7 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
         return {
             **base, "cercato": numero, "trovato": True,
             "tracciamento": _fully_traccia_ordine(
-                o, _spedizioni_di(o, recon_o), recon_o, lri_o
+                o, _spedizioni_di(o, recon_o), recon_o, lri_o, rep_per_asn
             ),
         }
 
@@ -3086,7 +3284,11 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
     for o in ordini[:_FULLY_MAX_ORDINI_CLIENTE]:
         recon_o = recon_per_num.get(_fully_norm_num(o.get("order_number")), [])
         lri_o = _lri_di(o.get("order_number")) if not recon_o else []
-        tracce.append(_fully_traccia_ordine(o, _spedizioni_di(o, recon_o), recon_o, lri_o))
+        tracce.append(
+            _fully_traccia_ordine(
+                o, _spedizioni_di(o, recon_o), recon_o, lri_o, rep_per_asn
+            )
+        )
 
     out = {
         **base, "cercato": cliente, "trovato": True,
