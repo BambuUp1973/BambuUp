@@ -1150,36 +1150,6 @@ NO_NAMES_BLOCK = """RISERVATEZZA SULLE PERSONE INTERNE (regola non negoziabile)
 - Puoi nominare le AZIENDE e i canali (Kano Kimonos, Fully, kanokimonos.app, info@kanokimonos.com): il divieto riguarda le PERSONE."""
 
 
-def get_ai_reply(chat_id: str, user_message: str, extra_context: str = None) -> str:
-    if not ANTHROPIC_API_KEY:
-        return "Errore: ANTHROPIC_API_KEY non configurata."
-
-    history = get_recent_messages(chat_id)
-    knowledge_context = get_knowledge_context(user_message)
-
-    system_parts = [SYSTEM_PROMPT]
-    if knowledge_context:
-        system_parts.append(f"Contesto dalla knowledge base interna:\n{knowledge_context}")
-    if extra_context:
-        system_parts.append(extra_context)
-    system = "\n\n".join(system_parts)
-
-    messages = list(history)
-    messages.append({"role": "user", "content": user_message})
-
-    try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=1024,
-            system=system,
-            messages=messages,
-        )
-        return response.content[0].text
-
-    except Exception as e:
-        return f"Errore AI: {str(e)}"
-
 def normalize_order(order):
     billing = order.get("billing", {}) or {}
     shipping = order.get("shipping", {}) or {}
