@@ -530,14 +530,20 @@ def _righe_bozza(order: dict) -> list:
         lines.append("- Approvata DAL CLIENTE, approvazione registrata a sistema.")
     elif source == "admin":
         lines.append(
-            "- Confermata DALL'AMMINISTRATORE al posto del cliente. La prova "
-            "dell'approvazione del cliente sta FUORI dal sistema (WhatsApp o "
-            "mail): dillo, e non dire che l'ha approvata il cliente a sistema."
+            "- Confermata DALL'AMMINISTRATORE al posto del cliente. A sistema NON "
+            "risulta nessuna approvazione del cliente: non dire che il cliente ha "
+            "approvato, né sulla app né altrove. Se una sua approvazione esiste "
+            "sta FUORI dal sistema (WhatsApp o mail) e va verificata lì: dilla "
+            "come cosa da controllare, mai come cosa già avvenuta."
         )
         if nota:
-            lines.append(f"- Nota di chi ha confermato: {nota}")
+            lines.append(f"- Nota di chi ha confermato la bozza: {nota}")
         else:
-            lines.append("- Nessuna nota lasciata da chi ha confermato.")
+            lines.append(
+                "- Chi ha confermato non ha lasciato nessuna nota. Le 'Note admin' "
+                "dell'ordine sono un campo DIVERSO e non spiegano questa conferma: "
+                "non riportarle come motivo della conferma."
+            )
         if chi:
             lines.append(f"- Amministratore (identificativo interno, non è un nome): {chi}")
     else:
