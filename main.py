@@ -459,7 +459,10 @@ def format_bto_orders_summary(result: dict) -> str:
         if item_parts:
             grouped[key]["_items"].append(" ".join(item_parts))
 
-    lines = [f"Ordini btoweb ({len(grouped)} trovati):"]
+    lines = [
+        f"Ordini di FABBRICA su btoweb ({len(grouped)} trovati) — piattaforma "
+        "btoweb, ordini verso i produttori, non ordini di clienti finali:"
+    ]
     for key in order_keys:
         o = grouped[key]
         if o.get("_raw") is not None:
@@ -559,11 +562,24 @@ def _righe_bozza(order: dict) -> list:
 def format_custom_order_for_human(order: dict) -> str:
     lines = []
     lines.append(f"Ordine custom: {order.get('order_number') or order.get('id')}")
+    # La piattaforma arriva al modello dai dati, non dalla sua deduzione. E va
+    # detta per quello che è: il registro dell'ordine, mai mittente o destinatario.
+    lines.append(
+        "Piattaforma: kanokimonos.app (ordine custom). È dove l'ordine è "
+        "REGISTRATO: la piattaforma non spedisce e non riceve merce."
+    )
     # Stato di business REALE = order_status (con etichette usate anche nelle statistiche),
     # NON il campo workflow 'status' (spesso fermo su 'pending_confirmation' e fuorviante).
     os_code = order.get("order_status")
     os_label = CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A")
     lines.append(f"Stato ordine: {os_label}" + (f" [{os_code}]" if os_code else ""))
+    if os_code in ("shipped_to_customer", "shipped"):
+        lines.append(
+            "Come dirlo: \"risulta spedito al cliente (stato registrato sulla "
+            "piattaforma kanokimonos.app)\". La spedizione parte da Fully "
+            "(magazzino logistico) o, nei casi di spedizione diretta, dalla "
+            "fabbrica: MAI dire \"spedito a/su kanokimonos.app\"."
+        )
     lines.append(f"Pagamento: {order.get('payment_status') or 'N/A'}")
     lines.append(f"Creato il: {order.get('created_at') or 'N/A'}")
     lines.append("")
@@ -673,9 +689,14 @@ def format_custom_orders_summary(orders: list) -> str:
     customer_name = orders[0].get("customer_name") if orders else None
     lines = []
     if customer_name:
-        lines.append(f"Ordini custom di {customer_name} ({len(orders)} totale):")
+        lines.append(
+            f"Ordini custom di {customer_name} ({len(orders)} totale) — "
+            "piattaforma kanokimonos.app:"
+        )
     else:
-        lines.append(f"Ordini custom trovati: {len(orders)}")
+        lines.append(
+            f"Ordini custom trovati: {len(orders)} — piattaforma kanokimonos.app"
+        )
     lines.append("")
 
     for order in orders:
@@ -940,7 +961,7 @@ REGOLE OPERATIVE
 - Prodotti CUSTOM (kanokimonos.app): 45-60 giorni lavorativi dal pagamento dell'acconto. Alla domanda sui tempi di un custom dai SEMPRE prima questa informazione, poi eventualmente chiedi il numero ordine.
 - Prodotti da CATALOGO (kanokimonos.com): spedizione 2-3 giorni in Italia, 5-6 giorni in Europa.
 Se non è chiaro di quale tipo si tratta, chiedi se è un ordine custom o da catalogo.
-11. Dati ordini SEMPRE freschi: ogni volta che l'utente chiede informazioni su un ordine, chiama SEMPRE lo strumento di ricerca, anche se lo stesso ordine è già stato discusso in questa conversazione. I dati degli ordini cambiano di continuo: mai rispondere dalla memoria della conversazione, mai dire "te li ricapitolo".
+11. Dati ordini SEMPRE freschi: ogni volta che l'utente chiede informazioni su un ordine, chiama SEMPRE lo strumento di ricerca, anche se lo stesso ordine è già stato discusso in questa conversazione. I dati degli ordini cambiano di continuo: mai rispondere dalla memoria della conversazione, mai dire "te li ricapitolo". Se l'utente riformula o ripete una domanda, NON dire "ti ho già risposto", "come ti dicevo", "come già detto sopra": richiama lo strumento e rispondi di nuovo per intero, come se fosse la prima volta.
 12. Consigli taglie: alla domanda su una taglia (rashguard, GI/kimono, shorts, kids) chiama SEMPRE rispondi_dal_manuale (argomento "guida taglie" + altezza/peso/prodotto) e leggi dalla GUIDA TAGLIE UFFICIALE, mai stime a occhio. Suggerisci la taglia SEMPRE come indicazione, MAI come certezza. VIETATE parole come "perfetta", "esatta", "la scelta giusta", "rientra perfetto". Formula corretta: "in base ad altezza e peso, la taglia più indicata dovrebbe essere X". Aggiungi sempre che la guida incrocia solo altezza e peso: le proporzioni individuali (braccia/gambe più lunghe o corte, busto) possono cambiare la scelta, e in dubbio tra due taglie si sceglie secondo il fit preferito. Se il peso o l'altezza cadono sul confine tra due taglie della tabella, proponi ENTRAMBE spiegando la differenza. Se il dato non è nella guida, dillo, non inventare misure.
 
 TENUTA SOTTO CONTESTAZIONE (regole non negoziabili)
@@ -1180,6 +1201,10 @@ def format_address(address: dict) -> str:
 def format_order_for_human(order: dict) -> str:
     lines = []
     lines.append(f"Ordine: {order.get('id')}")
+    lines.append(
+        "Piattaforma: WooCommerce (ordine da catalogo, kanokimonos.com). È dove "
+        "l'ordine è REGISTRATO: la piattaforma non spedisce e non riceve merce."
+    )
     # Qui 'status' è lo stato NATIVO WooCommerce (piattaforma diversa dagli ordini
     # custom): è attendibile per il catalogo, ma non va confuso con order_status
     # degli ordini custom di kanokimonos.app.
@@ -1334,10 +1359,20 @@ CHAT_TOOLS = [
         "description": (
             "Cerca tutti gli ordini custom (kanokimonos.app) di un cliente. Il valore "
             "può essere il NOME della persona (anche composto, es. 'de tulio'), il "
-            "NOME dell'AZIENDA/palestra (es. 'bjj lab') o anche una parte dell'EMAIL: "
-            "la ricerca cerca la sottostringa in tutti e tre i campi. Usalo quando "
-            "l'utente chiede gli ordini di una persona o di un'azienda. Estrai SOLO "
-            "l'identificativo del cliente, mai parole come 'ordini', 'sopra', 'rashguard'. "
+            "NOME dell'AZIENDA/palestra (es. 'bjj lab') o anche una parte dell'EMAIL. "
+            "PASSA IL NOME COSÌ COM'È, anche se ti sembra scritto male: lo strumento "
+            "tollera maiuscole, accenti, spazi, trattini, punteggiatura e refusi "
+            "('grapple zone' e 'grapple-zone' trovano GRAPPLEZONE, 'yosekan' trova "
+            "YOSEIKAN). Non correggerlo tu e non tirare a indovinare. Come leggere la "
+            "risposta:\n"
+            "- 'nota_interpretazione' presente = il nome è stato risolto su un cliente "
+            "scritto diversamente: dichiaralo all'utente prima dei dati.\n"
+            "- 'richiesta_chiarimento': true = più clienti compatibili: NON scegliere "
+            "e NON mostrare ordini, elenca i 'candidati' e chiedi quale intende.\n"
+            "- 'totale': 0 = nessun cliente compatibile: dillo, senza inventare.\n"
+            "Usalo quando l'utente chiede gli ordini di una persona o di un'azienda. "
+            "Estrai SOLO l'identificativo del cliente, mai parole come 'ordini', "
+            "'sopra', 'rashguard'. "
             "USALO ANCHE quando l'utente butta lì un nome senza dire cosa sia ('dimmi tutto "
             "su X', 'chi è X', 'X?'): in modalità staff prova PRIMA questo strumento invece "
             "di chiedere chiarimenti: se X è un cliente lo trovi subito, e se non lo è "
@@ -1620,7 +1655,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A). Se l'utente fornisce solo una parte (es. solo "0495"), NON chiamare lo strumento con il valore parziale: chiedi il numero completo invece di indovinare.
 - Per QUALSIASI domanda procedurale o di policy (sconti, prezzi a quantità, spedizioni, resi, tempi, "come si fa X", regole interne) DEVI chiamare rispondi_dal_manuale PRIMA di rispondere. Non rispondere mai a memoria su questi temi: il manuale è la fonte di verità. Solo se rispondi_dal_manuale restituisce NESSUN_CONTENUTO puoi dire onestamente che non trovi la procedura nel manuale.
 - Se nessuno strumento è adatto e non conosci la risposta con certezza, dillo con onestà spiegando cosa non sai fare. NON rispondere mai con "Nessun ordine trovato per '<parola a caso>'" raschiando parole a caso dalla domanda.
-- STATO 'shipped_to_customer': significa che l'ordine è stato MARCATO COME SPEDITO SU kanokimonos.app. NON è la prova che il pacco sia fisicamente partito da Fully né che sia in viaggio. Riportalo con queste parole ("risulta marcato come spedito su kanokimonos.app"); non trasformarlo mai in "in transito", "in consegna", "consegnato", "il cliente ha ricevuto la merce", "è arrivato al cliente". Vale anche a metà risposta: se hai appena detto la frase giusta, non aggiungere due righe dopo una frase che dà la consegna per avvenuta. Il sistema non ha alcuna conferma di ricezione da parte del cliente: l'unica verifica è il tracking della spedizione AL CLIENTE. E attenzione a non scambiare i due viaggi: il tracking del blocco 'fabbrica' è il viaggio produttore -> Fully e NON dice niente sulla consegna al cliente. La spedizione al cliente sta solo nel blocco 'ripartenza_verso_cliente': se quel blocco non c'è, a sistema NON esiste un tracking della spedizione al cliente e devi dirlo apertamente, senza offrire il tracking di fabbrica al suo posto. Se non c'è un tracking valorizzato, dillo: senza tracking non sai dove sia il pacco.
+- STATO 'shipped_to_customer': significa che sulla piattaforma kanokimonos.app l'ordine risulta REGISTRATO come spedito al cliente. NON è la prova che il pacco sia fisicamente partito da Fully né che sia in viaggio. Formula obbligatoria: "risulta spedito al cliente (stato registrato sulla piattaforma kanokimonos.app)". VIETATO dire "spedito a kanokimonos.app", "spedito su kanokimonos.app", "marcato come spedito su kanokimonos.app" o qualsiasi giro di parole che faccia sembrare la piattaforma il mittente o il destinatario della merce: kanokimonos.app è il registro dell'ordine, non spedisce e non riceve pacchi. Chi spedisce è Fully (il magazzino logistico) oppure, nei casi di spedizione diretta, la fabbrica del produttore. Non trasformare mai lo stato in "in transito", "in consegna", "consegnato", "il cliente ha ricevuto la merce", "è arrivato al cliente". Vale anche a metà risposta: se hai appena detto la frase giusta, non aggiungere due righe dopo una frase che dà la consegna per avvenuta. Il sistema non ha alcuna conferma di ricezione da parte del cliente: l'unica verifica è il tracking della spedizione AL CLIENTE. E attenzione a non scambiare i due viaggi: il tracking del blocco 'fabbrica' è il viaggio produttore -> Fully e NON dice niente sulla consegna al cliente. La spedizione al cliente sta solo nel blocco 'ripartenza_verso_cliente': se quel blocco non c'è, a sistema NON esiste un tracking della spedizione al cliente e devi dirlo apertamente, senza offrire il tracking di fabbrica al suo posto. Se non c'è un tracking valorizzato, dillo: senza tracking non sai dove sia il pacco.
+- PIATTAFORMA SEMPRE DICHIARATA: gli ordini vivono su piattaforme diverse (custom su kanokimonos.app, catalogo su WooCommerce/Shopify, ordini di fabbrica su btoweb). Ogni volta che parli di un ordine di' fin dalla PRIMA riga a quale piattaforma appartiene, leggendola dal campo/riga 'Piattaforma' presente nei dati dello strumento: non dedurla e non ometterla. La piattaforma è dove l'ordine è REGISTRATO: non è mai il mittente né il destinatario della merce.
 - CONTESTAZIONI, REGOLA MECCANICA: se il messaggio dell'utente contesta, corregge o afferma qualcosa di diverso da quello che hai appena detto su un ordine o una spedizione (segnali tipici: "no", "ma", "guarda", "in realtà", "sei sicuro?", "sono già stati consegnati/spediti/pagati"), la PRIMA cosa che fai è RICHIAMARE LO STRUMENTO. Sempre, senza eccezioni, ANCHE SE lo hai già chiamato nel turno precedente e anche se sei certo della risposta: i dati possono essere cambiati e comunque devi rispondere su dati appena letti, non a memoria. Vietato scrivere "rileggo"/"ricontrollo"/"verifico" senza aver eseguito la chiamata in questo turno.
 - CONTESTAZIONI: se l'utente mette in dubbio un dato che hai appena dato, richiama lo strumento e rileggi, non cambiare risposta per assecondarlo. Se il dato è quello che avevi detto, ripetilo citando il campo. Se l'utente afferma un fatto fisico che i dati non confermano (es. "sono già stati consegnati"), non riscrivere lo stato: di' cosa dice il campo, che la sua informazione non risulta a sistema e che le due cose vanno riconciliate.
 - Per domande AGGREGATE/di riepilogo sugli ordini custom ("quanti ordini...", "quanti pagati/non pagati/in produzione/spediti", "il cliente X ha pagato / è partito", conteggi per mese) usa statistiche_ordini_custom. Quando riporti gli spediti al cliente e sono presenti ordini con stato storico 'shipped', dichiara SEMPRE la distinzione (es. "123 spediti al cliente + 46 con stato storico legacy 'shipped'").
@@ -1810,16 +1846,111 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
     return f"Non ho trovato l'ordine {numero} su nessuna piattaforma ({', '.join(consentite)})."
 
 
+def _custom_forme_cliente(o: dict) -> list:
+    """Le identità con cui un cliente può essere cercato in un ordine NORMALIZZATO:
+    nome persona, ragione sociale, email (gli stessi tre campi della vecchia
+    ricerca a sottostringa)."""
+    return [
+        f for f in (
+            o.get("customer_name"),
+            o.get("customer_business_name"),
+            o.get("customer_email"),
+        ) if f
+    ]
+
+
+def _risolvi_cliente_custom(query: str, orders: list) -> dict:
+    """Risolve il nome digitato su uno dei clienti realmente presenti negli ordini
+    custom, con gli STESSI tre livelli del match produttori (esatto / parziale /
+    somiglianza), riusando _fully_match_cliente. Raggruppa per cliente (email se
+    c'è, altrimenti nome+azienda); vince il livello più alto; più clienti allo
+    stesso livello = richiesta di chiarimento, mai una scelta al posto dell'utente."""
+    clienti = {}
+    for o in orders:
+        forme = _custom_forme_cliente(o)
+        if not forme:
+            continue
+        chiave = _bto_norm_producer(o.get("customer_email") or " | ".join(forme))
+        g = clienti.get(chiave)
+        if g is None:
+            g = clienti[chiave] = {"forme": forme, "ordini": []}
+        g["ordini"].append(o)
+
+    rango = {"esatto": 3, "parziale": 2, "somiglianza": 1}
+    candidati = []
+    for g in clienti.values():
+        liv, punteggio = _fully_match_cliente(query, g["forme"])
+        if liv:
+            candidati.append({
+                "cliente": " | ".join(g["forme"]),
+                "match": liv,
+                "punteggio": punteggio,
+                "_forme": g["forme"],
+                "_ordini": g["ordini"],
+            })
+    if not candidati:
+        return {"livello": None, "candidati": []}
+    top = max(rango[c["match"]] for c in candidati)
+    vincenti = [c for c in candidati if rango[c["match"]] == top]
+    vincenti.sort(key=lambda c: -c["punteggio"])
+    return {"livello": vincenti[0]["match"], "candidati": vincenti}
+
+
+_PIATTAFORMA_CUSTOM = (
+    "kanokimonos.app (ordini custom). La piattaforma REGISTRA l'ordine: "
+    "non spedisce e non riceve merce"
+)
+
+
 def tool_cerca_ordini_per_cliente(nome: str) -> dict:
-    """Opzione (b): restituisce dati strutturati così Haiku può filtrarli."""
+    """Opzione (b): restituisce dati strutturati così Haiku può filtrarli.
+    Match tollerante come per i produttori: 'grapple zone', 'grapple-zone' e
+    'GRAPPLEZONE' trovano lo stesso cliente; i refusi passano per somiglianza."""
     nome = (nome or "").strip()
     if not nome:
         return {"error": "Nessun nome cliente fornito.", "ordini": []}
-    res = search_custom_orders_by_name(nome)
-    if res.get("error"):
-        return {"error": res["error"], "ordini": []}
+    data = search_custom_orders_raw(1000)
+    if data.get("error"):
+        return {"error": data["error"], "ordini": []}
+
+    ris = _risolvi_cliente_custom(nome, data.get("results", []))
+
+    if ris["livello"] is None:
+        return {
+            "piattaforma": _PIATTAFORMA_CUSTOM,
+            "cliente_cercato": nome,
+            "totale": 0,
+            "ordini": [],
+            "nota": (
+                f"Nessun cliente compatibile con '{nome}' negli ordini custom: "
+                "né uguale, né parziale, né simile. NON inventare ordini e NON "
+                "attribuirgli ordini di altri: di' che non risulta e chiedi se "
+                "il nome è scritto giusto o se è un cliente di un'altra "
+                "piattaforma."
+            ),
+        }
+
+    if len(ris["candidati"]) > 1:
+        return {
+            "piattaforma": _PIATTAFORMA_CUSTOM,
+            "cliente_cercato": nome,
+            "richiesta_chiarimento": True,
+            "candidati": [
+                {"cliente": c["cliente"], "match": c["match"],
+                 "ordini_trovati": len(c["_ordini"])}
+                for c in ris["candidati"]
+            ],
+            "nota": (
+                f"Più clienti compatibili con '{nome}' (match per "
+                f"{ris['livello']}). NON sceglierne uno tu e NON mostrare "
+                "ordini: elenca i candidati all'utente e chiedi quale intende, "
+                "poi richiama lo strumento con il nome scelto."
+            ),
+        }
+
+    scelto = ris["candidati"][0]
     ordini = []
-    for o in res.get("results", []):
+    for o in scelto["_ordini"]:
         # Stato di business REALE = order_status (stesse etichette della scheda
         # ordine e delle statistiche). Il campo workflow 'status' NON viene esposto:
         # è stale (quasi sempre 'pending_confirmation') e faceva dire al bot
@@ -1843,8 +1974,10 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
                 for p in (o.get("products") or [])
             ],
         })
-    return {
-        "cliente": nome,
+    out = {
+        "piattaforma": _PIATTAFORMA_CUSTOM,
+        "cliente_cercato": nome,
+        "cliente_risolto": scelto["cliente"],
         "totale": len(ordini),
         "ordini": ordini,
         "nota_stato": (
@@ -1853,6 +1986,18 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
             "ordine è 'in attesa di conferma' se stato_descrizione dice altro."
         ),
     }
+    # Dichiarazione d'interpretazione: dovuta ogni volta che il nome digitato non
+    # coincide alla lettera con una delle forme del cliente risolto ("grapple
+    # zone" -> GRAPPLEZONE), non solo sui refusi.
+    q = _bto_norm_producer(nome)
+    if not any(_bto_norm_producer(f) == q for f in scelto["_forme"]):
+        out["nota_interpretazione"] = (
+            f"L'utente ha scritto '{nome}' e lo strumento l'ha risolto sul "
+            f"cliente '{scelto['cliente']}' (match per {scelto['match']}). "
+            f"DICHIARALO prima dei dati (es. \"interpreto '{nome}' come "
+            f"{scelto['_forme'][0]}\")."
+        )
+    return out
 
 
 def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> str:
@@ -1967,6 +2112,7 @@ def tool_statistiche_ordini_custom(cliente: str = None, mese: str = None) -> dic
     }
 
     result = {
+        "piattaforma": "kanokimonos.app (ordini custom)",
         "totale_ordini": len(sel),
         "filtro": filtro,
         "per_order_status": per_order_status,
@@ -2527,6 +2673,7 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
     if not candidati:
         return {
             "tipo": "ordini_per_produttore",
+            "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
             "produttore_cercato": q,
             "trovato": False,
             "richiesta_chiarimento": False,
@@ -2557,6 +2704,7 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
     if len(canoni) > 1:
         return {
             "tipo": "ordini_per_produttore",
+            "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
             "produttore_cercato": q,
             "trovato": False,
             "richiesta_chiarimento": True,
@@ -2660,6 +2808,7 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
 
     out = {
         "tipo": "ordini_per_produttore",
+            "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
         "produttore_cercato": q,
         "trovato": True,
         "richiesta_chiarimento": False,
@@ -3323,7 +3472,11 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
             if _fully_norm_num(r.get("order_number")) == _fully_norm_num(order_number)
         ]
 
-    base = {"tipo": "tracciamento_fully", "nota_verifica": _FULLY_NOTA_VERIFICA}
+    base = {
+        "tipo": "tracciamento_fully",
+        "piattaforma": "kanokimonos.app (ordini custom). La piattaforma REGISTRA l'ordine: non spedisce e non riceve merce",
+        "nota_verifica": _FULLY_NOTA_VERIFICA,
+    }
 
     # --- Caso ASN: si traccia la spedizione intera, con tutti i suoi ordini ---
     nq = _fully_norm_num(numero)
