@@ -154,6 +154,23 @@ def get_custom_resource(resource: str, limit: int = 50, status: str = None, extr
             "details": str(e)
         }
 
+def _as_bool(value):
+    """True/False dai vari modi in cui la sorgente può scrivere un booleano.
+    None resta None: 'non valorizzato' non è 'falso'."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    v = str(value).strip().lower()
+    if v in ("true", "t", "1", "yes", "si", "sì"):
+        return True
+    if v in ("false", "f", "0", "no"):
+        return False
+    return None
+
+
 def normalize_custom_order(order: dict):
     if not isinstance(order, dict):
         return {"raw_value": order}
@@ -173,17 +190,16 @@ def normalize_custom_order(order: dict):
     selected_variations = order.get("selected_variations")
     admin_design_url = None
     admin_design_uploaded_at = None
-    design_confirmed = None
-    design_confirmed_at = None
     sizes_selected_at = None
     selected_sizes = None
 
-    # In alcuni record admin_design_url + i flag checklist sono dentro selected_variations
+    # In alcuni record admin_design_url + le taglie sono dentro selected_variations.
+    # La conferma della BOZZA invece NON si legge più da qui: la sorgente espone
+    # ora i campi normalizzati draft_confirmed / draft_confirmed_at /
+    # design_confirmed_source, che sono l'unica verità su quell'asse.
     if isinstance(selected_variations, dict):
         admin_design_url = selected_variations.get("admin_design_url")
         admin_design_uploaded_at = selected_variations.get("admin_design_uploaded_at")
-        design_confirmed = selected_variations.get("design_confirmed")
-        design_confirmed_at = selected_variations.get("design_confirmed_at")
         sizes_selected_at = selected_variations.get("sizes_selected_at")
         selected_sizes = selected_variations.get("selected_sizes")
 
@@ -231,8 +247,13 @@ def normalize_custom_order(order: dict):
         "selected_variations": selected_variations,
         "admin_design_url": admin_design_url,
         "admin_design_uploaded_at": admin_design_uploaded_at,
-        "design_confirmed": design_confirmed,
-        "design_confirmed_at": design_confirmed_at,
+        # Conferma della bozza: asse INDIPENDENTE sia da order_status sia dal
+        # campo workflow interno. Non si deduce dall'uno né dall'altro.
+        "draft_confirmed": _as_bool(order.get("draft_confirmed")),
+        "draft_confirmed_at": order.get("draft_confirmed_at"),
+        "design_confirmed_source": order.get("design_confirmed_source"),
+        "design_confirmed_by": order.get("design_confirmed_by"),
+        "design_confirmed_note": order.get("design_confirmed_note"),
         "sizes_selected_at": sizes_selected_at,
         "selected_sizes": selected_sizes,
         "customer_files": order.get("customer_files"),
@@ -471,6 +492,64 @@ def yes_no_unknown(value):
     return "N/A"
 
 
+def _righe_bozza(order: dict) -> list:
+    """Stato della BOZZA, letto SOLO da draft_confirmed + design_confirmed_source.
+
+    È un asse indipendente: non si deduce da order_status né dal campo workflow
+    interno, e loro non si deducono da lui. Sui dati reali 198 ordini hanno la
+    bozza confermata con il workflow ancora su 'pending_confirmation' e 58 hanno
+    il workflow 'confirmed' senza la bozza confermata: incrociarli è sbagliato.
+    """
+    confermata = order.get("draft_confirmed")
+    quando = order.get("draft_confirmed_at")
+    source = order.get("design_confirmed_source")
+    nota = order.get("design_confirmed_note")
+    chi = order.get("design_confirmed_by")
+
+    lines = ["Bozza (asse indipendente dallo stato ordine):"]
+
+    if confermata is False:
+        lines.append("- Bozza confermata: NO")
+        lines.append(
+            "- L'ordine attende l'approvazione della bozza. Questo è l'UNICO "
+            "motivo valido per dire che un ordine è in attesa di approvazione."
+        )
+        return lines
+
+    if confermata is not True:
+        lines.append("- Bozza confermata: dato non valorizzato a sistema")
+        lines.append(
+            "- Non sai se la bozza sia stata approvata: dillo così, non dedurlo "
+            "dallo stato dell'ordine."
+        )
+        return lines
+
+    lines.append("- Bozza confermata: SÌ" + (f" (il {quando})" if quando else ""))
+
+    if source == "customer":
+        lines.append("- Approvata DAL CLIENTE, approvazione registrata a sistema.")
+    elif source == "admin":
+        lines.append(
+            "- Confermata DALL'AMMINISTRATORE al posto del cliente. La prova "
+            "dell'approvazione del cliente sta FUORI dal sistema (WhatsApp o "
+            "mail): dillo, e non dire che l'ha approvata il cliente a sistema."
+        )
+        if nota:
+            lines.append(f"- Nota di chi ha confermato: {nota}")
+        else:
+            lines.append("- Nessuna nota lasciata da chi ha confermato.")
+        if chi:
+            lines.append(f"- Amministratore (identificativo interno, non è un nome): {chi}")
+    else:
+        lines.append(
+            "- Origine della conferma NON registrata (ordine storico, precedente "
+            "al tracciamento dell'origine). NON dire che l'ha approvata il "
+            "cliente: di' che la bozza risulta confermata ma l'origine non è "
+            "tracciata a sistema."
+        )
+    return lines
+
+
 def format_custom_order_for_human(order: dict) -> str:
     lines = []
     lines.append(f"Ordine custom: {order.get('order_number') or order.get('id')}")
@@ -524,10 +603,10 @@ def format_custom_order_for_human(order: dict) -> str:
 
     lines.append("")
     # Checklist avanzamento: flag espliciti Sì/No ricavati da selected_variations
-    # (design/taglie) e dai campi producer_*.
+    # (taglie) e dai campi producer_*. La conferma della bozza NON sta qui:
+    # ha quattro esiti diversi, non due, e sta nel blocco Bozza qui sotto.
     si = lambda b: "Sì" if b else "No"
     design_caricato = bool(order.get("admin_design_url"))
-    design_approvato = order.get("design_confirmed") is True
     taglie_confermate = bool(order.get("sizes_selected_at")) or bool(order.get("selected_sizes"))
     producer_file_pronto = bool(order.get("producer_file_uploaded_at")) or bool(order.get("producer_file_path"))
     spedito_produttore = bool(order.get("producer_shipped_at"))
@@ -538,10 +617,11 @@ def format_custom_order_for_human(order: dict) -> str:
 
     lines.append("Checklist avanzamento:")
     lines.append(f"- Design caricato: {si(design_caricato)}")
-    lines.append(f"- Design approvato dal cliente: {si(design_approvato)}")
     lines.append(f"- Taglie confermate: {si(taglie_confermate)}")
     lines.append(f"- Producer file pronto: {si(producer_file_pronto)}")
     lines.append(f"- Spedito dal produttore: {si(spedito_produttore)}{ship_extra}")
+    lines.append("")
+    lines.extend(_righe_bozza(order))
     lines.append("")
     # Fuori dalla checklist di proposito: customer_files/image_url sono vuoti
     # anche su ordini avanzati, quindi non è un Sì/No. Dentro l'elenco veniva
@@ -550,7 +630,7 @@ def format_custom_order_for_human(order: dict) -> str:
     lines.append("")
     lines.append(f"URL bozza admin: {order.get('admin_design_url') or 'N/A'}")
     lines.append(f"Bozza admin caricata il: {order.get('admin_design_uploaded_at') or 'N/A'}")
-    lines.append(f"Design approvato il: {order.get('design_confirmed_at') or 'N/A'}")
+    lines.append(f"Bozza confermata il: {order.get('draft_confirmed_at') or 'N/A'}")
     lines.append(f"Taglie inserite il: {order.get('sizes_selected_at') or 'N/A'}")
     lines.append(f"Dettaglio taglie: {order.get('selected_sizes') or 'N/A'}")
     lines.append("")
