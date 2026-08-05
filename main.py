@@ -205,6 +205,7 @@ def normalize_custom_order(order: dict):
 
     return {
         "id": order.get("id"),
+        "piattaforma": "kanokimonos.app (ordine custom)",
         "order_number": order.get("order_number"),
         "order_group_id": order.get("order_group_id"),
         "quantity": order.get("quantity"),
@@ -1980,12 +1981,22 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
         "cliente_risolto": scelto["cliente"],
         "totale": len(ordini),
         "ordini": ordini,
+    }
+    if any(o.get("partito_al_cliente") for o in ordini):
+        out["nota_spedizione"] = (
+            "Per gli ordini spediti: la formula è \"risulta spedito al cliente "
+            "(stato registrato sulla piattaforma kanokimonos.app)\" e la spedizione "
+            "parte da Fully (magazzino logistico) o, nei casi di spedizione "
+            "diretta, dalla fabbrica. MAI dire \"spedito a/su kanokimonos.app\": "
+            "la piattaforma registra lo stato, non spedisce."
+        )
+    out.update({
         "nota_stato": (
             "Lo stato di avanzamento di ogni ordine è 'stato_descrizione' (ricavato da "
             "order_status). Non esiste nessun altro campo di stato: non dire mai che un "
             "ordine è 'in attesa di conferma' se stato_descrizione dice altro."
         ),
-    }
+    })
     # Dichiarazione d'interpretazione: dovuta ogni volta che il nome digitato non
     # coincide alla lettera con una delle forme del cliente risolto ("grapple
     # zone" -> GRAPPLEZONE), non solo sui refusi.
