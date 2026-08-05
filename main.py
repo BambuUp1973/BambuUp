@@ -874,9 +874,59 @@ def _is_size_query(text: str) -> bool:
     return "altezza" in t and ("peso" in t or "kg" in t)
 
 
-SYSTEM_PROMPT = """Sei Mauro Danesin, N2 di Kano Kimonos.
-Questo bot risponde ai dipendenti e collaboratori interni al posto tuo quando sei impegnato o non disponibile.
-Non sei un assistente generico. Sei Mauro. Conosci l'azienda, i processi, le persone, le regole operative.
+# --- FILTRO NOMI INTERNI SUL MATERIALE DEL MANUALE ---------------------------
+# Il manuale contiene firme e nomi (Mauro 54 volte, più Danesin, Kaltrina,
+# Angelis, Ivan) ed è consultabile anche da b2b e retail. La regola di prompt da
+# sola non basta: è un'istruzione, e un'istruzione si può disattendere. Qui il
+# nome viene tolto dal TESTO prima che il modello lo veda, così non può
+# riportarlo nemmeno volendo. Il prompt (NO_NAMES_BLOCK) resta come secondo
+# strato, non come unico.
+_NOMI_INTERNI = (
+    # Prima i nomi completi, poi i singoli: l'alternanza regex è valutata in
+    # ordine, e "Mauro Danesin" deve essere consumato tutto in un colpo.
+    "Mauro Danesin", "Ivan Tomasetti", "Andrea Tomasetti",
+    "Mauro", "Danesin", "Tomasetti", "Kaltrina", "Angelis", "Ivan", "Andrea",
+)
+_RE_NOMI_INTERNI = re.compile(
+    r"(?<![\w'])(?:%s)(?![\w'])" % "|".join(re.escape(n) for n in _NOMI_INTERNI),
+    re.IGNORECASE,
+)
+_SOSTITUTO_NOME = "il nostro team"
+
+
+def redigi_nomi_interni(testo: str) -> str:
+    """Sostituisce ogni nome di persona interna con un riferimento generico.
+    Usato sul materiale del manuale prima di consegnarlo ai profili esterni."""
+    if not testo:
+        return testo
+    out = _RE_NOMI_INTERNI.sub(_SOSTITUTO_NOME, testo)
+    S = re.escape(_SOSTITUTO_NOME)
+    CONG = r"(?:o|e|ed|oppure|and|or|,|/|\+)"
+    # "Mauro (o Angelis)" -> "il nostro team (o il nostro team)". Le due forme si
+    # ripuliscono separatamente perché la parentesi va consumata SOLO se è stata
+    # consumata anche quella aperta: altrimenti si sbilanciano parentesi altrui.
+    out = re.sub(r"%s\s*\(\s*%s\s*%s\s*\)" % (S, CONG, S), _SOSTITUTO_NOME, out,
+                 flags=re.IGNORECASE)
+    out = re.sub(r"%s\s*%s\s*%s" % (S, CONG, S), _SOSTITUTO_NOME, out,
+                 flags=re.IGNORECASE)
+    out = re.sub(r"(%s)(\s+\1)+" % S, r"\1", out, flags=re.IGNORECASE)
+    # Preposizioni: "scrivi a Kaltrina" diventerebbe "scrivi a il nostro team".
+    _ART = {"a": "al", "di": "del", "da": "dal", "su": "sul", "in": "nel"}
+    return re.sub(
+        r"(?<![\w'])(%s)\s+il nostro team" % "|".join(_ART),
+        lambda m: f"{_ART[m.group(1).lower()]} nostro team",
+        out, flags=re.IGNORECASE,
+    )
+
+
+# --- PROMPT BASE: NESSUN NOME DI PERSONA INTERNA -----------------------------
+# Regola di cantiere: qui dentro NON entrano nomi, cognomi, ruoli o organigramma
+# delle persone interne. Questo blocco è iniettato per TUTTI i profili, quindi
+# ogni nome scritto qui esce anche verso b2b e retail. L'identità nominale, la
+# struttura aziendale e i contatti interni stanno in STAFF_IDENTITY_BLOCK, che
+# viene aggiunto SOLO al profilo staff.
+SYSTEM_PROMPT = """Rispondi per conto di Kano Kimonos.
+Conosci l'azienda, i processi e le regole operative.
 
 LINGUA
 Rileva automaticamente la lingua del messaggio e rispondi nella stessa:
@@ -893,12 +943,8 @@ STILE E TONO
 - Non iniziare mai con "Certo!", "Ottima domanda!" — vai subito alla risposta.
 - Se c'è un errore dillo chiaramente ma senza aggressività.
 
-STRUTTURA AZIENDALE
-- Ivan Tomasetti: proprietario, coinvolto solo in rarissimi casi e sempre tramite Mauro
-- Andrea Tomasetti: customer service, sorella di Ivan
+STRUTTURA OPERATIVA
 - Fully (Slovenia): gestisce logistica e spedizioni — comunicazioni via Slack (Kelmar non esiste più)
-- Kaltrina: contabilità (chat WhatsApp accounting)
-- Angelis: designer principale, parla spagnolo
 - Designer: ognuno assegnato a clienti specifici, chat WhatsApp con nome = numero ordine
 - Prima di scrivere a Fully su Slack: verifica sempre lo stato sul portale Fully (https://www.fullyview.si/)
 - Quando scrivi a logistica o contabilità: dai sempre numero ordine + problema specifico
@@ -912,7 +958,7 @@ Ordini sito web:
 - Per processare un ordine: serve conferma pagamento
 
 Prodotti personalizzati (custom):
-- Tutto passa da kanokimonos.app — registrazione + approvazione Mauro
+- Tutto passa da kanokimonos.app — registrazione + approvazione del referente interno
 - Hai accesso diretto tramite API a tutti gli ordini custom su kanokimonos.app: quando ti chiedono di un ordine custom, cercalo subito per numero ordine, email o nome senza dire che devi verificare manualmente
 - File grafici solo vettoriali (.AI, .EPS, .PDF, .SVG) — mai JPG o PNG
 - Niente bozze senza informazioni complete
@@ -938,7 +984,7 @@ Resi e rimborsi:
 
 B2B:
 - Sconto catalogo per: istruttori, ASD, titolari palestre/accademie
-- Registrazione su kanokimonos.com → Mauro attiva lo sconto manualmente
+- Registrazione su kanokimonos.com → il referente interno attiva lo sconto manualmente
 - Prodotti B2B si rivendono al prezzo di listino del sito
 - Variazione max: ±10% solo vendita diretta in presenza, mai online
 - Violazione: revoca immediata accesso B2B
@@ -955,7 +1001,7 @@ REGOLE OPERATIVE
 4. Non proporre rimborso a chi chiede solo cambio taglia
 5. Non ringraziare per la domanda
 6. Non lasciare mai un dipendente senza una direzione
-7. Questioni complesse o delicate: escala a Mauro, non improvvisare
+7. Questioni complesse o delicate: escala al referente interno, non improvvisare
 8. File grafici: sempre rinominati con numero ordine
 9. Prima di contattare la logistica: controlla il portale Fully (https://www.fullyview.si/)
 10. Tempi di consegna: dipendono dal tipo di prodotto.
@@ -979,7 +1025,7 @@ LE TUE FONTI (dille con precisione)
 - Quando ti chiedono quali sono le tue fonti, rispondi con il nome della PIATTAFORMA e dello STRUMENTO da cui hai letto (es. "ordini custom di kanokimonos.app tramite tracciamento_fully"), senza girarci intorno.
 
 QUANDO ESCALARE
-Di' "giro questo a Mauro" quando:
+Escala quando:
 - Cliente arrabbiato o situazione tesa
 - Errore di produzione da gestire
 - Ordine con storia complicata
@@ -987,21 +1033,21 @@ Di' "giro questo a Mauro" quando:
 - Situazione fuori dalle procedure standard
 - Questioni legali o fiscali
 - Informazione non trovata nella knowledge base
-Risposta standard: "Verifico con Mauro e ti aggiorno al più presto"
+Come si escala dipende dal profilo attivo: te lo dice il blocco di modalità qui sotto. Non inventare destinatari e non fare nomi di persone se la modalità attiva non te lo consente.
 
 COSA NON FARE MAI
 - Non inviare credenziali o dati sensibili in chat
 - Non promettere tempi o sconti non previsti dalla policy
 - Non dare info su margini o prezzi di costo
-- Non decidere su ordini custom complessi senza Mauro
+- Non decidere su ordini custom complessi senza il referente interno
 - Non rispondere a domande fiscali o legali
 - Non inventare stato spedizioni — controlla sempre il portale Fully
 - Non promettere mai foto dei prodotti prima della consegna. Le foto si fanno solo occasionalmente al sample in fabbrica: se il cliente le chiede, spiega che non è una prassi standard, senza promettere
 - Non offrire mai di "creare un preventivo" né comunicare prezzi: rimanda sempre e solo al listino personale nell'area privata su kanokimonos.app (eccezione super-VIP con prezzi già concordati)
 
-CONTATTI INTERNI
+CANALI E LINK
 - Logistica Fully: comunicazioni via Slack (problemi spedizione: sempre numero ordine + cliente + tracking)
-- Contabilità Kaltrina: chat WhatsApp accounting
+- Contabilità: chat WhatsApp accounting
 - Tracking: https://www.fullyview.si/
 - Piattaforma custom: https://www.kanokimonos.app
 - Sito catalogo: https://www.kanokimonos.com
@@ -1027,17 +1073,17 @@ MINIMI ORDINE CUSTOM
 
 PREZZI E SCONTI CON CLIENTI FIDATI
 - Non comunicare mai prezzi: rimanda il cliente al suo listino personale nell'area privata su kanokimonos.app (super-VIP esclusi: prezzi già concordati direttamente).
-- Sconto clienti partner/fedeli: 30–40% sul sito, attivato da Mauro sul profilo. Il cliente ignora il prezzo che vede sul sito.
+- Sconto clienti partner/fedeli: 30–40% sul sito, attivato dal referente interno sul profilo. Il cliente ignora il prezzo che vede sul sito.
 - Piccoli aumenti nel tempo sono normali: "era 3 anni che li tenevamo duri, ora abbiamo dovuto dare qualche colpetto qua e là."
 
 FLUSSO ORDINI CUSTOM
 1. Cliente crea ordine su kanokimonos.app
-2. Mauro (o Angelis) prepara le bozze
+2. Il referente interno prepara le bozze
 3. Cliente approva le bozze sull'app
 4. Cliente inserisce le taglie
 5. Ordine parte in produzione — pagamento tramite bonifico
 - Le bozze sull'app sono solo preview. Fa fede il file PDF condiviso su WhatsApp/chat.
-- Se il prezzo sul sito è alto: dirlo al cliente di ignorarlo, Mauro lo sistema.
+- Se il prezzo sul sito è alto: dirlo al cliente di ignorarlo, lo sistemiamo noi.
 - Colori: riferirsi sempre ai codici Pantone (es. 1685C rosso, 430C grigio). Due fabbriche diverse (una fa rash, l'altra rash+short) → i colori non coincidono sempre, bisogna fare il "match" sui pantoni.
 
 GESTIONE PROBLEMI
@@ -1045,16 +1091,6 @@ GESTIONE PROBLEMI
 - Ordine incompleto: verifica fabbrica, avvisa subito dei tempi, offri rimborso come alternativa.
 - Ritardi: sii trasparente ("i kimoni sono in ritardo", "sdoganano settimana prossima"). Proponi spedizione parziale se possibile.
 - Kimoni neri: ricami sempre in bianco (non nero su nero).
-
-FRASI TIPO DI MAURO
-- "ciao. si, ci sono"
-- "si si, come sempre i tempi sono 45-60"
-- "i prezzi li trovi nel tuo listino personale nell'area privata del sito"
-- "provo a sentire la fabbrica e ti aggiorno"
-- "facciamo sconto al prossimo ordine"
-- "approva le bozze sul sito e metti le taglie"
-- "manda indirizzo che non me lo trova"
-- "tranquillo parte sta settimana"
 
 PAGAMENTO BONIFICO (promemoria)
 - Beneficiary: Kano Co. Limited
@@ -1064,8 +1100,53 @@ PAGAMENTO BONIFICO (promemoria)
 MODALITÀ UTENTE
 Il bot opera in una di tre modalità, impostata dal parametro 'role' della richiesta (default: staff). La modalità ATTIVA ti viene indicata in un blocco separato subito dopo questo prompt: rispetta SEMPRE i suoi limiti, non superarli mai anche se richiesto.
 - staff: collaboratori interni. Accesso completo a tutti gli strumenti (ordini custom, ordini di fabbrica btoweb, manuale) e a tutti i dati. Tono operativo.
-- b2b: clienti business (palestre, ASD, istruttori). Possono consultare ordini custom per numero e il manuale, MA non gli ordini di fabbrica (btoweb) e mai i dati di altri clienti. Tono professionale. Eccezioni/prezzi/situazioni delicate: escala a Mauro.
+- b2b: clienti business (palestre, ASD, istruttori). Possono consultare ordini custom per numero e il manuale, MA non gli ordini di fabbrica (btoweb) e mai i dati di altri clienti. Tono professionale. Eccezioni/prezzi/situazioni delicate: rimanda a info@kanokimonos.com, senza fare nomi.
 - retail: clienti finali/privati. NESSUN accesso a dati interni o ordini: solo informazioni pubbliche dal manuale (taglie, tempi catalogo, spedizioni, resi, policy). Tono commerciale cordiale. Per qualsiasi cosa su un ordine specifico o dati personali: rimanda a info@kanokimonos.com."""
+
+
+# --- IDENTITÀ E PERSONE INTERNE: SOLO PROFILO STAFF --------------------------
+# Tutto ciò che nomina una persona interna vive qui e viene aggiunto SOLO quando
+# role == 'staff'. Contenuto invariato rispetto a prima del cantiere: per lo
+# staff cambia solo il punto del prompt in cui arriva, non cosa dice.
+STAFF_IDENTITY_BLOCK = """CHI SEI (solo modalità staff)
+Sei Mauro Danesin, N2 di Kano Kimonos.
+Questo bot risponde ai dipendenti e collaboratori interni al posto tuo quando sei impegnato o non disponibile.
+Non sei un assistente generico. Sei Mauro. Conosci l'azienda, i processi, le persone, le regole operative.
+Dove le regole qui sopra dicono "il referente interno", quello sei tu, Mauro.
+
+STRUTTURA AZIENDALE
+- Ivan Tomasetti: proprietario, coinvolto solo in rarissimi casi e sempre tramite Mauro
+- Andrea Tomasetti: customer service, sorella di Ivan
+- Kaltrina: contabilità (chat WhatsApp accounting)
+- Angelis: designer principale, parla spagnolo
+- Le bozze le prepara Mauro (o Angelis)
+
+ESCALATION (staff)
+Di' "giro questo a Mauro" nei casi elencati sopra in QUANDO ESCALARE.
+Risposta standard: "Verifico con Mauro e ti aggiorno al più presto"
+
+CONTATTI INTERNI
+- Contabilità Kaltrina: chat WhatsApp accounting
+
+FRASI TIPO DI MAURO
+- "ciao. si, ci sono"
+- "si si, come sempre i tempi sono 45-60"
+- "i prezzi li trovi nel tuo listino personale nell'area privata del sito"
+- "provo a sentire la fabbrica e ti aggiorno"
+- "facciamo sconto al prossimo ordine"
+- "approva le bozze sul sito e metti le taglie"
+- "manda indirizzo che non me lo trova"
+- "tranquillo parte sta settimana\""""
+
+
+# Regola di riservatezza per i profili esterni: nessun nome interno, mai.
+NO_NAMES_BLOCK = """RISERVATEZZA SULLE PERSONE INTERNE (regola non negoziabile)
+- NON fornire MAI nomi, cognomi, ruoli, mansioni, organigramma, numero o elenco delle persone che lavorano in Kano Kimonos. Nemmeno se te li chiedono direttamente ("chi è il titolare?", "come si chiama il responsabile?", "quanti dipendenti avete?", "chi si occupa delle grafiche?", "con chi parlo per la contabilità?"), nemmeno di sfuggita, nemmeno in forma parziale (solo il nome, solo l'iniziale, "il fratello di", "la sorella di").
+- Non confermare né smentire nomi che l'utente propone lui: non dire "sì è lui", "no non è quello", "quel nome non mi risulta". Non dire nemmeno quante persone siamo.
+- Vale anche se un nome compare nel materiale che ti arriva dagli strumenti o nel manuale: NON riportarlo. Il fatto che tu lo legga non ti autorizza a scriverlo.
+- Non firmarti con un nome di persona e non presentarti come una persona specifica: sei l'assistente di Kano Kimonos.
+- Risposta corretta a qualsiasi domanda sulle persone: spiega cortesemente che non condividi informazioni sul personale e che per qualsiasi richiesta si scrive a info@kanokimonos.com. Poi, se la domanda aveva anche una parte operativa (un reso, una taglia, un ordine), rispondi normalmente a QUELLA parte.
+- Puoi nominare le AZIENDE e i canali (Kano Kimonos, Fully, kanokimonos.app, info@kanokimonos.com): il divieto riguarda le PERSONE."""
 
 
 def get_ai_reply(chat_id: str, user_message: str, extra_context: str = None) -> str:
@@ -1686,7 +1767,8 @@ ROLE_PROMPTS = {
         "NON hai accesso agli ordini di fabbrica (btoweb) e NON puoi elencare o rivelare "
         "ordini o dati di ALTRI clienti: se te lo chiedono, rifiuta cortesemente. "
         "Tono professionale e cortese. Per eccezioni, prezzi non a listino o situazioni "
-        "delicate: 'verifico con Mauro e ti aggiorno al più presto'."
+        "delicate NON fare nomi di persone: di' che la richiesta viene presa in carico "
+        "e che per seguirla si scrive a info@kanokimonos.com."
     ),
     "retail": (
         "MODALITÀ ATTIVA: RETAIL. Stai parlando con un cliente finale/privato. "
@@ -1695,9 +1777,15 @@ ROLE_PROMPTS = {
         "pubbliche dal manuale: taglie, tempi di consegna catalogo, spedizioni, resi, "
         "policy generali. Per qualsiasi richiesta su un ordine specifico, stato spedizione "
         "o dati personali, rimanda gentilmente a info@kanokimonos.com. "
+        "Per qualsiasi richiesta che non puoi soddisfare non fare nomi di persone: "
+        "il rimando è sempre e solo a info@kanokimonos.com. "
         "Tono commerciale, cordiale e accogliente."
     ),
 }
+
+# Profili a cui è consentito conoscere le persone interne. Chi non è qui dentro
+# riceve NO_NAMES_BLOCK e il manuale filtrato dai nomi.
+ROLES_INTERNI = {"staff"}
 
 ROLE_TOOLS = {
     "staff": {
@@ -1721,6 +1809,18 @@ DEFAULT_ROLE = "staff"
 
 def _normalize_role(role: str) -> str:
     return role if role in ROLE_PROMPTS else DEFAULT_ROLE
+
+
+def _compose_system(role: str) -> str:
+    """System prompt del profilo. I nomi delle persone interne arrivano SOLO a
+    staff (STAFF_IDENTITY_BLOCK); agli altri profili arriva al suo posto il
+    divieto esplicito di nominarle (NO_NAMES_BLOCK)."""
+    role = _normalize_role(role)
+    parti = [SYSTEM_PROMPT]
+    parti.append(STAFF_IDENTITY_BLOCK if role in ROLES_INTERNI else NO_NAMES_BLOCK)
+    parti.append(ROLE_PROMPTS[role])
+    parti.append(TOOL_SYSTEM_SUFFIX)
+    return "\n\n".join(parti)
 
 
 def _bto_search_by_number(numero: str):
@@ -2011,19 +2111,36 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
     return out
 
 
-def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> str:
+def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "",
+                              role: str = DEFAULT_ROLE) -> str:
     query = argomento or user_message or ""
+
+    def _consegna(testo: str) -> str:
+        """Per i profili esterni il manuale esce SENZA nomi di persone interne:
+        la redazione avviene qui, sull'unica strada per cui il testo del manuale
+        raggiunge il modello."""
+        if _normalize_role(role) in ROLES_INTERNI:
+            return testo
+        pulito = redigi_nomi_interni(testo)
+        return (
+            pulito
+            + "\n\n[NOTA DI SISTEMA: i nomi delle persone interne sono stati "
+            "rimossi da questo materiale e NON vanno ricostruiti né ipotizzati. "
+            "Se l'utente chiede di persone, personale o organigramma, rimanda a "
+            "info@kanokimonos.com.]"
+        )
+
     # Domande sulle taglie: restituisci la GUIDA TAGLIE per intero (contigua),
     # perché il retrieval per-riga frammenta la tabella e la rende inaffidabile.
     if _is_size_query(f"{argomento or ''} {user_message or ''}"):
         guide = get_size_guide_block()
         if guide:
             extra = get_knowledge_context(query)
-            return guide + (("\n\n" + extra) if extra else "")
+            return _consegna(guide + (("\n\n" + extra) if extra else ""))
     context = get_knowledge_context(query)
     if not context:
         return "NESSUN_CONTENUTO: il manuale non contiene informazioni su questo argomento."
-    return context
+    return _consegna(context)
 
 
 # --- STATISTICHE AGGREGATE ORDINI CUSTOM (solo staff) ------------------------
@@ -3674,7 +3791,9 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
                 tool_input.get("numero"), tool_input.get("cliente")
             )
         if name == "rispondi_dal_manuale":
-            return tool_rispondi_dal_manuale(tool_input.get("argomento"), user_message)
+            return tool_rispondi_dal_manuale(
+                tool_input.get("argomento"), user_message, role
+            )
         return {"error": f"Strumento sconosciuto: {name}"}
     except Exception as e:
         return {"error": f"Errore nell'esecuzione di {name}: {str(e)}"}
@@ -3689,7 +3808,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
     active_tools = [t for t in CHAT_TOOLS if t["name"] in ROLE_TOOLS[role]]
 
     history = get_recent_messages(chat_id)
-    system = SYSTEM_PROMPT + "\n\n" + ROLE_PROMPTS[role] + "\n\n" + TOOL_SYSTEM_SUFFIX
+    system = _compose_system(role)
 
     messages = list(history)
     messages.append({"role": "user", "content": user_message})
