@@ -192,7 +192,13 @@ def normalize_custom_order(order: dict):
         "order_number": order.get("order_number"),
         "order_group_id": order.get("order_group_id"),
         "quantity": order.get("quantity"),
-        "status": order.get("status"),
+        # ATTENZIONE: 'status' della sorgente è un campo INTERNO di workflow
+        # (conferma preventivo/design) che resta quasi sempre fermo su
+        # 'pending_confirmation' anche per ordini prodotti, spediti e consegnati.
+        # NON indica l'avanzamento reale e NON va mai mostrato come stato dell'ordine:
+        # lo stato di business è order_status (etichette in CUSTOM_STATUS_LABELS).
+        # Rinominato apposta perché nessuno lo legga per sbaglio come "stato".
+        "workflow_status_interno": order.get("status"),
         "order_status": order.get("order_status"),
         "payment_status": order.get("payment_status"),
         "customer_name": f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
@@ -596,9 +602,12 @@ def format_custom_orders_summary(orders: list) -> str:
             product_parts.append(f"{p['name']} (x{qty})" if qty is not None else p["name"])
         product_str = ", ".join(product_parts) or "N/A"
         date_str = (order.get("created_at") or "N/A")[:10]
+        # Stato di business REALE = order_status, NON il campo workflow stale 'status'.
+        os_code = order.get("order_status")
+        os_label = CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A")
         lines.append(
             f"• {order.get('order_number') or order.get('id') or 'N/A'} | "
-            f"stato: {order.get('status') or 'N/A'} | "
+            f"stato: {os_label}" + (f" [{os_code}]" if os_code else "") + " | "
             f"pagamento: {order.get('payment_status') or 'N/A'} | "
             f"{product_str} | "
             f"{date_str}"
@@ -1085,7 +1094,10 @@ def format_address(address: dict) -> str:
 def format_order_for_human(order: dict) -> str:
     lines = []
     lines.append(f"Ordine: {order.get('id')}")
-    lines.append(f"Stato: {order.get('status')}")
+    # Qui 'status' è lo stato NATIVO WooCommerce (piattaforma diversa dagli ordini
+    # custom): è attendibile per il catalogo, ma non va confuso con order_status
+    # degli ordini custom di kanokimonos.app.
+    lines.append(f"Stato WooCommerce: {order.get('status')}")
     lines.append(f"Data ordine: {order.get('date_created')}")
     lines.append(f"Totale: {order.get('total')} {order.get('currency')}")
     lines.append(f"Metodo pagamento: {order.get('payment_method_title') or 'N/A'}")
@@ -1245,7 +1257,14 @@ CHAT_TOOLS = [
             "di chiedere chiarimenti: se X è un cliente lo trovi subito, e se non lo è "
             "l'elenco torna vuoto e solo allora chiedi cosa intende. "
             "Restituisce dati strutturati (inclusi i prodotti) che puoi poi filtrare "
-            "tu, ad esempio per mostrare solo gli ordini che contengono certi prodotti."
+            "tu, ad esempio per mostrare solo gli ordini che contengono certi prodotti.\n"
+            "STATO: leggilo SOLO da 'stato_descrizione' (derivato da order_status). "
+            "pending=in lavorazione grafica/taglie, processing=in produzione, "
+            "shipped_to_logistics=in viaggio verso la logistica (Fully), at_logistics=da "
+            "Fully pronti a partire, shipped_to_customer/shipped=già spediti al cliente, "
+            "cancelled=annullato. NON esiste nessun campo 'in attesa di conferma': non "
+            "dire mai che un ordine aspetta l'approvazione del cliente se "
+            "'stato_descrizione' dice che è in produzione o spedito."
         ),
         "input_schema": {
             "type": "object",
@@ -1710,10 +1729,17 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
         return {"error": res["error"], "ordini": []}
     ordini = []
     for o in res.get("results", []):
+        # Stato di business REALE = order_status (stesse etichette della scheda
+        # ordine e delle statistiche). Il campo workflow 'status' NON viene esposto:
+        # è stale (quasi sempre 'pending_confirmation') e faceva dire al bot
+        # "in attesa di conferma" su ordini già prodotti e spediti.
+        os_code = o.get("order_status")
         ordini.append({
             "order_number": o.get("order_number") or o.get("id"),
             "customer_name": o.get("customer_name"),
-            "status": o.get("status"),
+            "order_status": os_code,
+            "stato_descrizione": CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A"),
+            "partito_al_cliente": os_code in ("shipped_to_customer", "shipped"),
             "payment_status": o.get("payment_status"),
             "created_at": o.get("created_at"),
             "products": [
@@ -1726,7 +1752,16 @@ def tool_cerca_ordini_per_cliente(nome: str) -> dict:
                 for p in (o.get("products") or [])
             ],
         })
-    return {"cliente": nome, "totale": len(ordini), "ordini": ordini}
+    return {
+        "cliente": nome,
+        "totale": len(ordini),
+        "ordini": ordini,
+        "nota_stato": (
+            "Lo stato di avanzamento di ogni ordine è 'stato_descrizione' (ricavato da "
+            "order_status). Non esiste nessun altro campo di stato: non dire mai che un "
+            "ordine è 'in attesa di conferma' se stato_descrizione dice altro."
+        ),
+    }
 
 
 def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "") -> str:
