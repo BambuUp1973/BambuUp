@@ -346,46 +346,9 @@ def search_custom_orders_by_name(name: str, limit: int = 1000):
     ]
     return {"results": filtered}
 
-def get_bto_resource(params: dict):
-    if not BTO_API_KEY:
-        return {"error": "BTO_API_KEY non configurata."}
-
-    headers = {"x-api-key": BTO_API_KEY}
-
-    try:
-        response = requests.get(
-            BTO_API_URL,
-            headers=headers,
-            params=params,
-            timeout=60,
-        )
-    except Exception as e:
-        return {"error": f"Errore connessione btoweb: {str(e)}"}
-
-    if response.status_code != 200:
-        return {"error": f"btoweb API error {response.status_code}", "details": response.text}
-
-    try:
-        data = response.json()
-    except Exception:
-        return {"error": "Risposta btoweb non valida (non JSON)", "details": response.text}
-
-    if isinstance(data, list):
-        return {"results": data}
-    if isinstance(data, dict):
-        for key in ("results", "data", "orders"):
-            if isinstance(data.get(key), list):
-                return {"results": data[key]}
-        if data.get("error"):
-            return data
-        return {"results": [data]}
-    return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
-
-
 def _bto_get(params: dict):
     """Chiamata grezza alla edge function btoweb: restituisce il JSON completo
-    (data + count/total/disclaimer/source). get_bto_resource appiattisce tutto in
-    'results' e perde il disclaimer di stock, che qui va invece propagato."""
+    (data + count/total/disclaimer/source), disclaimer di stock incluso."""
     if not BTO_API_KEY:
         return {"error": "BTO_API_KEY non configurata."}
 
@@ -412,78 +375,6 @@ def _bto_get(params: dict):
     if isinstance(data, dict):
         return data
     return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
-
-
-def search_bto_orders_all():
-    return get_bto_resource({})
-
-
-def format_bto_orders_summary(result: dict) -> str:
-    if result.get("error"):
-        return f"Errore btoweb: {result['error']}"
-
-    rows = result.get("results", [])
-    if not rows:
-        return "Nessun ordine btoweb trovato."
-
-    # Group rows by order_number (fallback to id) since each size is a separate row
-    grouped = {}
-    order_keys = []
-    for row in rows:
-        if not isinstance(row, dict):
-            key = str(row)
-            if key not in grouped:
-                grouped[key] = {"_raw": row, "_items": []}
-                order_keys.append(key)
-            continue
-        key = str(row.get("order_number") or row.get("id") or id(row))
-        if key not in grouped:
-            grouped[key] = {**row, "_items": []}
-            order_keys.append(key)
-        # collect product/size/qty info from this row
-        item_parts = []
-        for f in ("product", "product_name", "item", "item_name", "description"):
-            v = row.get(f)
-            if v:
-                item_parts.append(str(v))
-                break
-        for f in ("size", "taglia"):
-            v = row.get(f)
-            if v:
-                item_parts.append(str(v))
-                break
-        for f in ("quantity", "qty", "quantita", "quantità"):
-            v = row.get(f)
-            if v:
-                item_parts.append(f"×{v}")
-                break
-        if item_parts:
-            grouped[key]["_items"].append(" ".join(item_parts))
-
-    lines = [
-        f"Ordini di FABBRICA su btoweb ({len(grouped)} trovati) — piattaforma "
-        "btoweb, ordini verso i produttori, non ordini di clienti finali:"
-    ]
-    for key in order_keys:
-        o = grouped[key]
-        if o.get("_raw") is not None:
-            lines.append(f"• {o['_raw']}")
-            continue
-        order_num = o.get("order_number") or o.get("id") or key
-        producer = o.get("producer") or o.get("produttore") or ""
-        status = o.get("status") or o.get("stato") or ""
-        items = o.get("_items", [])
-        products_str = ", ".join(items) if items else ""
-        parts = [f"N° {order_num}"]
-        if producer:
-            parts.append(producer)
-        if status:
-            parts.append(status)
-        if products_str:
-            parts.append(products_str)
-        lines.append("• " + " | ".join(parts))
-
-    return "\n".join(lines)
 
 
 def yes_no_unknown(value):
@@ -1387,7 +1278,10 @@ CHAT_TOOLS = [
             "Piattaforme:\n"
             "- 'custom' (kanokimonos.app): numeri con trattini tipo 0495-05-26-A\n"
             "- 'woocommerce': numeri puri (solo cifre) del sito web\n"
-            "- 'btoweb': ordini di fabbrica/produttore, numeri tipo 062026-0004\n"
+            "- 'btoweb': ordini di fabbrica/produttore, numeri tipo 062026-0004 "
+            "(sei cifre, trattino, quattro cifre). Per questi PREFERISCI lo strumento "
+            "dedicato ordine_fabbrica_per_numero, che torna anche taglie, SKU, colore, "
+            "conferme e note.\n"
             "Se non sei sicuro della piattaforma, ometti 'piattaforma': verrà "
             "dedotta dal formato del numero."
         ),
@@ -1531,6 +1425,13 @@ CHAT_TOOLS = [
             "<numero>?', 'quanti <prodotto> sono in produzione?'. "
             "Passa 'sku' per la ricerca esatta di uno SKU/EAN, altrimenti 'query' con le "
             "parole chiave del nome prodotto. "
+            "QUI DENTRO NON CI SONO ORDINI: è l'anagrafica dei prodotti. Uno SKU/EAN è un "
+            "numero lungo di sole cifre (es. 7427115006810); un numero fatto da sei cifre, "
+            "un trattino e quattro cifre (es. 082026-0002, 122025-0007) NON è uno SKU: è un "
+            "ORDINE DI FABBRICA (batch) e si cerca con ordine_fabbrica_per_numero. "
+            "Se una ricerca per SKU/EAN non trova nulla e il valore somiglia a un numero di "
+            "batch, RIPROVA SUBITO con ordine_fabbrica_per_numero prima di rispondere che "
+            "non trovi niente (stessa regola già valida fra produttori e clienti). "
             "tipo='prodotti' (default) = anagrafica; tipo='produzione' = contatori di produzione. "
             "REGOLA CRITICA su tipo='produzione': i numeri restituiti sono contatori della "
             "PIPELINE DI PRODUZIONE, NON la giacenza vendibile a magazzino. 'in_produzione' = "
@@ -1572,6 +1473,10 @@ CHAT_TOOLS = [
             "Usalo per domande tipo 'cosa deve arrivare da <produttore>?', 'quali ordini "
             "ha in produzione <produttore>?', 'quando arriva la merce di <produttore>?', "
             "'ordini di <produttore>'.\n"
+            "SERVE IL NOME DI UN PRODUTTORE. Se l'utente ti ha dato un NUMERO di batch/"
+            "ordine (es. 082026-0002) NON serve questo strumento e soprattutto NON chiedere "
+            "di quale produttore sia: usa ordine_fabbrica_per_numero, che il produttore te "
+            "lo restituisce.\n"
             "PRODUTTORI (sono FORNITORI, NON clienti): Martin, 7punch (chiamato anche "
             "Seventh Punch), Wearica, Tussle (nei dati di btoweb compare come "
             "tusslesports@gmail.com), Fair Tex. Se l'utente nomina uno di questi NON usare "
@@ -1607,6 +1512,57 @@ CHAT_TOOLS = [
                 },
             },
             "required": ["produttore"],
+        },
+    },
+    {
+        "name": "ordine_fabbrica_per_numero",
+        "description": (
+            "Ordine di FABBRICA btoweb cercato per NUMERO di batch/ordine. Un numero "
+            "fatto da sei cifre, un trattino e quattro cifre (es. 082026-0002, "
+            "122025-0007, 062026-0004) È un ordine di fabbrica: cercalo QUI. Non è uno "
+            "SKU, non è un EAN e non è un numero d'ordine cliente.\n"
+            "Usalo per 'cosa contiene il batch <numero>?', 'cosa c'è nell'ordine di "
+            "fabbrica <numero>?', 'com'è messo il batch <numero>?' e anche quando "
+            "l'utente scrive SOLO il numero senza altro.\n"
+            "IL PRODUTTORE NON SI CHIEDE: sta dentro l'ordine e torna nel campo "
+            "'produttore'. Se hai il numero hai già tutto quello che serve per "
+            "chiamare questo strumento: chiamalo e basta. Vale anche se l'utente "
+            "precisa 'è un ordine di fabbrica' in un secondo messaggio: il numero te "
+            "l'ha già dato prima, riusalo invece di richiederlo.\n"
+            "Accetta anche un numero PARZIALE: '082026' restituisce tutti i batch di "
+            "quel mese (risposta con 'ricerca_parziale': true e l'elenco degli ordini; "
+            "per il dettaglio taglie richiama lo strumento con il numero completo).\n"
+            "Cosa torna: prodotti con TAGLIA, quantità ordinata, SKU e colore, più "
+            "produttore, stato, data di arrivo prevista, conferme di ricezione e note. "
+            "Come riportarlo:\n"
+            "- Di' SEMPRE fin dalla prima riga che è un ordine di FABBRICA su btoweb "
+            "(merce ordinata a un produttore), non un ordine di un cliente.\n"
+            "- Stati: 'nuovo' = creato ma non avviato, 'in_produzione' = in lavorazione "
+            "dal fornitore, 'spedito' = già partito dal produttore.\n"
+            "- 'origine_quantita_products_source' (size_lines / sizes / "
+            "production_quantities) dice DA DOVE arrivano le quantità: dichiaralo, non "
+            "darlo per scontato. Lo SKU esiste solo con size_lines; la quantità "
+            "PRODOTTA solo dove la fonte la registra: se manca parla solo di pezzi "
+            "ORDINATI.\n"
+            "- Le 'conferme_ricezione' riguardano l'ordine su btoweb e NON provano che "
+            "la merce sia arrivata in magazzino: per l'arrivo serve tracciamento_fully.\n"
+            "- 'trovato': false = quel numero NON esiste su btoweb: dillo, non "
+            "inventare il contenuto e non spacciare per lui un altro numero simile.\n"
+            "Questa fonte NON contiene prezzi."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "numero": {
+                    "type": "string",
+                    "description": (
+                        "Numero del batch/ordine di fabbrica così come l'ha scritto "
+                        "l'utente (es. '082026-0002'), oppure il prefisso mese/anno "
+                        "per la ricerca parziale (es. '082026')."
+                    ),
+                },
+            },
+            "required": ["numero"],
         },
     },
     {
@@ -1703,6 +1659,8 @@ CHAT_TOOLS = [
 TOOL_SYSTEM_SUFFIX = """
 STRUMENTI E ONESTÀ
 Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni dal manuale. Regole:
+- NON CHIEDERE MAI ALL'UTENTE UN DATO CHE PUOI RICAVARE DA SOLO CON I TUOI STRUMENTI. Vale ovunque, per ogni strumento. Prima di fare una domanda di chiarimento fermati e chiediti: "questo dato sta dentro qualcosa che mi ha già dato?". Se l'utente ti ha dato un numero, un nome o un identificativo, il resto (produttore, cliente, prodotti, stato, piattaforma) è dentro il record: si cerca, non si chiede. Esempio concreto: l'utente chiede cosa contiene un ordine di fabbrica e ti dà il numero → il produttore è DENTRO quell'ordine, quindi chiamare lo strumento e leggerlo, MAI rispondere "da quale produttore?". Chiedere è consentito solo in tre casi: (a) il dato non esiste a sistema, (b) hai già cercato e restano più candidati davvero ambigui, (c) l'utente non ti ha dato nessun identificativo utilizzabile. In tutti gli altri casi la domanda è un errore: cerca. E se l'identificativo l'ha dato in un messaggio PRECEDENTE della conversazione, riusalo: non farglielo ripetere.
+- PRECISAZIONI E FRAMMENTI, REGOLA MECCANICA: se il messaggio dell'utente è un frammento o una precisazione senza un nuovo identificativo ("ordine fabbrica", "è un ordine di fabbrica", "quello di prima", "sì", "il batch"), NON chiedere di nuovo il numero o il nome: RIPRENDI dalla conversazione l'ultimo identificativo che l'utente ha scritto, richiama lo strumento coerente con la precisazione e rispondi con i dati. Chiedere di ripetere un dato che l'utente ha già scritto in chat è sempre un errore. Se non capisci cosa vuole ma un identificativo c'è, cerca quell'identificativo e mostra cosa hai trovato: è sempre meglio di una domanda.
 - Per QUALSIASI richiesta su un ordine (numero) o su un cliente (nome), chiama lo strumento giusto. Non inventare mai lo stato di un ordine.
 - Usa SOLO i dati restituiti dagli strumenti. Se uno strumento non restituisce risultati, dillo onestamente (es. "Non trovo ordini per X").
 - Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A). Se l'utente fornisce solo una parte (es. solo "0495"), NON chiamare lo strumento con il valore parziale: chiedi il numero completo invece di indovinare.
@@ -1717,6 +1675,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 - CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
 - ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli. ATTENZIONE al caso opposto: i produttori sono POCHI e NOTI (Martin, 7punch/Seventh Punch, Wearica, Tussle, Fair Tex), quindi se lo strumento risponde 'trovato: false' quel nome quasi certamente NON è un produttore ma un CLIENTE (persona, palestra, ASD, azienda): riprova SUBITO con cerca_ordini_per_cliente prima di dire all'utente che non risulta nulla. Non chiudere mai con "non lo trovo" avendo provato una sola delle due strade.
+- ORDINI DI FABBRICA PER NUMERO (ordine_fabbrica_per_numero, solo STAFF): un numero di sei cifre + trattino + quattro cifre (082026-0002, 122025-0007, 062026-0004) è un ORDINE DI FABBRICA btoweb, cioè un BATCH di merce ordinata a un produttore. Quando l'utente lo cita — anche da solo, anche solo dicendo "batch" o "ordine fabbrica" — usa questo strumento. NON è uno SKU/EAN (quelli sono numeri di sole cifre) e non è un ordine cliente. E NON CHIEDERE MAI IL PRODUTTORE: il produttore è dentro l'ordine e te lo restituisce lo strumento. Riporta prodotti, taglie, quantità ordinate, SKU e colore come tornano dallo strumento, dichiara che è un ordine di FABBRICA su btoweb, dichiara l'origine delle quantità ('origine_quantita_products_source': size_lines / sizes / production_quantities) e non spacciare le conferme di ricezione registrate su btoweb per prove che la merce sia arrivata in magazzino. Se lo strumento risponde 'trovato': false quel numero non esiste su btoweb: dillo, senza inventare e senza sostituirlo con un numero simile.
+- SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
 """
 
@@ -1762,7 +1722,7 @@ ROLE_TOOLS = {
     "staff": {
         "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
         "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
-        "ordini_per_produttore", "tracciamento_fully",
+        "ordini_per_produttore", "ordine_fabbrica_per_numero", "tracciamento_fully",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
     "retail": {"rispondi_dal_manuale"},
@@ -1792,20 +1752,6 @@ def _compose_system(role: str) -> str:
     parti.append(ROLE_PROMPTS[role])
     parti.append(TOOL_SYSTEM_SUFFIX)
     return "\n\n".join(parti)
-
-
-def _bto_search_by_number(numero: str):
-    """btoweb non ha una ricerca per numero: prende tutti gli ordini e filtra."""
-    data = search_bto_orders_all()
-    if data.get("error"):
-        return data
-    numero_clean = numero.strip().lower()
-    filtered = [
-        row for row in data.get("results", [])
-        if isinstance(row, dict)
-        and str(row.get("order_number", "")).strip().lower() == numero_clean
-    ]
-    return {"results": filtered}
 
 
 def _first_product_name(o: dict) -> str:
@@ -1886,22 +1832,29 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
             return format_order_for_human(res["results"][0])
         return None
 
-    def _fmt_bto(res):
+    def _fmt_bto(numero):
+        """Ordine di fabbrica: stessa ricerca per numero dello strumento dedicato,
+        così le due porte d'ingresso non danno risposte diverse."""
+        res = tool_ordine_fabbrica_per_numero(numero)
         if res.get("error"):
             return f"Errore btoweb: {res['error']}"
-        if res.get("results"):
-            return format_bto_orders_summary(res)
-        return None
+        return format_bto_order_card(res) or None
 
     if piattaforma == "custom":
         return _fmt_custom(numero) or f"Non ho trovato l'ordine custom {numero}."
     if piattaforma == "woocommerce":
         return _fmt_wc(search_orders_by_id(numero)) or f"Non ho trovato l'ordine WooCommerce {numero}."
     if piattaforma == "btoweb":
-        return _fmt_bto(_bto_search_by_number(numero)) or f"Non ho trovato l'ordine btoweb {numero}."
+        return _fmt_bto(numero) or f"Non ho trovato l'ordine di fabbrica btoweb {numero}."
 
     # Auto: deduci dal formato (stessa logica del vecchio routing regex),
     # saltando le piattaforme vietate per la modalità corrente.
+    # Un numero in formato batch (082026-0002) è un ordine di FABBRICA: si prova
+    # btoweb per primo, invece di scaricare prima tutti gli ordini custom.
+    if "btoweb" not in blocked and _BTO_NUMERO_BATCH_RE.match(numero):
+        bto = _fmt_bto(numero)
+        if bto:
+            return bto
     if "custom" not in blocked:
         custom = _fmt_custom(numero)
         if custom:
@@ -1911,7 +1864,7 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
         if wc:
             return wc
     if "btoweb" not in blocked:
-        bto = _fmt_bto(_bto_search_by_number(numero))
+        bto = _fmt_bto(numero)
         if bto:
             return bto
     consentite = [p for p in ("custom", "WooCommerce", "btoweb") if p.lower() not in blocked]
@@ -2463,13 +2416,24 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
             return res
         rows = [r for r in (res.get("data") or []) if isinstance(r, dict)]
         if not rows:
+            nota = f"Nessun prodotto in anagrafica btoweb con SKU/EAN {sku_clean}."
+            # Un valore in forma di batch (082026-0002) non è uno SKU: prima di
+            # dire "non trovo niente" va provata l'altra strada, come già si fa
+            # fra produttori e clienti.
+            if _BTO_NUMERO_BATCH_RE.match(sku_clean):
+                nota += (
+                    f" ATTENZIONE: '{sku_clean}' NON ha la forma di uno SKU/EAN (sole "
+                    "cifre): ha la forma di un numero di ORDINE DI FABBRICA (batch). "
+                    "NON rispondere che non trovi niente: richiama SUBITO "
+                    "ordine_fabbrica_per_numero con questo numero."
+                )
             return {
                 "tipo": "anagrafica_prodotti",
                 "sku_cercato": sku_clean,
                 "trovato": False,
                 "totale": 0,
                 "risultati": [],
-                "nota": f"Nessun prodotto in anagrafica btoweb con SKU/EAN {sku_clean}.",
+                "nota": nota,
                 "nota_prezzi": _BTO_NOTA_PREZZI,
             }
         return {
@@ -2939,6 +2903,528 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
             "prima dei dati, es. \"interpreto '%s' come %s\"." % (q, corrispondenti[0])
         )
     return out
+
+
+# --- ORDINI DI FABBRICA PER NUMERO (batch) -----------------------------------
+# Un ordine di fabbrica btoweb torna come PIÙ righe con lo stesso order_number:
+# ogni riga è un articolo (prodotto + colore) e dentro 'products' ha una riga per
+# taglia. Produttore, stato, data e conferme stanno DENTRO le righe dell'ordine:
+# chi ha il numero ha già il produttore, quindi il produttore non si chiede mai
+# all'utente, si legge.
+
+# 082026-0002, 122025-0007: sei cifre (mese+anno) - quattro cifre progressive.
+_BTO_NUMERO_BATCH_RE = re.compile(r"^\d{6}\s*-\s*\d{1,4}$")
+# Prefisso mese/anno da solo ('082026'): ricerca parziale, tutti i batch del mese.
+_BTO_NUMERO_PREFISSO_RE = re.compile(r"^\d{6}$")
+
+# I tre valori di products_source dichiarano DA DOVE arrivano le quantità della
+# riga. Le differenze qui sotto sono verificate sui dati reali (1840 righe):
+# lo SKU esiste solo su size_lines, la quantità prodotta solo dove la fonte la
+# registra. Vanno dichiarate, non date per scontate.
+_BTO_PRODUCTS_SOURCE_LABELS = {
+    "size_lines": (
+        "quantità lette dalle righe-taglia del batch: è l'unica sorgente che porta "
+        "anche lo SKU (e spesso il colore) di ogni taglia"
+    ),
+    "sizes": (
+        "quantità lette dalla ripartizione taglie del prodotto: niente SKU e niente "
+        "quantità prodotta, solo taglia e quantità ordinata"
+    ),
+    "production_quantities": (
+        "quantità lette dai conteggi di produzione del fornitore: niente SKU, ma è "
+        "la sorgente dove la quantità PRODOTTA è valorizzata"
+    ),
+}
+
+_BTO_MAX_RIGHE_TAGLIA = 150
+_BTO_MAX_ORDINI_ELENCO = 30
+
+
+def _bto_num_norm(value) -> str:
+    """Numero d'ordine confrontabile: minuscolo, senza spazi né accenti."""
+    return re.sub(r"\s+", "", _bto_norm_producer(value))
+
+
+def _bto_num_squash(value) -> str:
+    """Solo cifre e lettere: '082026 0002' e '082026-0002' diventano uguali."""
+    return re.sub(r"[^a-z0-9]+", "", _bto_num_norm(value))
+
+
+def _bto_righe_per_numero(numero: str):
+    """Righe btoweb del numero cercato. Usa il filtro order_number della edge
+    function (supporta anche il parziale) e RIFILTRA lato bot come gli altri
+    strumenti: il filtro server-side non è un'autorizzazione a fidarsi. Se il
+    filtro non restituisce nulla si riscarica tutto e si filtra qui, così un
+    filtro che smettesse di funzionare non diventa un falso 'non esiste'."""
+    q = _bto_num_norm(numero)
+    qs = _bto_num_squash(numero)
+
+    rows, meta = _bto_get_paged({"resource": "orders", "order_number": numero.strip()})
+    if rows is None:
+        return None, meta, []
+
+    def _filtra(righe):
+        esatte = [
+            r for r in righe
+            if _bto_num_norm(r.get("order_number")) == q
+            or _bto_num_norm(r.get("batch_name")) == q
+            or (qs and (_bto_num_squash(r.get("order_number")) == qs
+                        or _bto_num_squash(r.get("batch_name")) == qs))
+        ]
+        if esatte:
+            return esatte, True
+        parziali = [
+            r for r in righe
+            if q and (q in _bto_num_norm(r.get("order_number"))
+                      or q in _bto_num_norm(r.get("batch_name")))
+        ]
+        return parziali, False
+
+    sel, esatto = _filtra(rows)
+    tutte = rows
+    if not sel:
+        tutte, meta2 = _bto_get_paged({"resource": "orders"})
+        if tutte is None:
+            return None, meta2, []
+        sel, esatto = _filtra(tutte)
+    return sel, {"esatto": esatto}, tutte
+
+
+def _bto_dedup_righe(righe: list) -> list:
+    """La fonte può ripetere la stessa identica riga N volte: senza dedup le
+    quantità verrebbero moltiplicate (stessa cautela di ordini_per_produttore)."""
+    viste, out = set(), []
+    for r in righe:
+        firma = json.dumps(r, ensure_ascii=False, sort_keys=True, default=str)
+        if firma in viste:
+            continue
+        viste.add(firma)
+        out.append(r)
+    return out
+
+
+def _bto_valori(righe: list, campo: str) -> list:
+    """Valori distinti di un campo, nell'ordine in cui compaiono. I campi
+    d'ordine (produttore, stato, data) sono ripetuti su ogni riga: quasi sempre
+    uno solo, ma se la fonte ne ha due non si sceglie, si dichiarano entrambi."""
+    out = []
+    for r in righe:
+        v = r.get(campo)
+        if isinstance(v, str):
+            v = v.strip() or None
+        if v is not None and v not in out:
+            out.append(v)
+    return out
+
+
+def _bto_uno(valori: list):
+    return valori[0] if len(valori) == 1 else (valori or None)
+
+
+def _bto_articoli(righe: list) -> tuple:
+    """Righe -> articoli. Ogni articolo è un prodotto+colore con le sue taglie:
+    taglia, SKU, quantità ordinata e quantità prodotta. La taglia si legge da
+    'size' ('category' è solo un alias dello stesso valore)."""
+    gruppi, chiavi = {}, []
+    righe_taglia = 0
+    for r in righe:
+        nota = (r.get("notes") or "").strip() or None
+        for p in (r.get("products") or []):
+            if not isinstance(p, dict):
+                continue
+            nome = (p.get("name") or "").strip() or "(senza nome)"
+            colore = (p.get("colour") or "").strip() or None
+            k = (nome, colore)
+            if k not in gruppi:
+                gruppi[k] = {
+                    "prodotto": nome,
+                    "colore": colore,
+                    "origine_quantita": [],
+                    "note_fonte": [],
+                    "taglie": [],
+                }
+                chiavi.append(k)
+            g = gruppi[k]
+            src = p.get("source") or r.get("products_source")
+            if src and src not in g["origine_quantita"]:
+                g["origine_quantita"].append(src)
+            if nota and nota not in g["note_fonte"]:
+                g["note_fonte"].append(nota)
+            # 'category' è l'alias di 'size': si legge size e si tiene category
+            # solo come ripiego se size non fosse valorizzata.
+            taglia = (p.get("size") or p.get("category") or "").strip() or None
+            try:
+                qty = int(p.get("quantity_ordered") if p.get("quantity_ordered") is not None
+                          else (p.get("quantity") or 0))
+            except (TypeError, ValueError):
+                qty = 0
+            prodotta = p.get("quantity_produced")
+            try:
+                prodotta = int(prodotta) if prodotta is not None else None
+            except (TypeError, ValueError):
+                prodotta = None
+            riga = {
+                "taglia": taglia,
+                "sku": (p.get("sku") or None),
+                "quantita_ordinata": qty,
+                "quantita_prodotta": prodotta,
+            }
+            g["taglie"].append(riga)
+            righe_taglia += 1
+
+    articoli = []
+    for k in chiavi:
+        g = gruppi[k]
+        g["pezzi_ordinati"] = sum(t["quantita_ordinata"] for t in g["taglie"])
+        prodotte = [t["quantita_prodotta"] for t in g["taglie"] if t["quantita_prodotta"] is not None]
+        g["pezzi_prodotti"] = sum(prodotte) if prodotte else None
+        if not any(t["sku"] for t in g["taglie"]):
+            g["nota_sku"] = (
+                "SKU NON valorizzato alla fonte per questo articolo (origine "
+                "quantità: %s): dillo, non inventarlo e non prenderlo dal catalogo."
+                % ", ".join(g["origine_quantita"] or ["non dichiarata"])
+            )
+        if g["pezzi_prodotti"] is None:
+            g["nota_quantita_prodotta"] = (
+                "Quantità PRODOTTA non valorizzata alla fonte: sai solo quanto è "
+                "stato ordinato, non quanto è stato prodotto."
+            )
+        if not g["note_fonte"]:
+            g.pop("note_fonte")
+        articoli.append(g)
+    return articoli, righe_taglia
+
+
+def _bto_scheda_ordine(numero: str, righe: list) -> dict:
+    """Scheda completa di un ordine di fabbrica: produttore, stato, data attesa,
+    conferme di ricezione, note e articoli con taglia/SKU/quantità."""
+    righe = _bto_dedup_righe(righe)
+    articoli, n_taglie = _bto_articoli(righe)
+
+    stati = _bto_valori(righe, "status")
+    produttori = _bto_valori(righe, "producer")
+    date = _bto_valori(righe, "expected_arrival_date")
+    sorgenti = _bto_valori(righe, "products_source")
+
+    pezzi = sum(a["pezzi_ordinati"] for a in articoli)
+    prodotti_val = [a["pezzi_prodotti"] for a in articoli if a["pezzi_prodotti"] is not None]
+
+    # Controprova: 'totals' è dichiarato dalla fonte riga per riga. Se la somma
+    # delle quantità non torna con la somma dei totals, il dato va guardato, non
+    # spacciato per buono.
+    tot_fonte = 0
+    tot_fonte_visto = False
+    tot_prodotti_fonte, tot_prodotti_visto = 0, False
+    for r in righe:
+        t = r.get("totals") or {}
+        if t.get("qty_ordered") is not None:
+            try:
+                tot_fonte += int(t["qty_ordered"])
+                tot_fonte_visto = True
+            except (TypeError, ValueError):
+                pass
+        if t.get("qty_produced") is not None:
+            try:
+                tot_prodotti_fonte += int(t["qty_produced"])
+                tot_prodotti_visto = True
+            except (TypeError, ValueError):
+                pass
+
+    # Le conferme si leggono a parte e non con _bto_valori: un False è un "No"
+    # da dire, non un valore da scartare.
+    conf_prod = sorted({bool(r.get("producer_confirmed_receipt")) for r in righe}, reverse=True)
+    conf_batch = sorted({bool(r.get("batch_receipt_confirmed")) for r in righe}, reverse=True)
+
+    def _conferma(valori):
+        if len(valori) == 1:
+            return "Sì" if valori[0] else "No"
+        return "parziale (righe dell'ordine discordi alla fonte)"
+
+    # La conferma è registrata articolo per articolo, quindi i timestamp sono
+    # tanti e a pochi secondi l'uno dall'altro: si dichiara il primo, e l'ultimo
+    # solo se è un momento diverso. Elencarli tutti sarebbe rumore.
+    momenti = sorted(_bto_valori(righe, "producer_confirmed_at"))
+    conf_quando = momenti[0] if momenti else None
+
+    stato = _bto_uno(stati)
+    scheda = {
+        "numero_ordine": numero,
+        "piattaforma": "btoweb (ordine di FABBRICA verso il produttore, non un ordine di un cliente)",
+        "produttore": _bto_uno(produttori),
+        "stato": stato,
+        "stato_descrizione": _BTO_ORDER_STATUS_LABELS.get(stato, stato),
+        "stato_lato_produttore": _bto_uno(_bto_valori(righe, "producer_status")),
+        "data_arrivo_prevista": _bto_uno(date),
+        "conferme_ricezione": {
+            "il_produttore_ha_confermato_di_aver_preso_in_carico_l_ordine": _conferma(conf_prod),
+            "confermato_il": conf_quando,
+            "ultima_conferma_il": momenti[-1] if len(momenti) > 1 else None,
+            "ricezione_batch_confermata_su_btoweb": _conferma(conf_batch),
+            "attenzione": (
+                "Sono conferme registrate SU BTOWEB sull'ordine/batch: NON sono la "
+                "prova che la merce sia arrivata fisicamente in magazzino. L'arrivo "
+                "della merce si verifica solo con tracciamento_fully."
+            ),
+        },
+        "mesi_di_copertura": _bto_uno(_bto_valori(righe, "supply_months")),
+        "note_fonte": _bto_valori(righe, "notes")[:6],
+        "origine_quantita_products_source": sorgenti,
+        "origine_quantita_significato": {
+            s: _BTO_PRODUCTS_SOURCE_LABELS.get(s, "valore non previsto: dichiaralo così com'è")
+            for s in sorgenti
+        },
+        "articoli_totali": len(articoli),
+        "righe_taglia_totali": n_taglie,
+        "pezzi_ordinati_totali": pezzi,
+        "pezzi_prodotti_totali": sum(prodotti_val) if prodotti_val else None,
+        "articoli": articoli,
+    }
+
+    if not date:
+        scheda["nota_data"] = "Data di arrivo prevista NON valorizzata alla fonte btoweb."
+    if not articoli:
+        scheda["nota_prodotti"] = (
+            "Dettaglio prodotti NON valorizzato alla fonte per questo ordine: dillo, "
+            "non dedurre cosa contiene."
+        )
+    if scheda["pezzi_prodotti_totali"] is None:
+        scheda["nota_pezzi_prodotti"] = (
+            "La fonte non registra la quantità prodotta per questo ordine (succede "
+            "quando l'origine delle quantità non è production_quantities): parla solo "
+            "di pezzi ORDINATI."
+        )
+    if tot_fonte_visto:
+        scheda["totale_dichiarato_dalla_fonte"] = tot_fonte
+        scheda["controprova_totali"] = (
+            "coerente: la somma delle quantità per taglia coincide con il totale "
+            "dichiarato dalla fonte (%d)" % tot_fonte
+            if tot_fonte == pezzi
+            else "DISCREPANZA: somma delle taglie %d, totale dichiarato dalla fonte %d. "
+            "Segnalala, non scegliere tu quale sia buono." % (pezzi, tot_fonte)
+        )
+    if tot_prodotti_visto:
+        scheda["totale_prodotto_dichiarato_dalla_fonte"] = tot_prodotti_fonte
+    if _UUID_RE.match(str(numero)):
+        scheda["nota_numero"] = (
+            "Numero d'ordine non valorizzato alla fonte: questo è l'id tecnico interno."
+        )
+    if n_taglie > _BTO_MAX_RIGHE_TAGLIA:
+        tenute = 0
+        for a in scheda["articoli"]:
+            resta = max(0, _BTO_MAX_RIGHE_TAGLIA - tenute)
+            if len(a["taglie"]) > resta:
+                a["taglie_non_mostrate"] = len(a["taglie"]) - resta
+                a["taglie"] = a["taglie"][:resta]
+            tenute += len(a["taglie"])
+        scheda["nota_troncamento"] = (
+            "Ordine molto grande: mostrate le prime %d righe-taglia su %d. I totali "
+            "sopra sono calcolati su TUTTE le righe." % (_BTO_MAX_RIGHE_TAGLIA, n_taglie)
+        )
+    return scheda
+
+
+def tool_ordine_fabbrica_per_numero(numero: str = None) -> dict:
+    """Ordine di FABBRICA btoweb cercato per numero di batch/ordine (solo staff).
+    Accetta anche un numero parziale ('082026' = tutti i batch di agosto 2026).
+    Il produttore è un RISULTATO, non un ingresso: non va chiesto all'utente."""
+    q = (numero or "").strip()
+    if not q:
+        return {"error": "Serve il numero dell'ordine di fabbrica (batch) da cercare."}
+
+    righe, meta, tutte = _bto_righe_per_numero(q)
+    if righe is None:
+        return meta
+
+    # Se il modello passa il numero dentro una frase ('batch 082026-0002'), il
+    # numero si estrae: è dato dall'utente, non c'è niente da chiedergli.
+    estratto = None
+    if not righe:
+        m = re.search(r"\d{6}\s*-\s*\d{1,4}", q) or re.search(r"(?<!\d)\d{6}(?!\d)", q)
+        if m and m.group(0) != q:
+            estratto = m.group(0)
+            righe, meta, tutte = _bto_righe_per_numero(estratto)
+            if righe is None:
+                return meta
+
+    if not righe:
+        # Numeri realmente presenti con lo stesso prefisso mese/anno: servono a
+        # dire "esistono questi", MAI a spacciarne uno per quello cercato.
+        prefisso = _bto_num_squash(estratto or q)[:6]
+        simili = []
+        for r in (tutte or []):
+            n = str(r.get("order_number") or "").strip()
+            if n and _bto_num_squash(n).startswith(prefisso) and n not in simili:
+                simili.append(n)
+        out = {
+            "tipo": "ordine_fabbrica_btoweb",
+            "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
+            "numero_cercato": q,
+            "trovato": False,
+            "ordini": [],
+            "nota": (
+                f"Nessun ordine di FABBRICA btoweb con il numero '{q}'. Questo numero NON "
+                "esiste su btoweb: non inventarne il contenuto, non attribuirlo a un "
+                "produttore e non spacciarne un altro per lui. Se il numero può invece "
+                "essere un ordine CUSTOM di kanokimonos.app (formato NNNN-MM-YY, es. "
+                "0495-05-26-A) riprova con cerca_ordine_per_numero prima di rispondere."
+            ),
+        }
+        if estratto:
+            out["numero_estratto_dal_testo"] = estratto
+        if simili:
+            out["numeri_btoweb_esistenti_con_lo_stesso_prefisso"] = simili[:_BTO_MAX_ORDINI_ELENCO]
+            out["nota_simili"] = (
+                "Questi numeri esistono su btoweb e iniziano come quello cercato, ma NON "
+                "sono l'ordine chiesto: citali solo per chiedere se intendeva uno di loro."
+            )
+        return out
+
+    gruppi, chiavi = {}, []
+    for r in righe:
+        num = str(r.get("order_number") or "").strip() or "(senza numero)"
+        if num not in gruppi:
+            gruppi[num] = []
+            chiavi.append(num)
+        gruppi[num].append(r)
+
+    if len(chiavi) == 1:
+        scheda = _bto_scheda_ordine(chiavi[0], gruppi[chiavi[0]])
+        if estratto:
+            scheda["numero_estratto_dal_testo"] = estratto
+        scheda.update({
+            "tipo": "ordine_fabbrica_btoweb",
+            "numero_cercato": q,
+            "trovato": True,
+            "ricerca_parziale": not meta.get("esatto"),
+            "nota": (
+                "Ordine di FABBRICA su btoweb: merce ordinata a un produttore, NON un "
+                "ordine di un cliente. Dichiaralo fin dalla prima riga. Il produttore è "
+                "nel campo 'produttore' qui sopra: non chiederlo all'utente. Riporta "
+                "taglie, quantità, SKU, stato, data prevista, conferme e note esattamente "
+                "come stanno qui; dove il dato manca dichiaralo, non stimarlo."
+            ),
+            "nota_prezzi": _BTO_NOTA_PREZZI,
+        })
+        return scheda
+
+    ordini = []
+    for num in chiavi[:_BTO_MAX_ORDINI_ELENCO]:
+        s = _bto_scheda_ordine(num, gruppi[num])
+        ordini.append({
+            "numero_ordine": num,
+            "produttore": s["produttore"],
+            "stato": s["stato"],
+            "stato_descrizione": s["stato_descrizione"],
+            "data_arrivo_prevista": s["data_arrivo_prevista"],
+            "articoli_totali": s["articoli_totali"],
+            "pezzi_ordinati_totali": s["pezzi_ordinati_totali"],
+            "prodotti": [a["prodotto"] for a in s["articoli"]][:8],
+        })
+
+    return {
+        "tipo": "ordini_fabbrica_btoweb",
+        "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
+        "numero_cercato": q,
+        "trovato": True,
+        "ricerca_parziale": True,
+        "ordini_totali": len(chiavi),
+        "ordini_mostrati": len(ordini),
+        "ordini": ordini,
+        "nota": (
+            f"'{q}' è un numero PARZIALE: corrispondono {len(chiavi)} ordini di FABBRICA "
+            "btoweb. Elencali con numero, produttore, stato e pezzi. Il produttore è qui "
+            "accanto a ogni ordine: non chiederlo. Per il dettaglio di taglie, SKU e "
+            "quantità richiama questo strumento con il numero completo di un ordine."
+        ),
+        "nota_prezzi": _BTO_NOTA_PREZZI,
+    }
+
+
+def format_bto_order_card(res: dict) -> str:
+    """Scheda testuale dell'ordine di fabbrica per il percorso
+    cerca_ordine_per_numero, che restituisce testo e non JSON."""
+    if not res or res.get("error") or not res.get("trovato"):
+        return ""
+
+    if res.get("tipo") == "ordini_fabbrica_btoweb":
+        lines = [
+            f"Ordini di FABBRICA su btoweb che iniziano con «{res.get('numero_cercato')}» "
+            f"({res.get('ordini_totali')} trovati) — piattaforma btoweb, merce ordinata ai "
+            "produttori, non ordini di clienti:"
+        ]
+        for o in res.get("ordini", []):
+            lines.append(
+                "• %s | %s | %s | arrivo previsto: %s | %s articoli, %s pz"
+                % (
+                    o.get("numero_ordine"),
+                    o.get("produttore") or "produttore N/A",
+                    o.get("stato_descrizione") or o.get("stato") or "stato N/A",
+                    o.get("data_arrivo_prevista") or "non valorizzato",
+                    o.get("articoli_totali"),
+                    o.get("pezzi_ordinati_totali"),
+                )
+            )
+        return "\n".join(lines)
+
+    c = res.get("conferme_ricezione", {})
+    lines = [
+        f"Ordine di FABBRICA {res.get('numero_ordine')} — Piattaforma: btoweb "
+        "(merce ordinata al produttore, NON un ordine di un cliente)",
+        f"Produttore: {res.get('produttore') or 'N/A'}",
+        f"Stato: {res.get('stato') or 'N/A'}"
+        + (f" ({res['stato_descrizione']})" if res.get("stato_descrizione") else ""),
+        f"Arrivo previsto: {res.get('data_arrivo_prevista') or 'non valorizzato alla fonte'}",
+        "Presa in carico confermata dal produttore: %s%s"
+        % (
+            c.get("il_produttore_ha_confermato_di_aver_preso_in_carico_l_ordine", "N/A"),
+            f" (dal {c['confermato_il']})" if c.get("confermato_il") else "",
+        ),
+        f"Ricezione batch confermata su btoweb: {c.get('ricezione_batch_confermata_su_btoweb', 'N/A')}",
+        "Queste conferme riguardano l'ordine su btoweb e NON provano l'arrivo fisico "
+        "della merce.",
+        "Contenuto: %s articoli, %s pezzi ordinati%s"
+        % (
+            res.get("articoli_totali"),
+            res.get("pezzi_ordinati_totali"),
+            " (totale dichiarato dalla fonte: %s)" % res["totale_dichiarato_dalla_fonte"]
+            if res.get("totale_dichiarato_dalla_fonte") is not None
+            else "",
+        ),
+        "Pezzi prodotti: %s"
+        % (
+            res["pezzi_prodotti_totali"]
+            if res.get("pezzi_prodotti_totali") is not None
+            else "non valorizzato alla fonte (si sa solo quanto è stato ordinato)"
+        ),
+        "Origine delle quantità (products_source): %s"
+        % (", ".join(res.get("origine_quantita_products_source") or []) or "non dichiarata"),
+    ]
+    for a in res.get("articoli", []):
+        taglie = ", ".join(
+            "%s ×%s%s"
+            % (
+                t.get("taglia") or "taglia N/A",
+                t.get("quantita_ordinata"),
+                f" [SKU {t['sku']}]" if t.get("sku") else "",
+            )
+            for t in a.get("taglie", [])
+        )
+        lines.append(
+            "• %s%s — %s pz ordinati%s: %s"
+            % (
+                a.get("prodotto"),
+                f" (colore: {a['colore']})" if a.get("colore") else "",
+                a.get("pezzi_ordinati"),
+                f", {a['pezzi_prodotti']} prodotti" if a.get("pezzi_prodotti") is not None else "",
+                taglie or "dettaglio taglie non valorizzato",
+            )
+        )
+    if res.get("note_fonte"):
+        lines.append("Note dalla fonte: " + " | ".join(res["note_fonte"]))
+    if res.get("nota_troncamento"):
+        lines.append(res["nota_troncamento"])
+    lines.append(_BTO_NOTA_PREZZI)
+    return "\n".join(lines)
 
 
 # --- TRACCIAMENTO FULLY (catena A-Z di un ordine custom) ----------------------
@@ -3757,6 +4243,8 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         if name == "ordini_per_produttore":
             return tool_ordini_per_produttore(tool_input.get("produttore"))
+        if name == "ordine_fabbrica_per_numero":
+            return tool_ordine_fabbrica_per_numero(tool_input.get("numero"))
         if name == "tracciamento_fully":
             return tool_tracciamento_fully(
                 tool_input.get("numero"), tool_input.get("cliente")
