@@ -1599,6 +1599,20 @@ CHAT_TOOLS = [
             "manuale dell'admin.\n"
             "- 'dato_storico_spunta_manuale' è solo storia etichettata: NON è una prova "
             "di arrivo, non usarlo per dire che la merce è arrivata.\n"
+            "- RIPARTENZA VERSO IL CLIENTE: il blocco 'ripartenza_verso_cliente' dichiara "
+            "la sua 'fonte' (registro invii Fully oppure campi del vecchio modulo "
+            "logistico): riportala SEMPRE insieme al dato, sono due registrazioni "
+            "diverse. 'numero_invio_fully' NON è un tracking corriere: mai presentarlo "
+            "come tale né darlo al cliente per tracciare. 'spedizione_raggruppata_con' = "
+            "ordini partiti nello stesso invio (collo unico): dillo. "
+            "'invio_fully_escluso' NON è una spedizione fallita: è un invio ESCLUSO "
+            "perché la merce risulta già consegnata per altra via, raccontalo con il "
+            "testo della fonte. 'avviso_al_cliente' dice se e quando è partita la mail "
+            "di spedizione: se non risulta, di' che l'avviso non è registrato a sistema, "
+            "NON che il cliente non è stato avvisato. Se compare "
+            "'nota_partenza_mancante', lo stato dice spedito ma la data non risulta da "
+            "nessuna fonte: riportala così. L'ASSENZA del blocco per un ordine non "
+            "spedito non prova niente in nessuna direzione.\n"
             "- Al cliente si spedisce quanto Fully ha CONTATO (buoni), ma il prezzo è sulla "
             "quantità ORDINATA. Quindi: 'in_piu' > 0 va segnalato SEMPRE come pezzi in più "
             "da consegnare E DA FATTURARE (anche se la fonte non lo marca come discrepanza); "
@@ -1678,6 +1692,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - ORDINI DI FABBRICA PER NUMERO (ordine_fabbrica_per_numero, solo STAFF): un numero di sei cifre + trattino + quattro cifre (082026-0002, 122025-0007, 062026-0004) è un ORDINE DI FABBRICA btoweb, cioè un BATCH di merce ordinata a un produttore. Quando l'utente lo cita — anche da solo, anche solo dicendo "batch" o "ordine fabbrica" — usa questo strumento. NON è uno SKU/EAN (quelli sono numeri di sole cifre) e non è un ordine cliente. E NON CHIEDERE MAI IL PRODUTTORE: il produttore è dentro l'ordine e te lo restituisce lo strumento. Riporta prodotti, taglie, quantità ordinate, SKU e colore come tornano dallo strumento, dichiara che è un ordine di FABBRICA su btoweb, dichiara l'origine delle quantità ('origine_quantita_products_source': size_lines / sizes / production_quantities) e non spacciare le conferme di ricezione registrate su btoweb per prove che la merce sia arrivata in magazzino. Se lo strumento risponde 'trovato': false quel numero non esiste su btoweb: dillo, senza inventare e senza sostituirlo con un numero simile.
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
+- RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
 """
 
 
@@ -3774,8 +3789,153 @@ def _fully_risolvi_cliente(query: str, raw_orders: list) -> dict:
     return {"livello": vincenti[0]["match"], "candidati": vincenti}
 
 
+# --- RIPARTENZA VERSO IL CLIENTE: la fonte primaria è fully_outbound ----------
+# Registro degli invii da Fully verso il cliente (riga con status='sent' e
+# last_error NULL = l'ordine È partito). Copre solo dal 23/06/2026 in poi: per
+# gli ordini più vecchi la sola fonte restano i campi logistics_* dell'ordine,
+# e va SEMPRE dichiarato quale delle due fonti ha risposto.
+# fully_order_id NON è un tracking: è l'identificativo dell'invio su Fully.
+# last_error valorizzato NON è una spedizione fallita: i casi reali sono
+# MARKER_EXCLUSION (merce già consegnata per altra via, tracking nei campi
+# logistics_*).
+
+_FULLY_OUTBOUND_NOTA_NUMERO = (
+    "identificativo dell'ordine di uscita su Fully, NON un numero di tracking "
+    "corriere: NON darlo al cliente per tracciare il pacco"
+)
+
+
+def _fully_blocco_ripartenza(o: dict, riga_out: dict, compagni: list,
+                             copertura_dal: str) -> tuple:
+    """(blocco ripartenza_verso_cliente | None, data_partenza | None, note extra).
+
+    Ordine di lettura: registro invii Fully (fully_outbound) -> campi
+    logistics_* dell'ordine -> nessuna fonte. Il blocco dichiara sempre da
+    quale fonte arriva la risposta; le due fonti non si fondono in silenzio."""
+    os_code = o.get("order_status")
+    log_at = o.get("logistics_shipped_at")
+
+    def _avviso_cliente(r):
+        if r.get("customer_shipping_email_sent_at"):
+            return {
+                "mail_di_spedizione_inviata_il": r.get("customer_shipping_email_sent_at"),
+                "a": r.get("customer_shipping_email_to"),
+            }
+        return {
+            "mail_di_spedizione": (
+                "NON risulta registrato nessun avviso via mail al cliente. Non "
+                "significa che il cliente non sia stato avvisato per altra via "
+                "(WhatsApp, telefono): di' che l'avviso non risulta a sistema, "
+                "non che non è stato fatto."
+            )
+        }
+
+    if isinstance(riga_out, dict) and riga_out.get("last_error"):
+        # Riga presente ma con last_error: NON è una spedizione fallita. I casi
+        # reali sono esclusioni per merce già consegnata per altra via: il dato
+        # di spedizione vero sta nei campi logistics_* dell'ordine.
+        blocco = {
+            "fonte": (
+                "campi del vecchio modulo logistico dell'ordine (l'invio via "
+                "registro Fully risulta ESCLUSO, vedi 'invio_fully_escluso')"
+            ),
+            "invio_fully_escluso": {
+                "testo_alla_fonte": riga_out.get("last_error"),
+                "come_leggerlo": (
+                    "NON è una spedizione fallita: l'invio tramite Fully è stato "
+                    "ESCLUSO perché la merce risulta già consegnata/spedita per "
+                    "altra via. Racconta l'esclusione con il testo qui sopra, "
+                    "senza parlare di errori o fallimenti."
+                ),
+            },
+        }
+        if log_at:
+            blocco.update({
+                "spedito_da_fully_il": log_at,
+                "corriere": o.get("logistics_courier"),
+                "tracking": o.get("logistics_tracking"),
+            })
+        else:
+            blocco["nota"] = (
+                "Nemmeno i campi logistici dell'ordine hanno una data di "
+                "partenza: la data non risulta da nessuna delle due fonti."
+            )
+        return blocco, log_at, []
+
+    if isinstance(riga_out, dict) and riga_out.get("status") == "sent":
+        blocco = {
+            "fonte": (
+                "registro invii Fully (fully_outbound). CITA QUESTA FONTE nella "
+                "risposta insieme alla data, es. \"partito l'8 luglio (dal "
+                "registro invii Fully)\": e' una registrazione diversa dai campi "
+                "del modulo logistico e il lettore deve sapere quale delle due "
+                "ha risposto."
+            ),
+            "partito_il": riga_out.get("sent_at"),
+            "numero_invio_fully": riga_out.get("fully_order_id"),
+            "nota_numero_invio": _FULLY_OUTBOUND_NOTA_NUMERO,
+            "asn_di_origine": riga_out.get("shipment_number"),
+            "invio_registrato_da": riga_out.get("trigger_type"),
+            "avviso_al_cliente": _avviso_cliente(riga_out),
+        }
+        if compagni:
+            blocco["spedizione_raggruppata_con"] = compagni
+            blocco["nota_raggruppata"] = (
+                "Questi ordini condividono lo stesso invio Fully: sono partiti "
+                "nella STESSA spedizione raggruppata (il cliente riceve un "
+                "collo unico)."
+            )
+        # Tracking corriere: il registro NON lo contiene. Se c'è, sta nei campi
+        # logistici dell'ordine e va dichiarato come tale; se non c'è, dirlo.
+        if o.get("logistics_tracking"):
+            blocco["tracking_corriere"] = {
+                "fonte": "campi logistici dell'ordine (non dal registro Fully)",
+                "tracking": o.get("logistics_tracking"),
+                "corriere": o.get("logistics_courier"),
+            }
+        else:
+            blocco["tracking_corriere"] = (
+                "NON valorizzato in nessuna fonte: senza tracking non sai dove "
+                "sia il pacco, dillo apertamente."
+            )
+        return blocco, riga_out.get("sent_at"), []
+
+    # Nessuna riga nel registro: fallback sui campi logistici dell'ordine.
+    if log_at:
+        blocco = {
+            "fonte": "campi del vecchio modulo logistico dell'ordine",
+            "spedito_da_fully_il": log_at,
+            "corriere": o.get("logistics_courier"),
+            "tracking": o.get("logistics_tracking"),
+            "nota_registro": (
+                "Per questo ordine non esiste una riga nel registro invii Fully"
+                + (f" (il registro copre solo dal {copertura_dal})" if copertura_dal else "")
+                + ": il dato viene dai campi logistici dell'ordine."
+            ),
+        }
+        return blocco, log_at, []
+
+    # Nessuna fonte. Se lo stato dice spedito, la mancanza va dichiarata.
+    if os_code in ("shipped_to_customer", "shipped"):
+        note = [(
+            "ATTENZIONE: lo stato registrato dice spedito al cliente, ma la "
+            "DATA DI PARTENZA NON RISULTA DA NESSUNA DELLE DUE FONTI (né nel "
+            "registro invii Fully"
+            + (f", che copre solo dal {copertura_dal}," if copertura_dal else ",")
+            + " né nei campi logistici dell'ordine). Niente data, niente "
+            "tracking: dillo apertamente, senza dedurre quando sia partito."
+        )]
+        return None, None, note
+    # Ordine non spedito e nessuna riga: nessun blocco, e l'assenza di riga NON
+    # è una prova in nessuna direzione.
+    return None, None, []
+
+
 def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
-                          righe_lri: list, rep_per_asn: dict = None) -> dict:
+                          righe_lri: list, rep_per_asn: dict = None,
+                          outb_per_num: dict = None,
+                          outb_per_foid: dict = None,
+                          outb_copertura_dal: str = None) -> dict:
     """La catena completa di UN ordine: contenuto -> stato -> fabbrica -> ASN ->
     carico Fully -> conteggio riga per riga -> anomalie -> ripartenza."""
     num = o.get("order_number")
@@ -3912,19 +4072,38 @@ def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
         for r in problemi_gestiti
     ]
 
-    if o.get("logistics_shipped_at"):
-        tr["ripartenza_verso_cliente"] = {
-            "spedito_da_fully_il": o.get("logistics_shipped_at"),
-            "corriere": o.get("logistics_courier"),
-            "tracking": o.get("logistics_tracking"),
-        }
+    # Ripartenza verso il cliente: fonte primaria il registro invii Fully,
+    # fallback i campi logistics_* dell'ordine, sempre con la fonte dichiarata.
+    riga_out = (outb_per_num or {}).get(_fully_norm_num(num))
+    compagni = []
+    if isinstance(riga_out, dict) and riga_out.get("fully_order_id"):
+        compagni = [
+            n for n in (outb_per_foid or {}).get(str(riga_out["fully_order_id"]), [])
+            if _fully_norm_num(n) != _fully_norm_num(num)
+        ]
+    blocco_rip, data_partenza, note_rip = _fully_blocco_ripartenza(
+        o, riga_out, compagni, outb_copertura_dal
+    )
+    if blocco_rip:
+        tr["ripartenza_verso_cliente"] = blocco_rip
+    for n_extra in note_rip:
+        tr["nota_partenza_mancante"] = n_extra
 
     # Valutazione "pronto o no per il cliente": SOLO composizione di fatti presenti,
     # niente deduzioni dove il dato non c'è.
     if os_code in ("shipped_to_customer", "shipped"):
-        val = "Già spedito al cliente" + (
-            f" il {o.get('logistics_shipped_at')}" if o.get("logistics_shipped_at") else ""
-        ) + "."
+        if data_partenza:
+            fonte_breve = (
+                "registro invii Fully"
+                if (blocco_rip or {}).get("fonte", "").startswith("registro")
+                else "campi logistici dell'ordine"
+            )
+            val = f"Già spedito al cliente il {data_partenza} ({fonte_breve})."
+        else:
+            val = (
+                "Risulta spedito al cliente (stato registrato sulla piattaforma), "
+                "ma la data di partenza non risulta da nessuna fonte."
+            )
     elif righe_recon:
         tot = tr["conteggio_fully"]["totali"]
         if not tot["mancanti_rispetto_al_pagato"] and not tot["danneggiati"]:
@@ -4003,6 +4182,26 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
     rep_per_asn = {
         _fully_norm_num(r.get("shipment_number")): r for r in arrivi
     }
+
+    # Registro invii da Fully verso il cliente: fonte PRIMARIA della ripartenza.
+    # Un solo scarico; il filtro order_number della risorsa esiste ed è esatto,
+    # ma qui servono anche i compagni di spedizione raggruppata, quindi si
+    # scarica tutto e si filtra lato bot come per le altre risorse.
+    outbound, err = _fully_rows("fully_outbound")
+    if err:
+        return err
+    outb_per_num = {}
+    outb_per_foid = {}
+    for r in outbound:
+        k = _fully_norm_num(r.get("order_number"))
+        if k:
+            outb_per_num[k] = r
+        foid = r.get("fully_order_id")
+        if foid:
+            outb_per_foid.setdefault(str(foid), []).append(r.get("order_number"))
+    # Copertura del registro: calcolata dai dati, non cablata (oggi 23/06/2026).
+    date_reg = [str(r.get("created_at") or "")[:10] for r in outbound if r.get("created_at")]
+    outb_copertura_dal = min(date_reg) if date_reg else None
 
     # Mappe di collegamento: ordine.id -> spedizioni (dalla lista annidata
     # shipment_orders dentro shipments) e numero ASN -> spedizione.
@@ -4142,7 +4341,8 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
         return {
             **base, "cercato": numero, "trovato": True,
             "tracciamento": _fully_traccia_ordine(
-                o, _spedizioni_di(o, recon_o), recon_o, lri_o, rep_per_asn
+                o, _spedizioni_di(o, recon_o), recon_o, lri_o, rep_per_asn,
+                outb_per_num, outb_per_foid, outb_copertura_dal
             ),
         }
 
@@ -4188,7 +4388,8 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
         lri_o = _lri_di(o.get("order_number")) if not recon_o else []
         tracce.append(
             _fully_traccia_ordine(
-                o, _spedizioni_di(o, recon_o), recon_o, lri_o, rep_per_asn
+                o, _spedizioni_di(o, recon_o), recon_o, lri_o, rep_per_asn,
+                outb_per_num, outb_per_foid, outb_copertura_dal
             )
         )
 
