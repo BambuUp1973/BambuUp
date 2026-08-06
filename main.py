@@ -87,21 +87,10 @@ class ChatRequest(BaseModel):
     role: str = "staff"
 
 
-class OrderSearchRequest(BaseModel):
-    order_id: str | None = None
-    email: str | None = None
-    name: str | None = None
-
 class FeedbackRequest(BaseModel):
     question: str
     wrong_reply: str
     correct_reply: str
-
-class CustomSearchRequest(BaseModel):
-    order_number: str | None = None
-    email: str | None = None
-    name: str | None = None
-    limit: int = 100
 
 def get_wcapi():
     return API(
@@ -315,36 +304,6 @@ def search_custom_orders_by_number(order_number: str, limit: int = 100):
     ]
     return {"results": filtered}
 
-
-def search_custom_orders_by_email(email: str, limit: int = 100):
-    data = search_custom_orders_raw(limit)
-    if data.get("error"):
-        return data
-
-    email_clean = email.strip().lower()
-    filtered = [
-        order for order in data["results"]
-        if str(order.get("customer_email", "")).strip().lower() == email_clean
-    ]
-    return {"results": filtered}
-
-
-def search_custom_orders_by_name(name: str, limit: int = 1000):
-    data = search_custom_orders_raw(limit)
-    if data.get("error"):
-        return data
-
-    all_orders = data["results"]
-
-    name_clean = name.strip().lower()
-    # Cerca la sottostringa in nome cliente, email e ragione sociale (business_name):
-    # un cliente può essere noto col nome persona, con l'azienda o via email.
-    search_fields = ("customer_name", "customer_email", "customer_business_name")
-    filtered = [
-        order for order in all_orders
-        if any(name_clean in str(order.get(f) or "").lower() for f in search_fields)
-    ]
-    return {"results": filtered}
 
 def _bto_get(params: dict):
     """Chiamata grezza alla edge function btoweb: restituisce il JSON completo
@@ -716,8 +675,8 @@ def get_knowledge_context(query: str, max_matches: int = 20) -> str:
     return "\n".join(selected)
 
 
-# Overlap usato in import_knowledge() per lo chunking del manuale. Deve restare
-# allineato a quel valore per ricostruire il testo contiguo dai chunk.
+# Overlap usato da reimport_knowledge_from_docx() per lo chunking del manuale.
+# Deve restare allineato a quel valore per ricostruire il testo contiguo dai chunk.
 KNOWLEDGE_CHUNK_OVERLAP = 200
 
 
@@ -1093,40 +1052,6 @@ def search_orders_by_id(order_id: str):
     if response.status_code != 200:
         return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
     return {"results": [normalize_order(response.json())]}
-
-
-def search_orders_by_email(email: str):
-    wcapi = get_wcapi()
-    response = wcapi.get("orders", params={"search": email, "per_page": 20})
-    if response.status_code != 200:
-        return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
-
-    orders = response.json()
-    filtered = [
-        normalize_order(order)
-        for order in orders
-        if (order.get("billing", {}) or {}).get("email", "").lower() == email.lower()
-    ]
-    return {"results": filtered}
-
-
-def search_orders_by_name(name: str):
-    wcapi = get_wcapi()
-    response = wcapi.get("orders", params={"search": name, "per_page": 20})
-    if response.status_code != 200:
-        return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
-
-    orders = response.json()
-    name_lower = name.lower().strip()
-
-    filtered = []
-    for order in orders:
-        billing = order.get("billing", {}) or {}
-        full_name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip().lower()
-        if name_lower in full_name:
-            filtered.append(normalize_order(order))
-
-    return {"results": filtered}
 
 
 def format_address(address: dict) -> str:
@@ -4551,20 +4476,6 @@ def webchat():
     return FileResponse("static/chat.html")
 
 
-@app.get("/db-check")
-def db_check():
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("SELECT 1;")
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-        return {"database": "connected", "result": result[0]}
-    except Exception as e:
-        return {"database": "error", "details": str(e)}
-
-
 @app.post("/chat")
 def chat(request: ChatRequest):
     try:
@@ -4613,23 +4524,6 @@ def chat(request: ChatRequest):
         return {"status": "error", "details": str(e)}
 
 
-@app.post("/order-search")
-def order_search(request: OrderSearchRequest):
-    try:
-        if request.order_id:
-            return search_orders_by_id(request.order_id)
-
-        if request.email:
-            return search_orders_by_email(request.email)
-
-        if request.name:
-            return search_orders_by_name(request.name)
-
-        return {"error": "Provide order_id, email, or name."}
-
-    except Exception as e:
-        return {"error": str(e)}
-
 @app.get("/custom-orders")
 def custom_orders(limit: int = 20):
     try:
@@ -4657,23 +4551,6 @@ def custom_debug(request: Request, limit: int = 3, resource: str = "orders"):
     except Exception as e:
         return {"error": str(e)}
 
-@app.post("/custom-search")
-def custom_search(request: CustomSearchRequest):
-    try:
-        if request.order_number:
-            return search_custom_orders_by_number(request.order_number, request.limit)
-
-        if request.email:
-            return search_custom_orders_by_email(request.email, request.limit)
-
-        if request.name:
-            return search_custom_orders_by_name(request.name, request.limit)
-
-        return {"error": "Provide order_number, email, or name."}
-
-    except Exception as e:
-        return {"error": str(e)}
-
 @app.get("/custom-order-view")
 def custom_order_view(order_number: str):
     try:
@@ -4693,82 +4570,54 @@ def custom_order_view(order_number: str):
     except Exception as e:
         return {"error": str(e)}
         
-@app.get("/import-knowledge")
-def import_knowledge():
-    try:
-        file_path = "manuale_operativo.docx"
-        full_text = extract_text_from_docx(file_path)
+# --- REIMPORT DEL MANUALE: non è più una rotta HTTP ---------------------------
+# Prima era GET /import-knowledge, raggiungibile da chiunque senza credenziali,
+# e faceva DELETE + INSERT sui chunk del manuale nel DB di produzione: una
+# cancella-e-ricarica innescabile da un estraneo. Ora è una funzione: la può
+# eseguire solo chi ha già accesso all'ambiente (DATABASE_URL + il docx).
+# Il chunking DEVE restare allineato a KNOWLEDGE_CHUNK_OVERLAP, che
+# _reconstruct_manuale_text usa per ricucire il testo contiguo.
+def reimport_knowledge_from_docx(file_path: str = "manuale_operativo.docx") -> dict:
+    """Ricarica il manuale nel DB: legge il docx, lo divide in chunk e sostituisce
+    i documenti category='manuale'. Richiede DATABASE_URL e il file docx nella
+    stessa macchina. Da riga di comando:
+        python -c "import main; print(main.reimport_knowledge_from_docx())"
+    """
+    full_text = extract_text_from_docx(file_path)
 
-        if not full_text:
-            return {"error": "Nessun testo estratto dal documento"}
+    if not full_text:
+        return {"error": "Nessun testo estratto dal documento"}
 
-        chunk_size = 4000
-        overlap = 200
-        chunks = []
-        start = 0
-        while start < len(full_text):
-            end = start + chunk_size
-            chunks.append(full_text[start:end])
-            if end >= len(full_text):
-                break
-            start = end - overlap
+    chunk_size = 4000
+    overlap = KNOWLEDGE_CHUNK_OVERLAP
+    chunks = []
+    start = 0
+    while start < len(full_text):
+        end = start + chunk_size
+        chunks.append(full_text[start:end])
+        if end >= len(full_text):
+            break
+        start = end - overlap
 
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("DELETE FROM knowledge_documents WHERE category = 'manuale';")
-        for i, chunk in enumerate(chunks):
-            cur.execute(
-                "INSERT INTO knowledge_documents (title, category, content) VALUES (%s, %s, %s)",
-                (f"Manuale Operativo Kano - Parte {i+1}", "manuale", chunk),
-            )
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return {
-            "status": "ok",
-            "message": f"Knowledge imported in {len(chunks)} chunks",
-            "total_characters": len(full_text),
-            "chunks": len(chunks),
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/knowledge")
-def get_knowledge():
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM knowledge_documents WHERE category = 'manuale';")
+    for i, chunk in enumerate(chunks):
         cur.execute(
-            """
-            SELECT id, title, category, content, created_at
-            FROM knowledge_documents
-            ORDER BY created_at DESC
-            LIMIT 10
-            """
+            "INSERT INTO knowledge_documents (title, category, content) VALUES (%s, %s, %s)",
+            (f"Manuale Operativo Kano - Parte {i+1}", "manuale", chunk),
         )
+    conn.commit()
+    cur.close()
+    conn.close()
 
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+    return {
+        "status": "ok",
+        "message": f"Knowledge imported in {len(chunks)} chunks",
+        "total_characters": len(full_text),
+        "chunks": len(chunks),
+    }
 
-        results = []
-
-        for row in rows:
-            results.append({
-                "id": row[0],
-                "title": row[1],
-                "category": row[2],
-                "preview": row[3][:500],
-                "created_at": str(row[4])
-            })
-
-        return {"documents": results}
-
-    except Exception as e:
-        return {"error": str(e)}
 
 @app.get("/search-knowledge")
 def search_knowledge(q: str):
