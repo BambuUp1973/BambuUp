@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 import re
 import json
+import hmac
 import difflib
 import unicodedata
 from datetime import datetime, timezone
@@ -15,7 +16,10 @@ import anthropic
 from woocommerce import API
 from docx import Document
 
-app = FastAPI()
+# docs_url/redoc_url/openapi_url a None: FastAPI pubblicava da sola /docs,
+# /redoc e /openapi.json, cioè il catalogo completo degli endpoint con i loro
+# parametri. Nessuno li usa e sono una mappa servita a chiunque.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -24,6 +28,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 BTO_API_URL = "https://hckmzdztgffxovpbiwgw.supabase.co/functions/v1/bto-bot-api"
 BTO_API_KEY = os.getenv("BTO_API_KEY")
+# Chiave amministrativa degli endpoint di servizio (dump ordini, proxy sulla
+# edge function, scheda ordine, manuale, reimport). Non è una chiave verso
+# l'esterno come le altre: è quella che i chiamanti devono presentare a NOI.
+BOT_ADMIN_KEY = os.getenv("BOT_ADMIN_KEY")
 
 
 def init_db():
@@ -4444,6 +4452,37 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
         return f"Errore AI: {str(e)}"
 
 
+# --- CHIAVE AMMINISTRATIVA SUGLI ENDPOINT DI SERVIZIO ------------------------
+# Gli endpoint che espongono dati (ordini, clienti, listini, manuale) o che
+# scrivono sul DB non devono rispondere a chiunque conosca l'URL. Si presenta
+# l'header 'x-bot-admin-key' e deve combaciare con BOT_ADMIN_KEY dell'ambiente.
+#
+# Due scelte deliberate:
+# - FAIL CLOSED: se BOT_ADMIN_KEY non è configurata l'endpoint risponde 503 e
+#   NON si apre. Una variabile dimenticata deve rendere il servizio muto, mai
+#   pubblico.
+# - confronto a tempo costante (hmac.compare_digest su byte) così la chiave non
+#   si ricostruisce misurando quanto ci mette a rispondere; il confronto su
+#   byte evita anche che un header con caratteri non ASCII faccia esplodere il
+#   paragone e trasformi un 401 in un 500.
+def richiedi_chiave_admin(x_bot_admin_key: str = Header(default=None)):
+    if not BOT_ADMIN_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Endpoint amministrativo non configurato (BOT_ADMIN_KEY assente).",
+        )
+    fornita = (x_bot_admin_key or "").encode("utf-8")
+    attesa = BOT_ADMIN_KEY.encode("utf-8")
+    if not fornita or not hmac.compare_digest(fornita, attesa):
+        raise HTTPException(
+            status_code=401,
+            detail="Chiave amministrativa mancante o errata (header x-bot-admin-key).",
+        )
+
+
+SOLO_ADMIN = [Depends(richiedi_chiave_admin)]
+
+
 @app.get("/")
 def home():
     return {"status": "BambuUp Bot running"}
@@ -4524,14 +4563,14 @@ def chat(request: ChatRequest):
         return {"status": "error", "details": str(e)}
 
 
-@app.get("/custom-orders")
+@app.get("/custom-orders", dependencies=SOLO_ADMIN)
 def custom_orders(limit: int = 20):
     try:
         return get_custom_resource("orders", limit)
     except Exception as e:
         return {"error": str(e)}
 
-@app.get("/custom-debug")
+@app.get("/custom-debug", dependencies=SOLO_ADMIN)
 def custom_debug(request: Request, limit: int = 3, resource: str = "orders"):
     try:
         # Inoltra alla edge function TUTTI i parametri extra della query string
@@ -4551,7 +4590,7 @@ def custom_debug(request: Request, limit: int = 3, resource: str = "orders"):
     except Exception as e:
         return {"error": str(e)}
 
-@app.get("/custom-order-view")
+@app.get("/custom-order-view", dependencies=SOLO_ADMIN)
 def custom_order_view(order_number: str):
     try:
         result = search_custom_orders_by_number(order_number, 100)
@@ -4619,7 +4658,19 @@ def reimport_knowledge_from_docx(file_path: str = "manuale_operativo.docx") -> d
     }
 
 
-@app.get("/search-knowledge")
+# Riesposta come rotta PROTETTA: Bambu deve poter ricaricare il manuale dopo
+# ogni revisione del docx senza dipendere da una shell su Render. Resta una
+# operazione distruttiva (cancella e riscrive i chunk del manuale), quindi vive
+# solo dietro la chiave amministrativa.
+@app.get("/import-knowledge", dependencies=SOLO_ADMIN)
+def import_knowledge():
+    try:
+        return reimport_knowledge_from_docx()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/search-knowledge", dependencies=SOLO_ADMIN)
 def search_knowledge(q: str):
     try:
         conn = psycopg2.connect(DATABASE_URL)
