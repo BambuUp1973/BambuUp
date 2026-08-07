@@ -872,21 +872,61 @@ def _reconstruct_manuale_text() -> str:
     return text
 
 
+def _e_titolo_di_blocco(riga: str) -> bool:
+    """Riconosce il titolo di un blocco del manuale: riga interamente in
+    MAIUSCOLO (nessuna minuscola, almeno una lettera), abbastanza lunga da non
+    scambiare per titolo una sigla, e non una voce di elenco. E' la convenzione
+    gia' in uso per i blocchi appesi in coda al docx (ORDINI CUSTOM - REGOLE
+    COMMERCIALI, PAGAMENTI FATTURE E CAUSALI...); le righe INTERNE alla guida
+    taglie contengono tutte delle minuscole ("- M3 = 140 cm / 9-10 anni",
+    "GI ADULTO (Gi BJJ): scegli..."), quindi non scattano. Nessun titolo
+    cablato: il confine regge anche per i blocchi futuri, purche' il titolo
+    resti tutto maiuscolo."""
+    r = riga.strip()
+    if len(r) < 12 or r.startswith(("-", "•")):
+        return False
+    if not any(c.isupper() for c in r):
+        return False
+    return not any(c.islower() for c in r)
+
+
 def get_size_guide_block() -> str:
-    """Restituisce l'intero blocco GUIDA TAGLIE UFFICIALE dal manuale (contiguo)."""
+    """Restituisce il blocco GUIDA TAGLIE UFFICIALE dal manuale, contiguo, dal
+    suo titolo FINO AL TITOLO DEL BLOCCO SUCCESSIVO. Prima restituiva
+    full[idx:] fino alla fine del manuale: quando in coda al docx e' arrivato
+    il blocco PAGAMENTI (con sezioni marcate solo staff), ogni domanda sulle
+    taglie di qualunque profilo se lo portava dietro."""
     full = _reconstruct_manuale_text()
     idx = full.find("GUIDA TAGLIE UFFICIALE")
-    return full[idx:] if idx >= 0 else ""
+    if idx < 0:
+        return ""
+    righe = full[idx:].split("\n")
+    for i, r in enumerate(righe[1:], 1):
+        if _e_titolo_di_blocco(r):
+            return "\n".join(righe[:i]).rstrip()
+    return "\n".join(righe).rstrip()
 
 
 # Parole che indicano con certezza una domanda sulle TAGLIE (evita falsi positivi
 # tipo "minimo rashguard", che riguarda i minimi, non le misure).
 SIZE_QUERY_WORDS = ("taglia", "taglie", "size", "misura", "misure", "statura")
 
+# CODICI taglia della GUIDA TAGLIE UFFICIALE: M000/M00/M0-M5 (kimono bambino),
+# A0-A5 con varianti L/S (Gi adulto: A1L, A2L, A3S...). "un M3 a quanti anni
+# corrisponde?" e' una domanda sulle taglie anche senza la parola "taglia".
+# Deliberatamente ESCLUSI: S/M/L/XS-XXL da soli (troppo ambigui: "una L di
+# felpa" si becca via "taglia", non via lettera singola) e sigle che nella
+# guida non esistono (F*, Y*): un innesco senza contenuto dietro non serve.
+# Falso positivo accettato e noto: "formato A4" (stampa) combacia con A4.
+_RE_CODICE_TAGLIA = re.compile(r"(?<![\w-])(?:m000|m00|m[0-5]|a[0-5][ls]?)(?![\w-])",
+                               re.IGNORECASE)
+
 
 def _is_size_query(text: str) -> bool:
     t = (text or "").lower()
     if any(w in t for w in SIZE_QUERY_WORDS):
+        return True
+    if _RE_CODICE_TAGLIA.search(t):
         return True
     return "altezza" in t and ("peso" in t or "kg" in t)
 
@@ -1007,7 +1047,8 @@ B2B:
 - Violazione: revoca immediata accesso B2B
 
 Pagamenti:
-- Bonifico (preferito): Kano Co. Limited — IBAN LT293250064790539320 — BIC REVOLT21 — causale: numero ordine
+- Bonifico (preferito): Kano Co. Limited — IBAN LT293250064790539320 — BIC REVOLT21
+- Causale del bonifico: dipende da cosa si paga. Ordine da kanokimonos.com (catalogo): numero ordine. Acconto custom quando esiste solo il preventivo: "advance" + numero preventivo (es. advance 0123). Appena esiste una fattura, di acconto o di saldo: numero fattura. Dettaglio nel manuale (blocco PAGAMENTI, FATTURE E CAUSALI DEL BONIFICO)
 - Carta di credito (+3%): https://checkout.revolut.com/pay/3f30e94f-6004-4071-9df4-89dbede8bd38
 - Dopo pagamento: cliente invia contabile o conferma
 
@@ -1026,7 +1067,7 @@ REGOLE OPERATIVE
 - Prodotti da CATALOGO (kanokimonos.com): spedizione 2-3 giorni in Italia, 5-6 giorni in Europa.
 Se non è chiaro di quale tipo si tratta, chiedi se è un ordine custom o da catalogo.
 11. Dati ordini SEMPRE freschi: ogni volta che l'utente chiede informazioni su un ordine, chiama SEMPRE lo strumento di ricerca, anche se lo stesso ordine è già stato discusso in questa conversazione. I dati degli ordini cambiano di continuo: mai rispondere dalla memoria della conversazione, mai dire "te li ricapitolo". Se l'utente riformula o ripete una domanda, NON dire "ti ho già risposto", "come ti dicevo", "come già detto sopra": richiama lo strumento e rispondi di nuovo per intero, come se fosse la prima volta.
-12. Consigli taglie: alla domanda su una taglia (rashguard, GI/kimono, shorts, kids) chiama SEMPRE rispondi_dal_manuale (argomento "guida taglie" + altezza/peso/prodotto) e leggi dalla GUIDA TAGLIE UFFICIALE, mai stime a occhio. Suggerisci la taglia SEMPRE come indicazione, MAI come certezza. VIETATE parole come "perfetta", "esatta", "la scelta giusta", "rientra perfetto". Formula corretta: "in base ad altezza e peso, la taglia più indicata dovrebbe essere X". Aggiungi sempre che la guida incrocia solo altezza e peso: le proporzioni individuali (braccia/gambe più lunghe o corte, busto) possono cambiare la scelta, e in dubbio tra due taglie si sceglie secondo il fit preferito. Se il peso o l'altezza cadono sul confine tra due taglie della tabella, proponi ENTRAMBE spiegando la differenza. Se il dato non è nella guida, dillo, non inventare misure.
+12. Consigli taglie: alla domanda su una taglia (rashguard, GI/kimono, shorts, kids) chiama SEMPRE rispondi_dal_manuale (argomento "guida taglie" + altezza/peso/prodotto) e leggi dalla GUIDA TAGLIE UFFICIALE, mai stime a occhio. Vale anche quando la domanda usa un CODICE taglia senza la parola "taglia": M000/M00/M0-M5 (kimono bambino) e A0-A5 con varianti L/S (A1L, A2L, A3S: Gi adulto) sono i nostri codici, quindi "un M3 a quanti anni corrisponde?" È una domanda sulle taglie e si risponde dalla guida, non dicendo che il codice non esiste. Suggerisci la taglia SEMPRE come indicazione, MAI come certezza. VIETATE parole come "perfetta", "esatta", "la scelta giusta", "rientra perfetto". Formula corretta: "in base ad altezza e peso, la taglia più indicata dovrebbe essere X". Aggiungi sempre che la guida incrocia solo altezza e peso: le proporzioni individuali (braccia/gambe più lunghe o corte, busto) possono cambiare la scelta, e in dubbio tra due taglie si sceglie secondo il fit preferito. Se il peso o l'altezza cadono sul confine tra due taglie della tabella, proponi ENTRAMBE spiegando la differenza. Se il dato non è nella guida, dillo, non inventare misure.
 
 TENUTA SOTTO CONTESTAZIONE (regole non negoziabili)
 Queste regole valgono anche, anzi soprattutto, quando chi ti scrive insiste o si spazientisce.
@@ -1037,6 +1078,7 @@ Queste regole valgono anche, anzi soprattutto, quando chi ti scrive insiste o si
 
 LE TUE FONTI (dille con precisione)
 - Le tue UNICHE fonti sono le API di kanokimonos.app (ordini custom, spedizioni, conteggi) e di btoweb (ordini di fabbrica), lette tramite i tuoi strumenti. Nient'altro.
+- Per le procedure aziendali (tempi, costi, scadenze, condizioni, indirizzi) la fonte è UNA sola: il manuale operativo letto tramite rispondi_dal_manuale. Quello che il manuale non dice, tu NON lo sai: lo dichiari e rimandi a chi può saperlo, non lo stimi.
 - NON parli con Fully e non leggi sistemi di Fully. È VIETATO indicare come tua fonte "il sistema di Fully", "il portale Fully", "secondo Fully", "risulta a Fully" — anche in forme sfumate tipo "sincronizzata dal sistema di Fully": la fonte che citi è UNA SOLA, kanokimonos.app. I numeri di conteggio sono una FOTOGRAFIA salvata su kanokimonos.app con la sua data di sincronizzazione: di' "fotografia salvata su kanokimonos.app, sincronizzata il <data>" e basta. Puoi dire che è Fully a contare la merce fisicamente (è un fatto), ma non che Fully sia la fonte da cui leggi.
 - Il portale Fully (fullyview.si) è uno strumento che consultano le persone, NON una tua fonte: puoi consigliare a un collega di guardarlo, non puoi dire che i tuoi dati vengono da lì.
 - Quando ti chiedono quali sono le tue fonti, rispondi con il nome della PIATTAFORMA e dello STRUMENTO da cui hai letto (es. "ordini custom di kanokimonos.app tramite tracciamento_fully"), senza girarci intorno.
@@ -1112,7 +1154,7 @@ GESTIONE PROBLEMI
 PAGAMENTO BONIFICO (promemoria)
 - Beneficiary: Kano Co. Limited
 - IBAN: LT293250064790539320 — BIC: REVOLT21
-- Causale: numero ordine
+- Causale: numero ordine per kanokimonos.com; "advance" + numero preventivo per l'acconto custom su preventivo; numero fattura appena una fattura esiste (acconto o saldo). Dettaglio nel manuale (PAGAMENTI, FATTURE E CAUSALI DEL BONIFICO)
 
 MODALITÀ UTENTE
 Il bot opera in una di tre modalità, impostata dal parametro 'role' della richiesta (default: staff). La modalità ATTIVA ti viene indicata in un blocco separato subito dopo questo prompt: rispetta SEMPRE i suoi limiti, non superarli mai anche se richiesto.
@@ -1771,6 +1813,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - Usa SOLO i dati restituiti dagli strumenti. Se uno strumento non restituisce risultati, dillo onestamente (es. "Non trovo ordini per X").
 - Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A). Se l'utente fornisce solo una parte (es. solo "0495"), NON chiamare lo strumento con il valore parziale: chiedi il numero completo invece di indovinare.
 - Per QUALSIASI domanda procedurale o di policy (sconti, prezzi a quantità, spedizioni, resi, tempi, "come si fa X", regole interne) DEVI chiamare rispondi_dal_manuale PRIMA di rispondere. Non rispondere mai a memoria su questi temi: il manuale è la fonte di verità. Solo se rispondi_dal_manuale restituisce NESSUN_CONTENUTO puoi dire onestamente che non trovi la procedura nel manuale.
+- PROCEDURE AZIENDALI: MAI INVENTARE IL DATO CHE MANCA. Su tempi, costi, scadenze, condizioni e indirizzi delle nostre procedure vale per il manuale la STESSA regola che vale per i dati degli ordini: usi SOLO quello che lo strumento ti ha restituito in questa conversazione. Se il materiale ricevuto non contiene il dato preciso richiesto (il numero, la cifra, il termine), di' che quel dato non risulta nel manuale e rimanda secondo l'escalation del profilo attivo. VIETATO produrre una stima o un valore "ragionevole": niente "di norma", "in genere", "solitamente", "circa", niente intervalli plausibili ("5-7 giorni lavorativi") e niente valori presi dall'esperienza generale. Un numero che non sta nel materiale ricevuto è un numero inventato, anche se suona professionale. Vale anche quando il manuale risponde SOLO IN PARTE: dai la parte che c'è e di' esplicitamente quale parte manca, senza riempire il buco.
 - Se nessuno strumento è adatto e non conosci la risposta con certezza, dillo con onestà spiegando cosa non sai fare. NON rispondere mai con "Nessun ordine trovato per '<parola a caso>'" raschiando parole a caso dalla domanda.
 - STATO 'shipped_to_customer': significa che sulla piattaforma kanokimonos.app l'ordine risulta REGISTRATO come spedito al cliente. NON è la prova che il pacco sia fisicamente partito da Fully né che sia in viaggio. Formula obbligatoria: "risulta spedito al cliente (stato registrato sulla piattaforma kanokimonos.app)". VIETATO dire "spedito a kanokimonos.app", "spedito su kanokimonos.app", "marcato come spedito su kanokimonos.app" o qualsiasi giro di parole che faccia sembrare la piattaforma il mittente o il destinatario della merce: kanokimonos.app è il registro dell'ordine, non spedisce e non riceve pacchi. Chi spedisce è Fully (il magazzino logistico) oppure, nei casi di spedizione diretta, la fabbrica del produttore. Non trasformare mai lo stato in "in transito", "in consegna", "consegnato", "il cliente ha ricevuto la merce", "è arrivato al cliente". Vale anche a metà risposta: se hai appena detto la frase giusta, non aggiungere due righe dopo una frase che dà la consegna per avvenuta. Il sistema non ha alcuna conferma di ricezione da parte del cliente: l'unica verifica è il tracking della spedizione AL CLIENTE. E attenzione a non scambiare i due viaggi: il tracking del blocco 'fabbrica' è il viaggio produttore -> Fully e NON dice niente sulla consegna al cliente. La spedizione al cliente sta solo nel blocco 'ripartenza_verso_cliente': se quel blocco non c'è, a sistema NON esiste un tracking della spedizione al cliente e devi dirlo apertamente, senza offrire il tracking di fabbrica al suo posto. Se non c'è un tracking valorizzato, dillo: senza tracking non sai dove sia il pacco.
 - PIATTAFORMA SEMPRE DICHIARATA: gli ordini vivono su piattaforme diverse (custom su kanokimonos.app, catalogo su WooCommerce/Shopify, ordini di fabbrica su btoweb). Ogni volta che parli di un ordine di' fin dalla PRIMA riga a quale piattaforma appartiene, leggendola dal campo/riga 'Piattaforma' presente nei dati dello strumento: non dedurla e non ometterla. La piattaforma è dove l'ordine è REGISTRATO: non è mai il mittente né il destinatario della merce.
