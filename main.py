@@ -6,7 +6,9 @@ import os
 import re
 import json
 import hmac
+import math
 import difflib
+import hashlib
 import unicodedata
 from datetime import datetime, timezone
 from collections import Counter
@@ -639,48 +641,205 @@ def get_recent_messages(chat_id: str, limit: int = 8):
 
     return history
 
-def get_knowledge_context(query: str, max_matches: int = 20) -> str:
+# --- RICERCA NEL MANUALE (lotto A): selezione normalizzata, consegna invariata
+# La consegna resta "righe sciolte" (il passaggio a sezioni e' il lotto B):
+# qui cambia solo COME le righe vengono scelte. Quattro difetti misurati e
+# corretti (diagnosi in report.txt, 2026-08-07):
+#   1. la query era divisa sui soli spazi: "fatture?" non combaciava mai
+#      -> punteggiatura tolta ai bordi di ogni parola;
+#   2. "come", "cosa", "deve" pesavano quanto "numerazione"
+#      -> lista esplicita di parole vuote + pesi idf calcolati sul manuale;
+#   3. fattura/fatture e gestisce/gestita non combaciavano (sottostringa
+#      esatta e asimmetrica) -> confronto per RADICE, con prefisso;
+#   4. a pari punteggio decideva l'ordine lessicografico dei chunk (Parte 1,
+#      10, 11, ..., 2) e i confini dei chunk generavano 64 righe tronche
+#      -> le candidate nascono dal testo RICUCITO in ordine numerico: le
+#      righe sono per costruzione quelle vere del manuale (933, non 997) e
+#      lo spareggio e' l'ordine del manuale.
+
+# Parole vuote italiane: LISTA ESPLICITA E COMMENTATA, non filtro di lunghezza.
+# Il filtro len>2 resta solo come pavimento per articoli/preposizioni corte;
+# queste sono le parole che quel filtro NON prende e che hanno gia' inquinato
+# le misure ("come funziona la numerazione" premiava le righe "Ecco come
+# funziona:"). Accenti e apostrofi sono gia' normalizzati via (gia', perche').
+_PAROLE_VUOTE = frozenset((
+    # interrogative e relative
+    "come", "cosa", "che", "chi", "quale", "quali", "qual", "quanto",
+    "quanta", "quanti", "quante", "dove", "quando", "perche", "cui",
+    # verbi di servizio senza contenuto
+    "deve", "devo", "devi", "devono", "dobbiamo", "fare", "fatto", "essere",
+    "sono", "siamo", "puo", "posso", "possiamo", "possono", "vuole",
+    "voglio", "vogliamo", "serve", "servono", "bisogna", "avere", "abbiamo",
+    "hanno", "stato", "stata", "viene", "vengono", "vorrei",
+    # preposizioni articolate, articoli, congiunzioni
+    "della", "delle", "dello", "degli", "dei", "del", "nel", "nella",
+    "nelle", "negli", "sul", "sulla", "sulle", "alla", "alle", "allo",
+    "agli", "una", "uno", "gli", "per", "con", "non", "tra", "fra", "gia",
+    # avverbi e riempitivi
+    "poi", "adesso", "anche", "ancora", "sempre", "solo", "cioe", "ecco",
+    "piu", "meno", "molto", "tutto", "tutti", "tutte", "questo", "questa",
+    "questi", "queste", "quello", "quella", "altro", "altra", "invece",
+))
+
+# Desinenze italiane, dalla piu' lunga alla piu' corta: la prima che combacia
+# viene tolta. Uniscono singolare/plurale (fattura/fatture -> fattur) e le
+# forme verbali comuni (gestisce/gestita -> gest). Soglie: si tronca solo una
+# parola di almeno 5 caratteri e solo se la radice che resta ne ha almeno 4 --
+# sotto, la troncatura fonde parole diverse (rischio annotato in report.txt).
+_DESINENZE = (
+    "azioni", "azione", "uzioni", "uzione", "amenti", "amento", "imenti",
+    "imento", "iscono", "zioni", "zione", "sioni", "sione", "ature", "atura",
+    "menti", "mento", "isce", "ando", "endo", "ioni", "ione",
+    "are", "ere", "ire", "ata", "ate", "ati", "ato", "ita", "ite", "iti",
+    "ito", "uta", "ute", "uti", "uto", "a", "e", "i", "o", "u",
+)
+
+# Apostrofi diventano spazi (l'ordine -> l ordine: l'articolo cade da solo al
+# filtro di lunghezza); trattini lunghi diventano trattino semplice, cosi'
+# "45-60" scritto con l'en-dash del docx combacia con "45-60" digitato.
+_TRANS_QUERY = str.maketrans({"'": " ", "’": " ", "‘": " ",
+                              "–": "-", "—": "-"})
+# Punteggiatura da togliere ai BORDI delle parole ("fatture?" -> "fatture").
+# Interna resta: "45-60" e "5,90" sono token legittimi.
+_BORDI_PAROLA = "?!.,;:\"()[]{}<>«»“”…*•-/\\%€°#"
+
+
+def _radice(parola: str) -> str:
+    """Tronca la desinenza per unire singolare/plurale e forme verbali."""
+    if len(parola) < 5:
+        return parola
+    for d in _DESINENZE:
+        if parola.endswith(d) and len(parola) - len(d) >= 4:
+            return parola[: -len(d)]
+    return parola
+
+
+def _tokenizza(testo: str) -> list:
+    """minuscole, accenti piatti, apostrofi via, punteggiatura dai bordi.
+    Tiene le parole di almeno 3 caratteri e i token con cifre di almeno 2
+    ("75", "a2l", "5,90")."""
+    testo = unicodedata.normalize("NFKD", testo.lower())
+    testo = "".join(c for c in testo if not unicodedata.combining(c))
+    testo = testo.translate(_TRANS_QUERY)
+    token = []
+    for t in testo.split():
+        t = t.strip(_BORDI_PAROLA)
+        if not t:
+            continue
+        if any(c.isdigit() for c in t):
+            if len(t) >= 2:
+                token.append(t)
+        elif len(t) >= 3:
+            token.append(t)
+    return token
+
+
+def _stems_query(query: str) -> list:
+    """Radici delle parole portanti della query, senza duplicati, in ordine."""
+    viste = set()
+    out = []
+    for t in _tokenizza(query):
+        if t in _PAROLE_VUOTE:
+            continue
+        r = _radice(t)
+        if r not in viste:
+            viste.add(r)
+            out.append(r)
+    return out
+
+
+def _num_parte(title: str) -> int:
+    m = re.search(r"(\d+)", title or "")
+    return int(m.group(1)) if m else 0
+
+
+# Indice del manuale in cache di processo: righe vere (dal testo ricucito) e
+# radici per riga. Si ricostruisce solo quando i chunk in DB cambiano (firma
+# md5 del contenuto), cioe' dopo un reimport.
+_INDICE_MANUALE = {"firma": None, "righe": [], "stems": []}
+
+
+def _indicizza_manuale(rows) -> dict:
+    """rows = [(title, content)] dei chunk. Ricuce il testo con l'overlap
+    (stessa logica di _reconstruct_manuale_text) e spezza in righe: cosi' i
+    monconi dei confini chunk non esistono per costruzione. Puro, testabile
+    senza DB."""
+    rows = sorted(rows, key=lambda r: _num_parte(r[0]))
+    testo = rows[0][1] or ""
+    for _, content in rows[1:]:
+        testo += (content or "")[KNOWLEDGE_CHUNK_OVERLAP:]
+
+    righe, stems, viste = [], [], set()
+    for line in testo.split("\n"):
+        lc = line.strip()
+        if not lc or lc in viste:
+            continue
+        viste.add(lc)
+        righe.append(lc)
+        stems.append(frozenset(_radice(t) for t in _tokenizza(lc)))
+    return {"righe": righe, "stems": stems}
+
+
+def _cerca_righe(indice: dict, query: str, max_matches: int) -> list:
+    """Punteggio idf sul manuale: una parola rara vale piu' di una frequente.
+    Il combaciamento e' per prefisso di radice nei due versi (patch/patches,
+    fattur/fattura); il df usato per l'idf e' quello dello stesso criterio,
+    quindi un prefisso che piglia mezzo manuale si depotenzia da solo.
+    Spareggio a pari punteggio: ordine del manuale."""
+    qstems = _stems_query(query)
+    righe, stems = indice["righe"], indice["stems"]
+    if not qstems or not righe:
+        return []
+
+    n = len(righe)
+    punteggi = [0.0] * n
+    for qs in qstems:
+        colpite = [
+            i for i, st in enumerate(stems)
+            if any(ts.startswith(qs) or qs.startswith(ts) for ts in st)
+        ]
+        if not colpite:
+            continue
+        peso = max(math.log((n + 1) / (len(colpite) + 1)), 0.05)
+        for i in colpite:
+            punteggi[i] += peso
+
+    classifica = [(-p, i) for i, p in enumerate(punteggi) if p > 0]
+    classifica.sort()
+    return [righe[i] for _, i in classifica[:max_matches]]
+
+
+def cerca_righe_manuale(query: str, max_matches: int = 20) -> list:
+    """Unico punto d'ingresso della ricerca nel manuale: lo usano sia il bot
+    (get_knowledge_context) sia /search-knowledge. Niente copie divergenti."""
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
-
-    # Prendi tutti i chunks del manuale
     cur.execute(
         """
-        SELECT content
+        SELECT title, content
         FROM knowledge_documents
         WHERE category = 'manuale'
-        ORDER BY title ASC
         """
     )
-
     rows = cur.fetchall()
     cur.close()
     conn.close()
 
     if not rows:
-        return ""
+        return []
 
-    # Unisci tutti i chunks e cerca per righe
-    query_words = [w.strip().lower() for w in query.split() if len(w.strip()) > 2]
-    matches = []
-    seen = set()
+    firma = hashlib.md5("".join(c or "" for _, c in rows).encode("utf-8")).hexdigest()
+    if _INDICE_MANUALE["firma"] != firma:
+        nuovo = _indicizza_manuale(rows)
+        _INDICE_MANUALE["firma"] = firma
+        _INDICE_MANUALE["righe"] = nuovo["righe"]
+        _INDICE_MANUALE["stems"] = nuovo["stems"]
 
-    for row in rows:
-        text = row[0] or ""
-        lines = text.split("\n")
-        for line in lines:
-            line_clean = line.strip()
-            if not line_clean or line_clean in seen:
-                continue
-            line_lower = line_clean.lower()
-            score = sum(1 for word in query_words if word in line_lower)
-            if score > 0:
-                matches.append((score, line_clean))
-                seen.add(line_clean)
+    return _cerca_righe(_INDICE_MANUALE, query, max_matches)
 
-    matches.sort(key=lambda x: x[0], reverse=True)
-    selected = [line for _, line in matches[:max_matches]]
-    return "\n".join(selected)
+
+def get_knowledge_context(query: str, max_matches: int = 20) -> str:
+    return "\n".join(cerca_righe_manuale(query, max_matches))
 
 
 # Overlap usato da reimport_knowledge_from_docx() per lo chunking del manuale.
@@ -4671,50 +4830,14 @@ def import_knowledge():
 
 
 @app.get("/search-knowledge", dependencies=SOLO_ADMIN)
-def search_knowledge(q: str):
+def search_knowledge(q: str, limit: int = 10):
+    """Sonda di verifica del retrieval: CHIAMA la stessa cerca_righe_manuale
+    del bot (prima aveva l'algoritmo ricopiato dentro, e le due copie erano
+    gia' divergenti: taglio a 10 contro 20). Il taglio e' un parametro."""
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT content
-            FROM knowledge_documents
-            WHERE category = 'manuale'
-            ORDER BY title ASC
-            """
-        )
-
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        if not rows:
+        righe = cerca_righe_manuale(q, max_matches=max(1, min(limit, 50)))
+        if not righe and _INDICE_MANUALE["firma"] is None:
             return {"result": "no knowledge"}
-
-        # Match per-parola su TUTTI i chunk, come get_knowledge_context
-        query_words = [w.strip().lower() for w in q.split() if len(w.strip()) > 2]
-        scored = []
-        seen = set()
-
-        for row in rows:
-            text = row[0] or ""
-            for line in text.split("\n"):
-                line_clean = line.strip()
-                if not line_clean or line_clean in seen:
-                    continue
-                line_lower = line_clean.lower()
-                score = sum(1 for word in query_words if word in line_lower)
-                if score > 0:
-                    scored.append((score, line_clean))
-                    seen.add(line_clean)
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        return {
-            "query": q,
-            "matches": [line for _, line in scored[:10]]
-        }
-
+        return {"query": q, "matches": righe}
     except Exception as e:
         return {"error": str(e)}
