@@ -753,10 +753,96 @@ def _num_parte(title: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-# Indice del manuale in cache di processo: righe vere (dal testo ricucito) e
-# radici per riga. Si ricostruisce solo quando i chunk in DB cambiano (firma
-# md5 del contenuto), cioe' dopo un reimport.
-_INDICE_MANUALE = {"firma": None, "righe": [], "stems": []}
+# --- SEZIONI DEL MANUALE (lotto B): la consegna porta il contesto -----------
+# Il retrieval per righe sceglie bene MA consegna righe staccate dal loro
+# contesto: dove la risposta non condivide parole con la domanda (il costo del
+# cambio taglia sta nella riga "contributo di 5,90 euro") nessuna selezione
+# per riga puo' arrivarci. Qui il manuale viene diviso in SEZIONI sui segnali
+# gia' presenti nel testo, e la consegna diventa: 1-2 sezioni intere col loro
+# titolo + le righe di prima come appendice (rete di sicurezza PER
+# COSTRUZIONE: cio' che arrivava prima continua ad arrivare).
+
+SOGLIA_SEZIONI = 3.0   # sotto questa massa idf la scelta di sezione e' rumore
+                       # e si consegnano solo le righe. Taratura: sulle 26
+                       # domande di misura il minimo con sezione sensata e'
+                       # 6.46; la soglia sta a meta' (report.txt, lotto B).
+TETTO_CONSEGNA = 8000  # tetto complessivo in caratteri della consegna
+CAP_SEZIONE = 3500     # tetto per singola sezione: una sezione-mostro
+                       # troncata qui lascia spazio ad appendice e 2a sezione
+
+_RE_SEPARATORE_SEZIONE = re.compile(r"^[-_=]{10,}$")
+_RE_PREFISSO_TITOLO = re.compile(r"^([^a-zà-ù]{12,}?)\s*[(:]")
+
+
+def _e_titolo_sezione(riga: str) -> bool:
+    """Confine di sezione, criterio V3 (misure in report.txt, lotto B):
+    tutto-maiuscolo come _e_titolo_di_blocco, piu' due guardie.
+    a) una riga dominata dalle cifre NON e' un titolo: "IBAN: LT29..." e'
+       tutta maiuscola e senza guardia apriva una sezione-mostro da 26k;
+    b) e' titolo anche un PREFISSO maiuscolo lungo seguito da '(' o ':'
+       ("APPROVAZIONE DEL PAGAMENTO (bonifico arrivato)", "CAUSALE DEL
+       BONIFICO: cambia..."), che il tutto-maiuscolo perde.
+    Funzione SEPARATA da _e_titolo_di_blocco: quella serve alla guida
+    taglie, che oggi funziona e non si tocca (vincolo del lotto)."""
+    r = riga.strip()
+    if len(r) < 12 or r.startswith(("-", "•")):
+        return False
+    alnum = [c for c in r if c.isalnum()]
+    if alnum and sum(c.isdigit() for c in alnum) / len(alnum) > 0.3:
+        return False
+    if not any(c.isupper() for c in r):
+        return False
+    if not any(c.islower() for c in r):
+        return True
+    m = _RE_PREFISSO_TITOLO.match(r)
+    return bool(m and any(c.isupper() for c in m.group(1)))
+
+
+def _costruisci_sezioni(testo: str) -> list:
+    """Divide il manuale ricucito in sezioni sui due segnali gia' nel testo:
+    titoli (criterio V3) e righe-separatore di trattini, che nei file di
+    frasi dividono i template dal titolo in minuscolo ("Dati e sistema di
+    pagamento"). Il titolo della sezione e' la sua riga di apertura."""
+    sezioni, corrente, attesa_titolo = [], None, False
+
+    def _chiudi(c):
+        if c:
+            t = "\n".join(c["righe"])
+            if len(t) >= 40:      # una sezione di solo titolo non serve
+                c["testo"] = t
+                sezioni.append(c)
+
+    for r in (x.strip() for x in testo.split("\n")):
+        if not r:
+            continue
+        if _RE_SEPARATORE_SEZIONE.match(r):
+            _chiudi(corrente)
+            corrente, attesa_titolo = None, True
+            continue
+        if _e_titolo_sezione(r):
+            _chiudi(corrente)
+            corrente, attesa_titolo = {"titolo": r[:90], "righe": [r]}, False
+            continue
+        if corrente is None or attesa_titolo:
+            if attesa_titolo:
+                _chiudi(corrente)
+            corrente, attesa_titolo = {"titolo": r[:90], "righe": [r]}, False
+            continue
+        corrente["righe"].append(r)
+    _chiudi(corrente)
+
+    for i, s in enumerate(sezioni):
+        s["pos"] = i
+        s["stems_righe"] = [frozenset(_radice(t) for t in _tokenizza(x)) for x in s["righe"]]
+        s["stems"] = frozenset(st for fs in s["stems_righe"] for st in fs)
+        s["stems_titolo"] = frozenset(_radice(t) for t in _tokenizza(s["titolo"]))
+    return sezioni
+
+
+# Indice del manuale in cache di processo: righe vere (dal testo ricucito),
+# radici per riga e sezioni. Si ricostruisce solo quando i chunk in DB
+# cambiano (firma md5 del contenuto), cioe' dopo un reimport.
+_INDICE_MANUALE = {"firma": None, "righe": [], "stems": [], "sezioni": []}
 
 
 def _indicizza_manuale(rows) -> dict:
@@ -777,7 +863,9 @@ def _indicizza_manuale(rows) -> dict:
         viste.add(lc)
         righe.append(lc)
         stems.append(frozenset(_radice(t) for t in _tokenizza(lc)))
-    return {"righe": righe, "stems": stems}
+    # Le sezioni si costruiscono dal testo NON deduplicato: il dedup per riga
+    # serve al retrieval sparso, ma svuoterebbe le copie dei template.
+    return {"righe": righe, "stems": stems, "sezioni": _costruisci_sezioni(testo)}
 
 
 def _cerca_righe(indice: dict, query: str, max_matches: int) -> list:
@@ -809,9 +897,10 @@ def _cerca_righe(indice: dict, query: str, max_matches: int) -> list:
     return [righe[i] for _, i in classifica[:max_matches]]
 
 
-def cerca_righe_manuale(query: str, max_matches: int = 20) -> list:
-    """Unico punto d'ingresso della ricerca nel manuale: lo usano sia il bot
-    (get_knowledge_context) sia /search-knowledge. Niente copie divergenti."""
+def _carica_indice() -> dict:
+    """Legge i chunk dal DB e restituisce l'indice in cache (righe + sezioni).
+    La firma md5 rileva il reimport; la SELECT resta a ogni chiamata (limite
+    gia' dichiarato in report.txt: e' il giro in DB a dominare i tempi)."""
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
     cur.execute(
@@ -826,7 +915,7 @@ def cerca_righe_manuale(query: str, max_matches: int = 20) -> list:
     conn.close()
 
     if not rows:
-        return []
+        return {}
 
     firma = hashlib.md5("".join(c or "" for _, c in rows).encode("utf-8")).hexdigest()
     if _INDICE_MANUALE["firma"] != firma:
@@ -834,12 +923,111 @@ def cerca_righe_manuale(query: str, max_matches: int = 20) -> list:
         _INDICE_MANUALE["firma"] = firma
         _INDICE_MANUALE["righe"] = nuovo["righe"]
         _INDICE_MANUALE["stems"] = nuovo["stems"]
+        _INDICE_MANUALE["sezioni"] = nuovo["sezioni"]
+    return _INDICE_MANUALE
 
-    return _cerca_righe(_INDICE_MANUALE, query, max_matches)
+
+def cerca_righe_manuale(query: str, max_matches: int = 20) -> list:
+    """Unico punto d'ingresso della ricerca per RIGHE: lo usano il fallback
+    del bot e /search-knowledge. Niente copie divergenti."""
+    indice = _carica_indice()
+    if not indice:
+        return []
+    return _cerca_righe(indice, query, max_matches)
+
+
+def _combacia(qs: str, stems) -> bool:
+    """Stesso criterio di match di _cerca_righe: prefisso di radice nei due
+    versi (fattur/fattura, patch/patches)."""
+    return any(ts.startswith(qs) or qs.startswith(ts) for ts in stems)
+
+
+def _candidati_sezioni(indice: dict, query: str) -> list:
+    """Sezioni ordinate per pertinenza. Punteggio = massa idf delle radici
+    distinte trovate (base) x (1 + densita' di righe con match) + bonus se
+    il match sta nel titolo. Spareggio: ordine del manuale."""
+    qstems = _stems_query(query)
+    sezioni = indice.get("sezioni") or []
+    if not qstems or not sezioni:
+        return []
+    n = len(indice["righe"])
+    pesi = {}
+    for qs in qstems:
+        df = sum(1 for st in indice["stems"] if _combacia(qs, st))
+        if df:
+            pesi[qs] = max(math.log((n + 1) / (df + 1)), 0.05)
+    cand = []
+    for s in sezioni:
+        colpiti = [qs for qs in pesi if _combacia(qs, s["stems"])]
+        if not colpiti:
+            continue
+        base = sum(pesi[qs] for qs in colpiti)
+        righe_match = sum(1 for fs in s["stems_righe"] if any(_combacia(qs, fs) for qs in colpiti))
+        dens = righe_match / max(1, len(s["stems_righe"]))
+        bonus_titolo = sum(pesi[qs] for qs in colpiti if _combacia(qs, s["stems_titolo"]))
+        cand.append({"score": base * (1 + dens) + bonus_titolo, "base": base, "s": s})
+    cand.sort(key=lambda c: (-c["score"], c["s"]["pos"]))
+    return cand
+
+
+def _sezioni_somiglianti(a: dict, b: dict) -> bool:
+    """Dedup della seconda sezione: il manuale ha template in doppia copia.
+    Stesso titolo normalizzato, o radici quasi identiche (Jaccard >= 0.6)."""
+    if " ".join(_tokenizza(a["titolo"])) == " ".join(_tokenizza(b["titolo"])):
+        return True
+    inter = len(a["stems"] & b["stems"])
+    union = len(a["stems"] | b["stems"]) or 1
+    return inter / union >= 0.6
 
 
 def get_knowledge_context(query: str, max_matches: int = 20) -> str:
-    return "\n".join(cerca_righe_manuale(query, max_matches))
+    """Consegna del manuale al modello (lotto B): 1-2 sezioni INTERE col loro
+    titolo + appendice con le righe del retrieval per-riga non gia' comprese.
+    L'appendice e' la rete di sicurezza PER COSTRUZIONE: senza, la misura dava
+    7 regressioni su 26 (una sezione sbagliata puo' vincere con punteggio
+    alto); con l'appendice tutto cio' che il vecchio retrieval consegnava
+    continua ad arrivare. Sotto SOGLIA_SEZIONI restano solo le righe. Ogni
+    troncamento e' dichiarato al modello, mai silenzioso."""
+    indice = _carica_indice()
+    if not indice:
+        return ""
+    righe20 = _cerca_righe(indice, query, max_matches)
+    cand = _candidati_sezioni(indice, query)
+    if not cand or cand[0]["base"] < SOGLIA_SEZIONI:
+        return "\n".join(righe20)
+
+    scelte = [cand[0]]
+    for c in cand[1:]:
+        if c["score"] >= 0.5 * cand[0]["score"] and not _sezioni_somiglianti(cand[0]["s"], c["s"]):
+            scelte.append(c)
+            break
+
+    parti = []
+    for i, c in enumerate(scelte):
+        head = f"[MANUALE - SEZIONE{' 2, DISTINTA dalla prima' if i else ''}: {c['s']['titolo']}]"
+        corpo = c["s"]["testo"]
+        if len(corpo) > CAP_SEZIONE:
+            corpo = corpo[:CAP_SEZIONE] + "\n[NOTA: SEZIONE TRONCATA QUI per limite di spazio: nel manuale il testo continua]"
+        parti.append(head + "\n" + corpo)
+    if len(scelte) == 2:
+        parti.append("[NOTA: sopra ci sono DUE sezioni DISTINTE del manuale: per ogni dato che usi, di' da quale sezione lo prendi]")
+
+    testo_sez = "\n".join(parti)
+    resto = [r for r in righe20 if r not in testo_sez]
+    if resto:
+        app = ["[MANUALE - RIGHE PERTINENTI SPARSE, da altre parti del manuale, staccate dal loro contesto]"]
+        usati = len(testo_sez) + len(app[0])
+        omesse = 0
+        for r in resto:
+            if usati + len(r) > TETTO_CONSEGNA:
+                omesse += 1
+                continue
+            app.append(r)
+            usati += len(r) + 1
+        if omesse:
+            app.append(f"[NOTA: {omesse} altre righe pertinenti omesse per limite di spazio]")
+        parti.append("\n".join(app))
+    return "\n\n".join(parti)
 
 
 # Overlap usato da reimport_knowledge_from_docx() per lo chunking del manuale.
@@ -4873,11 +5061,15 @@ def import_knowledge():
 
 
 @app.get("/search-knowledge", dependencies=SOLO_ADMIN)
-def search_knowledge(q: str, limit: int = 10):
+def search_knowledge(q: str, limit: int = 10, consegna: int = 0):
     """Sonda di verifica del retrieval: CHIAMA la stessa cerca_righe_manuale
     del bot (prima aveva l'algoritmo ricopiato dentro, e le due copie erano
-    gia' divergenti: taglio a 10 contro 20). Il taglio e' un parametro."""
+    gia' divergenti: taglio a 10 contro 20). Il taglio e' un parametro.
+    Con consegna=1 restituisce la CONSEGNA COMPLETA di get_knowledge_context
+    (sezioni + appendice), cioe' esattamente cio' che il modello riceve."""
     try:
+        if consegna:
+            return {"query": q, "consegna": get_knowledge_context(q)}
         righe = cerca_righe_manuale(q, max_matches=max(1, min(limit, 50)))
         if not righe and _INDICE_MANUALE["firma"] is None:
             return {"result": "no knowledge"}
