@@ -102,6 +102,50 @@ class FeedbackRequest(BaseModel):
     wrong_reply: str
     correct_reply: str
 
+# --- ERRORI DI CANALE --------------------------------------------------------
+# "non ho potuto guardare" NON e' "non c'e'". Quando una fonte risponde con un
+# errore (401, timeout, JSON rotto, qualsiasi cosa) il bot non deve dedurne
+# un'assenza: deve dire che QUELLA fonte non e' consultabile e riportare quello
+# che le altre hanno detto. Il dettaglio tecnico (status HTTP, response.text,
+# str(e)) resta nel log del server e non raggiunge mai il modello ne' l'utente:
+# prima finiva dentro 'details' e da li' nel tool_result, cioe' a video.
+FONTI_FRASE = {
+    "custom": (
+        "Non riesco a leggere gli ordini custom (kanokimonos.app) in questo "
+        "momento: è un problema tecnico della fonte, non una risposta sull'ordine."
+    ),
+    "woocommerce": (
+        "Il canale catalogo (kanokimonos.com) non è consultabile: l'integrazione "
+        "con il sito non è attiva, quindi su quel canale non posso né confermare "
+        "né escludere nulla."
+    ),
+    "btoweb": (
+        "Non riesco a leggere gli ordini di fabbrica (btoweb) in questo momento: "
+        "è un problema tecnico della fonte."
+    ),
+    "listino": (
+        "Non riesco a leggere il listino prezzi in questo momento: è un problema "
+        "tecnico della fonte, non un prezzo assente."
+    ),
+    "manuale": (
+        "Non riesco a leggere il manuale in questo momento: è un problema tecnico "
+        "della fonte, non una procedura assente."
+    ),
+}
+
+FRASE_CANALE_GENERICA = (
+    "Una delle fonti non è consultabile in questo momento: è un problema tecnico, "
+    "non una risposta sul merito."
+)
+
+
+def errore_canale(fonte: str, dettaglio: str = None) -> str:
+    """Frase pulita per l'utente + dettaglio tecnico SOLO nel log del server."""
+    if dettaglio:
+        print(f"[FONTE {fonte}] {dettaglio}")
+    return FONTI_FRASE.get(fonte, FRASE_CANALE_GENERICA)
+
+
 def get_wcapi():
     return API(
         url=WC_API_URL,
@@ -132,25 +176,38 @@ def get_custom_resource(resource: str, limit: int = 50, status: str = None, extr
             if v is not None and k not in params:
                 params[k] = v
 
-    response = requests.get(
-        KANOCUSTOM_FUNCTION_URL,
-        headers=headers,
-        params=params,
-        timeout=60
-    )
+    try:
+        response = requests.get(
+            KANOCUSTOM_FUNCTION_URL,
+            headers=headers,
+            params=params,
+            timeout=60
+        )
+    except Exception as e:
+        # Timeout, DNS, SSL: prima risalivano al catch-all e uscivano come testo
+        # tecnico. Sono errori di CANALE, non risposte sull'ordine.
+        return {
+            "error": errore_canale("custom", f"connessione fallita su resource={resource}: {e}"),
+            "fonte": "custom",
+        }
 
     if response.status_code != 200:
         return {
-            "error": f"Custom API error {response.status_code}",
-            "details": response.text
+            "error": errore_canale(
+                "custom",
+                f"HTTP {response.status_code} su resource={resource}: {response.text}",
+            ),
+            "fonte": "custom",
         }
 
     try:
         return response.json()
     except Exception as e:
         return {
-            "error": "Invalid JSON response from custom API",
-            "details": str(e)
+            "error": errore_canale(
+                "custom", f"risposta non JSON su resource={resource}: {e}"
+            ),
+            "fonte": "custom",
         }
 
 def _as_bool(value):
@@ -294,9 +351,15 @@ def search_custom_orders_raw(limit: int = 100):
         elif isinstance(data.get("orders"), list):
             raw_orders = data["orders"]
         else:
-            return {"error": "Unexpected custom API structure", "details": data}
+            return {
+                "error": errore_canale("custom", f"struttura inattesa: {data}"),
+                "fonte": "custom",
+            }
     else:
-        return {"error": "Unsupported custom API response type", "details": str(type(data))}
+        return {
+            "error": errore_canale("custom", f"tipo di risposta inatteso: {type(data)}"),
+            "fonte": "custom",
+        }
 
     normalized = [normalize_custom_order(o) for o in raw_orders if isinstance(o, dict)]
     return {"results": normalized}
@@ -319,7 +382,7 @@ def _bto_get(params: dict):
     """Chiamata grezza alla edge function btoweb: restituisce il JSON completo
     (data + count/total/disclaimer/source), disclaimer di stock incluso."""
     if not BTO_API_KEY:
-        return {"error": "BTO_API_KEY non configurata."}
+        return {"error": errore_canale("btoweb", "BTO_API_KEY non configurata"), "fonte": "btoweb"}
 
     try:
         response = requests.get(
@@ -329,21 +392,30 @@ def _bto_get(params: dict):
             timeout=60,
         )
     except Exception as e:
-        return {"error": f"Errore connessione btoweb: {str(e)}"}
+        return {"error": errore_canale("btoweb", f"connessione fallita: {e}"), "fonte": "btoweb"}
 
     if response.status_code != 200:
-        return {"error": f"btoweb API error {response.status_code}", "details": response.text}
+        return {
+            "error": errore_canale("btoweb", f"HTTP {response.status_code}: {response.text}"),
+            "fonte": "btoweb",
+        }
 
     try:
         data = response.json()
     except Exception:
-        return {"error": "Risposta btoweb non valida (non JSON)", "details": response.text}
+        return {
+            "error": errore_canale("btoweb", f"risposta non JSON: {response.text}"),
+            "fonte": "btoweb",
+        }
 
     if isinstance(data, list):
         return {"data": data}
     if isinstance(data, dict):
         return data
-    return {"error": "Struttura risposta btoweb non riconosciuta", "details": str(data)}
+    return {
+        "error": errore_canale("btoweb", f"struttura non riconosciuta: {data}"),
+        "fonte": "btoweb",
+    }
 
 
 def yes_no_unknown(value):
@@ -1449,11 +1521,30 @@ def normalize_order(order):
 
 
 def search_orders_by_id(order_id: str):
-    wcapi = get_wcapi()
-    response = wcapi.get(f"orders/{order_id}")
+    # Senza try/except un timeout o un errore SSL risaliva fino al catch-all e
+    # usciva come testo tecnico: qui diventa un errore di canale dichiarato.
+    try:
+        wcapi = get_wcapi()
+        response = wcapi.get(f"orders/{order_id}")
+    except Exception as e:
+        return {
+            "error": errore_canale("woocommerce", f"connessione fallita su orders/{order_id}: {e}"),
+            "fonte": "woocommerce",
+        }
     if response.status_code != 200:
-        return {"error": f"WooCommerce error {response.status_code}", "details": response.text}
-    return {"results": [normalize_order(response.json())]}
+        return {
+            "error": errore_canale(
+                "woocommerce", f"HTTP {response.status_code} su orders/{order_id}: {response.text}"
+            ),
+            "fonte": "woocommerce",
+        }
+    try:
+        return {"results": [normalize_order(response.json())]}
+    except Exception as e:
+        return {
+            "error": errore_canale("woocommerce", f"risposta non leggibile su orders/{order_id}: {e}"),
+            "fonte": "woocommerce",
+        }
 
 
 def format_address(address: dict) -> str:
@@ -1603,7 +1694,14 @@ CHAT_TOOLS = [
             "fornisce o cita un numero d'ordine (se scritto a parole, convertilo "
             "in cifre prima di chiamare).\n"
             "Piattaforme:\n"
-            "- 'custom' (kanokimonos.app): numeri con trattini tipo 0495-05-26-A\n"
+            "- 'custom' (kanokimonos.app): numeri con trattini tipo 0495-05-26-A. "
+            "Accetta ANCHE il solo progressivo iniziale ('0495', '0550'): lo cerca "
+            "come prefisso e restituisce l'ordine con il suo numero completo. Non "
+            "chiedere mai il numero completo all'utente prima di aver provato qui. "
+            "PASSA LE CIFRE ESATTAMENTE COME LE HA SCRITTE L'UTENTE: non aggiungere "
+            "zeri davanti, non toglierne, non completare a quattro cifre. '052' si "
+            "cerca come '052', non come '0052': sono ricerche diverse e cambiare le "
+            "cifre porta all'ordine sbagliato.\n"
             "- 'woocommerce': numeri puri (solo cifre) del sito web\n"
             "- 'btoweb': ordini di fabbrica/produttore, numeri tipo 062026-0004 "
             "(sei cifre, trattino, quattro cifre). Per questi PREFERISCI lo strumento "
@@ -2004,7 +2102,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - PRECISAZIONI E FRAMMENTI, REGOLA MECCANICA: se il messaggio dell'utente è un frammento o una precisazione senza un nuovo identificativo ("ordine fabbrica", "è un ordine di fabbrica", "quello di prima", "sì", "il batch"), NON chiedere di nuovo il numero o il nome: RIPRENDI dalla conversazione l'ultimo identificativo che l'utente ha scritto, richiama lo strumento coerente con la precisazione e rispondi con i dati. Chiedere di ripetere un dato che l'utente ha già scritto in chat è sempre un errore. Se non capisci cosa vuole ma un identificativo c'è, cerca quell'identificativo e mostra cosa hai trovato: è sempre meglio di una domanda.
 - Per QUALSIASI richiesta su un ordine (numero) o su un cliente (nome), chiama lo strumento giusto. Non inventare mai lo stato di un ordine.
 - Usa SOLO i dati restituiti dagli strumenti. Se uno strumento non restituisce risultati, dillo onestamente (es. "Non trovo ordini per X").
-- Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A). Se l'utente fornisce solo una parte (es. solo "0495"), NON chiamare lo strumento con il valore parziale: chiedi il numero completo invece di indovinare.
+- UN ERRORE DI UNA FONTE NON È UNA RISPOSTA. "Non ho potuto guardare" e "non c'è" sono due cose diverse e non vanno mai confuse. Se uno strumento ti dice che una fonte non è consultabile (catalogo non collegato, problema tecnico, fonte che non risponde), NON dire che l'ordine non esiste, non dire "non risulta" e non dire "non trovato": di' quali fonti hai potuto guardare e cosa dicono, e di' apertamente quale fonte non hai potuto guardare, precisando che su quella non puoi né confermare né escludere nulla. E non riportare MAI all'utente codici di errore, stati HTTP, messaggi tecnici, nomi di eccezioni o testi grezzi delle API: all'utente va una frase in italiano corrente.
+- Se un numero d'ordine è scritto a parole, convertilo in cifre prima di chiamare lo strumento. Un numero custom completo ha il formato NNNN-MM-YY con eventuale suffisso (es. 0495-05-26-A), ma il PROGRESSIVO INIZIALE DA SOLO (le prime cifre, es. "0550") IDENTIFICA GIÀ UN ORDINE: il resto dice soltanto mese, anno e articolo. Quindi se l'utente ti dà solo il progressivo CHIAMA LO STRUMENTO CON QUELLE CIFRE COSÌ COME SONO: la ricerca per progressivo esiste e la fa lo strumento. È VIETATO chiedere il numero completo prima di aver cercato. Poi: se lo strumento restituisce un ordine, rispondi con quello e DICHIARA IL NUMERO COMPLETO che ha trovato (es. "0550-08-26-A"), non ripetere il progressivo; se restituisce più ordini DIVERSI, elencali e chiedi quale, senza sceglierne uno; solo se non restituisce niente puoi dire che non risulta, ed è lì — e solo lì — che ha senso chiedere il numero completo.
 - Per QUALSIASI domanda procedurale o di policy (sconti, prezzi a quantità, spedizioni, resi, tempi, "come si fa X", regole interne) DEVI chiamare rispondi_dal_manuale PRIMA di rispondere. Non rispondere mai a memoria su questi temi: il manuale è la fonte di verità. Solo se rispondi_dal_manuale restituisce NESSUN_CONTENUTO puoi dire onestamente che non trovi la procedura nel manuale.
 - PROCEDURE AZIENDALI: MAI INVENTARE IL DATO CHE MANCA. Su tempi, costi, scadenze, condizioni e indirizzi delle nostre procedure vale per il manuale la STESSA regola che vale per i dati degli ordini: usi SOLO quello che lo strumento ti ha restituito in questa conversazione. Se il materiale ricevuto non contiene il dato preciso richiesto (il numero, la cifra, il termine), di' che quel dato non risulta nel manuale e rimanda secondo l'escalation del profilo attivo. VIETATO produrre una stima o un valore "ragionevole": niente "di norma", "in genere", "solitamente", "circa", niente intervalli plausibili ("5-7 giorni lavorativi") e niente valori presi dall'esperienza generale. Un numero che non sta nel materiale ricevuto è un numero inventato, anche se suona professionale. Vale anche quando il manuale risponde SOLO IN PARTE: dai la parte che c'è e di' esplicitamente quale parte manca, senza riempire il buco.
 - PAGAMENTO ARRIVATO = PRIMA PROCEDURA, POI ORDINE. Se l'utente AFFERMA che un pagamento è arrivato e chiede cosa fare ("il cliente ha pagato, che faccio?", "è arrivato il bonifico, come procedo?"), la domanda è di PROCEDURA: chiama PRIMA rispondi_dal_manuale (argomento "approvazione del pagamento") e dai la procedura di registrazione, che vale anche senza numero d'ordine. POI, se serve per eseguirla sul caso concreto, chiedi il numero. Se nel messaggio c'è GIÀ un nome o un numero d'ordine, fai TUTTE E DUE le cose: dai la procedura E cerca l'ordine/cliente con lo strumento giusto. NON confondere con la domanda opposta: "il cliente X ha pagato?" CHIEDE lo stato di un pagamento, e lì vale la regola di sempre, si cerca l'ordine e non il manuale. Questa regola riguarda SOLO i pagamenti: non estenderla ad altri fatti affermati dall'utente.
@@ -2103,23 +2202,83 @@ def _first_product_name(o: dict) -> str:
     return ", ".join(names) if names else "N/A"
 
 
+# Progressivo iniziale di un ordine custom: il numero completo e' NNNN-MM-YY con
+# eventuale lettera (0550-08-26-A), ma il PROGRESSIVO da solo ("0550") identifica
+# gia' un ordine: il suffisso dice solo mese, anno e articolo. Quindi un numero di
+# sole cifre si cerca come PREFISSO, non si rimanda al mittente chiedendo il
+# numero completo.
+_RE_PROGRESSIVO_CUSTOM = re.compile(r"^\d{2,6}$")
+
+
+def _ordina_per_numero(orders: list) -> list:
+    return sorted(orders, key=lambda o: str(o.get("order_number") or ""))
+
+
 def _find_custom_order_and_group(numero: str) -> dict:
     """Cerca l'ordine custom per numero e, con lo STESSO fetch, ne ricava il gruppo
-    (fratelli con lo stesso order_group_id). Un solo scarico dalla API."""
+    (fratelli con lo stesso order_group_id). Un solo scarico dalla API.
+
+    Due strade, in quest'ordine:
+    1. numero COMPLETO -> match esatto, com'e' sempre stato;
+    2. solo PROGRESSIVO ("0550") -> match per prefisso. Se i candidati stanno
+       tutti nello stesso order_group_id sono lo stesso ordine spezzato in piu'
+       articoli (nei dati reali e' sempre cosi': 14 progressivi su 424 ordini
+       hanno piu' righe, e ogni volta con un solo group_id), quindi si risponde
+       con quell'ordine. Se i gruppi sono piu' d'uno l'ambiguita' e' vera: si
+       elencano e si chiede, senza sceglierne uno.
+    """
     data = search_custom_orders_raw(1000)
     if data.get("error"):
         return {"error": data["error"]}
     results = data.get("results", [])
     numero_clean = numero.strip().lower()
+
+    def _con_gruppo(match, tipo):
+        group_id = match.get("order_group_id")
+        siblings = [o for o in results if group_id and o.get("order_group_id") == group_id]
+        return {"results": [match], "group": siblings, "match": tipo}
+
     match = next(
         (o for o in results if str(o.get("order_number", "")).strip().lower() == numero_clean),
         None,
     )
-    if not match:
-        return {"results": []}
-    group_id = match.get("order_group_id")
-    siblings = [o for o in results if group_id and o.get("order_group_id") == group_id]
-    return {"results": [match], "group": siblings}
+    if match:
+        return _con_gruppo(match, "esatto")
+
+    if _RE_PROGRESSIVO_CUSTOM.match(numero_clean):
+        candidati = [
+            o for o in results
+            if str(o.get("order_number", "")).strip().lower().startswith(numero_clean)
+        ]
+        if candidati:
+            candidati = _ordina_per_numero(candidati)
+            gruppi = {o.get("order_group_id") for o in candidati}
+            # Un solo gruppo VALORIZZATO = un solo ordine. Se il group_id manca
+            # non si puo' affermare che siano lo stesso ordine: resta ambiguo.
+            if len(candidati) == 1 or (len(gruppi) == 1 and None not in gruppi):
+                return _con_gruppo(candidati[0], "prefisso")
+            return {"results": [], "candidati": candidati, "match": "prefisso_ambiguo"}
+
+    return {"results": []}
+
+
+def format_candidati_custom(numero: str, candidati: list) -> str:
+    """Piu' ordini distinti per lo stesso progressivo: si elencano e si chiede
+    quale, senza sceglierne uno al posto dell'utente."""
+    righe = [
+        f"Il progressivo '{numero}' corrisponde a {len(candidati)} ordini custom "
+        f"DIVERSI (kanokimonos.app). Non ne scelgo uno io: chiedi all'utente quale "
+        f"gli serve, elencandoli."
+    ]
+    for o in candidati[:20]:
+        num = o.get("order_number") or "N/A"
+        cliente = o.get("customer_name") or o.get("customer_business_name") or o.get("customer_email") or "cliente N/A"
+        os_code = o.get("order_status")
+        stato = CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A")
+        righe.append(f"• {num} | {cliente} | {_first_product_name(o)} | {stato}")
+    if len(candidati) > 20:
+        righe.append(f"(...e altri {len(candidati) - 20}, mostrati i primi 20)")
+    return "\n".join(righe)
 
 
 def format_order_group_summary(group_orders: list, main_number: str) -> str:
@@ -2158,20 +2317,44 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
     if piattaforma and piattaforma in blocked:
         return f"La ricerca ordini '{piattaforma}' non è disponibile in questa modalità."
 
+    # Fonti che hanno risposto con un errore: NON sono un "non trovato". Si
+    # raccolgono qui e si dichiarano alla fine, invece di fermare la cascata.
+    # Prima il primo errore (tipicamente il 401 del catalogo) diventava il
+    # risultato dello strumento e le fonti successive non venivano mai provate.
+    non_consultabili = []
+    guardate = []
+
     def _fmt_custom(numero):
         """Ordine custom + eventuale riepilogo gruppo (solo se gruppo > 1 membro)."""
         res = _find_custom_order_and_group(numero)
         if res.get("error"):
-            return f"Errore ricerca custom: {res['error']}"
+            non_consultabili.append(res["error"])
+            return None
+        guardate.append("ordini custom (kanokimonos.app)")
+        if res.get("candidati"):
+            return format_candidati_custom(numero, res["candidati"])
         if res.get("results"):
-            text = format_custom_order_for_human(res["results"][0])
-            group = format_order_group_summary(res.get("group", []), numero)
-            return text + ("\n\n" + group if group else "")
+            trovato = res["results"][0]
+            numero_completo = trovato.get("order_number") or numero
+            text = format_custom_order_for_human(trovato)
+            group = format_order_group_summary(res.get("group", []), numero_completo)
+            testa = ""
+            if res.get("match") == "prefisso":
+                # Il modello deve DICHIARARE il numero completo che ha trovato,
+                # non ripetere il progressivo che gli e' stato dato.
+                testa = (
+                    f"Ricerca per progressivo: '{numero}' corrisponde all'ordine "
+                    f"{numero_completo}. Nella risposta dichiara SEMPRE il numero "
+                    f"completo.\n\n"
+                )
+            return testa + text + ("\n\n" + group if group else "")
         return None
 
     def _fmt_wc(res):
         if res.get("error"):
-            return f"Errore WooCommerce: {res['error']}"
+            non_consultabili.append(res["error"])
+            return None
+        guardate.append("ordini da catalogo (kanokimonos.com)")
         if res.get("results"):
             return format_order_for_human(res["results"][0])
         return None
@@ -2181,15 +2364,36 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
         così le due porte d'ingresso non danno risposte diverse."""
         res = tool_ordine_fabbrica_per_numero(numero)
         if res.get("error"):
-            return f"Errore btoweb: {res['error']}"
+            non_consultabili.append(res["error"])
+            return None
+        guardate.append("ordini di fabbrica (btoweb)")
         return format_bto_order_card(res) or None
 
+    def _esito_negativo(descrizione_fonti):
+        """Messaggio finale onesto: cosa e' stato guardato davvero e cosa no."""
+        righe = []
+        if guardate:
+            righe.append(
+                f"Non ho trovato l'ordine {numero} fra {', '.join(dict.fromkeys(guardate))}."
+            )
+        else:
+            righe.append(f"Non sono riuscito a cercare l'ordine {numero}: {descrizione_fonti}.")
+        for frase in dict.fromkeys(non_consultabili):
+            righe.append(frase)
+        if non_consultabili:
+            righe.append(
+                "ATTENZIONE: le fonti qui sopra NON hanno risposto, quindi non "
+                "dire che l'ordine non esiste: di' quali hai potuto guardare e "
+                "quale no."
+            )
+        return "\n".join(righe)
+
     if piattaforma == "custom":
-        return _fmt_custom(numero) or f"Non ho trovato l'ordine custom {numero}."
+        return _fmt_custom(numero) or _esito_negativo("la fonte custom non risponde")
     if piattaforma == "woocommerce":
-        return _fmt_wc(search_orders_by_id(numero)) or f"Non ho trovato l'ordine WooCommerce {numero}."
+        return _fmt_wc(search_orders_by_id(numero)) or _esito_negativo("la fonte catalogo non risponde")
     if piattaforma == "btoweb":
-        return _fmt_bto(numero) or f"Non ho trovato l'ordine di fabbrica btoweb {numero}."
+        return _fmt_bto(numero) or _esito_negativo("la fonte btoweb non risponde")
 
     # Auto: deduci dal formato (stessa logica del vecchio routing regex),
     # saltando le piattaforme vietate per la modalità corrente.
@@ -2202,6 +2406,8 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
     if "custom" not in blocked:
         custom = _fmt_custom(numero)
         if custom:
+            # Il custom ha trovato: si ferma qui. Interrogare anche il catalogo
+            # significava incassare il suo 401 e perdere la risposta buona.
             return custom
     if "woocommerce" not in blocked and numero.isdigit():
         wc = _fmt_wc(search_orders_by_id(numero))
@@ -2212,7 +2418,7 @@ def tool_cerca_ordine_per_numero(numero: str, piattaforma: str = None, blocked_p
         if bto:
             return bto
     consentite = [p for p in ("custom", "WooCommerce", "btoweb") if p.lower() not in blocked]
-    return f"Non ho trovato l'ordine {numero} su nessuna piattaforma ({', '.join(consentite)})."
+    return _esito_negativo(f"nessuna delle fonti consentite ({', '.join(consentite)}) è consultabile")
 
 
 def _custom_forme_cliente(o: dict) -> list:
@@ -2557,7 +2763,8 @@ def _pricing_rows(res: str):
     """Righe grezze di una risorsa pricing, oppure ('error', payload)."""
     data = get_custom_resource(res, 5000)
     if isinstance(data, dict) and data.get("error"):
-        return None, {"error": data.get("error"), "details": data.get("details")}
+        # Mai 'details': era il corpo grezzo della edge function e finiva a video.
+        return None, {"error": data.get("error"), "fonte": "listino"}
     if isinstance(data, list):
         rows = data
     elif isinstance(data, dict):
@@ -4785,7 +4992,17 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         return {"error": f"Strumento sconosciuto: {name}"}
     except Exception as e:
-        return {"error": f"Errore nell'esecuzione di {name}: {str(e)}"}
+        # Il testo dell'eccezione resta nel log: al modello va una frase che
+        # dice "non ho potuto guardare", non un messaggio tecnico da ripetere.
+        print(f"[STRUMENTO {name}] eccezione: {e}")
+        return {
+            "error": (
+                "Questo strumento non è riuscito a completare la ricerca per un "
+                "problema tecnico. NON è una risposta sul merito: non dire che il "
+                "dato non esiste, di' che questa fonte non è consultabile ora."
+            ),
+            "fonte": name,
+        }
 
 
 def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -> str:
@@ -4845,7 +5062,13 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
         return "\n".join(text_parts).strip() or "Non sono riuscito a completare la richiesta."
 
     except Exception as e:
-        return f"Errore AI: {str(e)}"
+        # Unico punto che parla all'utente SENZA passare dal modello: qui usciva
+        # str(e) grezzo (chiavi, quote, stack del client). Dettaglio nel log.
+        print(f"[AI] eccezione: {e}")
+        return (
+            "Non riesco a rispondere in questo momento per un problema tecnico del "
+            "servizio. Non è una risposta sulla tua domanda: riprova fra poco."
+        )
 
 
 # --- CHIAVE AMMINISTRATIVA SUGLI ENDPOINT DI SERVIZIO ------------------------
