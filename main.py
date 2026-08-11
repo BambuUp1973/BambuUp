@@ -35,6 +35,19 @@ BTO_API_KEY = os.getenv("BTO_API_KEY")
 # l'esterno come le altre: è quella che i chiamanti devono presentare a NOI.
 BOT_ADMIN_KEY = os.getenv("BOT_ADMIN_KEY")
 
+# --- CHIAVI CLIENT DI /chat (LOTTO SICUREZZA, FASE 1) ------------------------
+# Ogni frontend legittimo presenta l'header 'x-bot-client-key'; a ogni chiave
+# corrisponde il ruolo che assegna il SERVER, perché il campo 'role' del body
+# lo scrive il chiamante e non fa fede. In questa fase la chiave viene solo
+# riconosciuta e loggata: chi non la manda, o la sbaglia, viene servito come
+# oggi. Il rifiuto arriverà in fase 3, quando i log diranno che tutto il
+# traffico legittimo la presenta. La struttura regge già più chiavi, ma se ne
+# configura una sola: quella del mini-sito (il widget Shopify è predisposto).
+BOT_CLIENT_KEYS = {
+    "staff": os.getenv("BOT_CLIENT_KEY_MINISITO"),
+    "retail": os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY"),
+}
+
 
 def init_db():
     """Crea le tabelle se non esistono — eseguito all'avvio."""
@@ -5102,6 +5115,21 @@ def richiedi_chiave_admin(x_bot_admin_key: str = Header(default=None)):
 SOLO_ADMIN = [Depends(richiedi_chiave_admin)]
 
 
+# Riconoscimento della chiave client di /chat (vedi BOT_CLIENT_KEYS in testa).
+# Stesso confronto a tempo costante e su byte della chiave amministrativa, e
+# per gli stessi motivi. Ritorna il ruolo associato alla chiave, None se la
+# chiave manca o non corrisponde a nessuna configurata: in fase 1 il None NON
+# è un rifiuto, è solo "il server non decide, vale il body come oggi".
+def ruolo_da_chiave_client(chiave_fornita):
+    if not chiave_fornita:
+        return None
+    fornita = chiave_fornita.encode("utf-8")
+    for ruolo, attesa in BOT_CLIENT_KEYS.items():
+        if attesa and hmac.compare_digest(fornita, attesa.encode("utf-8")):
+            return ruolo
+    return None
+
+
 @app.get("/")
 def home():
     return {"status": "BambuUp Bot running"}
@@ -5135,7 +5163,22 @@ def webchat():
 
 
 @app.post("/chat")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, x_bot_client_key: str = Header(default=None)):
+    # FASE 1 delle chiavi client: se l'header porta una chiave riconosciuta il
+    # ruolo lo decide il server e il 'role' del body viene ignorato; se manca o
+    # non corrisponde, la richiesta viene servita come oggi con il role del
+    # body. Il log qui sotto (mai la chiave, solo presenza ed esito) serve a
+    # misurare quando tutto il traffico legittimo presenta la chiave: è la
+    # condizione per passare alla fase 3, quella dei rifiuti.
+    ruolo_da_chiave = ruolo_da_chiave_client(x_bot_client_key)
+    role = ruolo_da_chiave or request.role
+    if x_bot_client_key is None:
+        esito_chiave = "assente"
+    elif ruolo_da_chiave:
+        esito_chiave = f"valida->{ruolo_da_chiave}"
+    else:
+        esito_chiave = "sconosciuta"
+    print(f"[CHAT-KEY] chiave={esito_chiave} source={request.source} role_body={request.role}")
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
@@ -5154,8 +5197,9 @@ def chat(request: ChatRequest):
 
         # Routing via tool use: Haiku decide quale strumento chiamare e con
         # quali parametri (sostituisce la vecchia cascata di regex).
-        # role seleziona modalità utente (staff default, b2b/retail predisposti).
-        bot_reply = chat_with_tools(request.chat_id, request.message, request.role)
+        # role seleziona modalità utente: deciso sopra (chiave client se
+        # riconosciuta, altrimenti il body come sempre).
+        bot_reply = chat_with_tools(request.chat_id, request.message, role)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
