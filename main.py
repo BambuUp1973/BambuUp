@@ -35,18 +35,21 @@ BTO_API_KEY = os.getenv("BTO_API_KEY")
 # l'esterno come le altre: è quella che i chiamanti devono presentare a NOI.
 BOT_ADMIN_KEY = os.getenv("BOT_ADMIN_KEY")
 
-# --- CHIAVI CLIENT DI /chat (LOTTO SICUREZZA, FASE 1) ------------------------
+# --- CHIAVI CLIENT DI /chat E /feedback (LOTTO SICUREZZA, FASE 3) ------------
 # Ogni frontend legittimo presenta l'header 'x-bot-client-key'; a ogni chiave
 # corrisponde il ruolo che assegna il SERVER, perché il campo 'role' del body
-# lo scrive il chiamante e non fa fede. In questa fase la chiave viene solo
-# riconosciuta e loggata: chi non la manda, o la sbaglia, viene servito come
-# oggi. Il rifiuto arriverà in fase 3, quando i log diranno che tutto il
-# traffico legittimo la presenta. La struttura regge già più chiavi, ma se ne
-# configura una sola: quella del mini-sito (il widget Shopify è predisposto).
-BOT_CLIENT_KEYS = {
-    "staff": os.getenv("BOT_CLIENT_KEY_MINISITO"),
-    "retail": os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY"),
-}
+# lo scrive il chiamante e non fa fede. Dalla fase 3 chi non manda la chiave,
+# o ne manda una sconosciuta, viene rifiutato (401 pulito, niente dettagli
+# tecnici nella risposta: quelli restano nei log). Lista di coppie e non dict
+# perché più chiavi possono dare lo stesso ruolo: mini-sito e script di
+# diagnosi sono entrambe staff (la seconda esiste perché senza una chiave
+# nostra, dopo i rifiuti, le prove live non sarebbero più possibili). Il
+# widget Shopify resta predisposto, chiave non ancora generata.
+BOT_CLIENT_KEYS = [
+    ("staff", os.getenv("BOT_CLIENT_KEY_MINISITO")),
+    ("staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI")),
+    ("retail", os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY")),
+]
 
 
 def init_db():
@@ -5115,19 +5118,45 @@ def richiedi_chiave_admin(x_bot_admin_key: str = Header(default=None)):
 SOLO_ADMIN = [Depends(richiedi_chiave_admin)]
 
 
-# Riconoscimento della chiave client di /chat (vedi BOT_CLIENT_KEYS in testa).
-# Stesso confronto a tempo costante e su byte della chiave amministrativa, e
-# per gli stessi motivi. Ritorna il ruolo associato alla chiave, None se la
-# chiave manca o non corrisponde a nessuna configurata: in fase 1 il None NON
-# è un rifiuto, è solo "il server non decide, vale il body come oggi".
+# Riconoscimento della chiave client (vedi BOT_CLIENT_KEYS in testa). Stesso
+# confronto a tempo costante e su byte della chiave amministrativa, e per gli
+# stessi motivi. Ritorna il ruolo associato alla chiave, None se la chiave
+# manca o non corrisponde a nessuna configurata: dalla fase 3 il None è un
+# rifiuto (vedi rifiuta_chiave_client).
 def ruolo_da_chiave_client(chiave_fornita):
     if not chiave_fornita:
         return None
     fornita = chiave_fornita.encode("utf-8")
-    for ruolo, attesa in BOT_CLIENT_KEYS.items():
+    for ruolo, attesa in BOT_CLIENT_KEYS:
         if attesa and hmac.compare_digest(fornita, attesa.encode("utf-8")):
             return ruolo
     return None
+
+
+# Esito leggibile per i log [CHAT-KEY]/[FEEDBACK-KEY]: mai la chiave, solo
+# presenza e risultato. Formato invariato dalla fase 1, così le righe restano
+# confrontabili nel tempo.
+def esito_chiave_client(chiave_fornita, ruolo):
+    if chiave_fornita is None:
+        return "assente"
+    if ruolo:
+        return f"valida->{ruolo}"
+    return "sconosciuta"
+
+
+# FASE 3: il rifiuto. Il 401 dice solo che l'accesso non è autorizzato — il
+# nome dell'header, l'esito e ogni altro dettaglio restano nei log del server,
+# mai nella risposta. Caso a parte: se sul server non è configurata NESSUNA
+# chiave client, rifiutare con 401 direbbe il falso ("chiave sbagliata" quando
+# il problema è nostro); si risponde 503, fail closed come richiedi_chiave_admin
+# ma distinguibile nei fatti da una chiave errata.
+def rifiuta_chiave_client():
+    if not any(attesa for _ruolo, attesa in BOT_CLIENT_KEYS):
+        raise HTTPException(
+            status_code=503,
+            detail="Servizio momentaneamente non disponibile.",
+        )
+    raise HTTPException(status_code=401, detail="Accesso non autorizzato.")
 
 
 @app.get("/")
@@ -5141,7 +5170,15 @@ def health():
 
 
 @app.post("/feedback")
-def submit_feedback(request: FeedbackRequest):
+def submit_feedback(request: FeedbackRequest, x_bot_client_key: str = Header(default=None)):
+    # Stessa chiave client di /chat (fase 3): senza chiave riconosciuta il
+    # feedback non entra nel DB. Qui il ruolo non serve, conta solo che la
+    # chiave sia una delle nostre.
+    ruolo_da_chiave = ruolo_da_chiave_client(x_bot_client_key)
+    esito_chiave = esito_chiave_client(x_bot_client_key, ruolo_da_chiave)
+    print(f"[FEEDBACK-KEY] chiave={esito_chiave}")
+    if ruolo_da_chiave is None:
+        rifiuta_chiave_client()
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
@@ -5164,21 +5201,16 @@ def webchat():
 
 @app.post("/chat")
 def chat(request: ChatRequest, x_bot_client_key: str = Header(default=None)):
-    # FASE 1 delle chiavi client: se l'header porta una chiave riconosciuta il
-    # ruolo lo decide il server e il 'role' del body viene ignorato; se manca o
-    # non corrisponde, la richiesta viene servita come oggi con il role del
-    # body. Il log qui sotto (mai la chiave, solo presenza ed esito) serve a
-    # misurare quando tutto il traffico legittimo presenta la chiave: è la
-    # condizione per passare alla fase 3, quella dei rifiuti.
+    # FASE 3 delle chiavi client: il ruolo lo decide SOLO il server dalla
+    # chiave; il 'role' del body non fa più fede in nessun caso. Chi non manda
+    # la chiave, o ne manda una sconosciuta, viene rifiutato — ma prima si
+    # logga, così anche i rifiuti restano visibili nell'audit.
     ruolo_da_chiave = ruolo_da_chiave_client(x_bot_client_key)
-    role = ruolo_da_chiave or request.role
-    if x_bot_client_key is None:
-        esito_chiave = "assente"
-    elif ruolo_da_chiave:
-        esito_chiave = f"valida->{ruolo_da_chiave}"
-    else:
-        esito_chiave = "sconosciuta"
+    esito_chiave = esito_chiave_client(x_bot_client_key, ruolo_da_chiave)
     print(f"[CHAT-KEY] chiave={esito_chiave} source={request.source} role_body={request.role}")
+    if ruolo_da_chiave is None:
+        rifiuta_chiave_client()
+    role = ruolo_da_chiave
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
@@ -5197,8 +5229,7 @@ def chat(request: ChatRequest, x_bot_client_key: str = Header(default=None)):
 
         # Routing via tool use: Haiku decide quale strumento chiamare e con
         # quali parametri (sostituisce la vecchia cascata di regex).
-        # role seleziona modalità utente: deciso sopra (chiave client se
-        # riconosciuta, altrimenti il body come sempre).
+        # role seleziona modalità utente: deciso sopra, solo dalla chiave.
         bot_reply = chat_with_tools(request.chat_id, request.message, role)
 
         conn = psycopg2.connect(DATABASE_URL)
