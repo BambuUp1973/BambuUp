@@ -1864,8 +1864,18 @@ CHAT_TOOLS = [
             "colore; (2) PRODUZIONE — contatori della pipeline di produzione. Usalo per "
             "'che taglie esistono per <prodotto>?', 'a che prodotto corrisponde lo SKU/EAN "
             "<numero>?', 'quanti <prodotto> sono in produzione?'. "
-            "Passa 'sku' per la ricerca esatta di uno SKU/EAN, altrimenti 'query' con le "
-            "parole chiave del nome prodotto. "
+            "'query' e 'sku' sono FACOLTATIVI, nessuno dei due è obbligatorio. Passa "
+            "'sku' per la ricerca esatta di uno SKU/EAN, 'query' con le parole chiave "
+            "del nome prodotto quando cerchi UN prodotto. Se la domanda è generica "
+            "('cosa c'è in produzione?', 'com'è messa la pipeline?', 'il quadro "
+            "completo') CHIAMALO SENZA query e SENZA sku: così torna il quadro "
+            "COMPLETO, tutti i prodotti con i loro contatori. Non serve nessun "
+            "parametro per averlo e NON devi chiedere all'utente una parola chiave "
+            "per poterlo chiamare: chiamalo e basta. "
+            "MAI passare query fittizie tipo '*', '%', 'tutti', 'tutto', 'all': la "
+            "ricerca è LETTERALE sul nome del prodotto, quindi una query così non "
+            "trova niente e ti fa credere che il catalogo sia vuoto. Per avere tutto "
+            "si OMETTE query, non si scrive un jolly. "
             "QUI DENTRO NON CI SONO ORDINI: è l'anagrafica dei prodotti. Uno SKU/EAN è un "
             "numero lungo di sole cifre (es. 7427115006810); un numero fatto da sei cifre, "
             "un trattino e quattro cifre (es. 082026-0002, 122025-0007) NON è uno SKU: è un "
@@ -1891,11 +1901,20 @@ CHAT_TOOLS = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Parole chiave del nome prodotto (es. 'BJJ Belt Competition', 't-shirt kano').",
+                    "description": (
+                        "FACOLTATIVO. Parole chiave del nome prodotto (es. 'BJJ Belt "
+                        "Competition', 't-shirt kano'), da usare SOLO se cerchi un "
+                        "prodotto preciso. OMETTILO per avere il quadro completo di "
+                        "tutto il catalogo. Non scrivere mai un jolly ('*', 'tutti'): "
+                        "il confronto è letterale e non troverebbe nulla."
+                    ),
                 },
                 "sku": {
                     "type": "string",
-                    "description": "SKU/EAN esatto da cercare (es. '7427115006810'). Ha priorità su 'query'.",
+                    "description": (
+                        "FACOLTATIVO. SKU/EAN esatto da cercare (es. '7427115006810'). "
+                        "Ha priorità su 'query'. Ometti se non stai cercando uno SKU."
+                    ),
                 },
                 "tipo": {
                     "type": "string",
@@ -2114,7 +2133,7 @@ CHAT_TOOLS = [
 TOOL_SYSTEM_SUFFIX = """
 STRUMENTI E ONESTÀ
 Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni dal manuale. Regole:
-- NON CHIEDERE MAI ALL'UTENTE UN DATO CHE PUOI RICAVARE DA SOLO CON I TUOI STRUMENTI. Vale ovunque, per ogni strumento. Prima di fare una domanda di chiarimento fermati e chiediti: "questo dato sta dentro qualcosa che mi ha già dato?". Se l'utente ti ha dato un numero, un nome o un identificativo, il resto (produttore, cliente, prodotti, stato, piattaforma) è dentro il record: si cerca, non si chiede. Esempio concreto: l'utente chiede cosa contiene un ordine di fabbrica e ti dà il numero → il produttore è DENTRO quell'ordine, quindi chiamare lo strumento e leggerlo, MAI rispondere "da quale produttore?". Chiedere è consentito solo in tre casi: (a) il dato non esiste a sistema, (b) hai già cercato e restano più candidati davvero ambigui, (c) l'utente non ti ha dato nessun identificativo utilizzabile. In tutti gli altri casi la domanda è un errore: cerca. E se l'identificativo l'ha dato in un messaggio PRECEDENTE della conversazione, riusalo: non farglielo ripetere.
+- NON CHIEDERE MAI ALL'UTENTE UN DATO CHE PUOI RICAVARE DA SOLO CON I TUOI STRUMENTI. Vale ovunque, per ogni strumento. Prima di fare una domanda di chiarimento fermati e chiediti: "questo dato sta dentro qualcosa che mi ha già dato?". Se l'utente ti ha dato un numero, un nome o un identificativo, il resto (produttore, cliente, prodotti, stato, piattaforma) è dentro il record: si cerca, non si chiede. Esempio concreto: l'utente chiede cosa contiene un ordine di fabbrica e ti dà il numero → il produttore è DENTRO quell'ordine, quindi chiamare lo strumento e leggerlo, MAI rispondere "da quale produttore?". Chiedere è consentito solo in tre casi: (a) il dato non esiste a sistema, (b) hai già cercato e restano più candidati davvero ambigui, (c) l'utente non ti ha dato nessun identificativo utilizzabile. In tutti gli altri casi la domanda è un errore: cerca. E se l'identificativo l'ha dato in un messaggio PRECEDENTE della conversazione, riusalo: non farglielo ripetere. E vale anche al contrario, sui PARAMETRI degli strumenti: quando uno strumento può rispondere SENZA parametri, lo si chiama senza parametri. Se un parametro è facoltativo, la sua assenza NON è un ostacolo da girare all'utente: è la strada per avere il quadro completo. Non inventare mai vincoli che lo strumento non ha ("mi serve una parola chiave", "il parametro è obbligatorio", "serve almeno una query"): se lo schema non lo dichiara obbligatorio, non lo è, e chiederlo all'utente è lo stesso errore di chiedere un dato ricavabile.
 - PRECISAZIONI E FRAMMENTI, REGOLA MECCANICA: se il messaggio dell'utente è un frammento o una precisazione senza un nuovo identificativo ("ordine fabbrica", "è un ordine di fabbrica", "quello di prima", "sì", "il batch"), NON chiedere di nuovo il numero o il nome: RIPRENDI dalla conversazione l'ultimo identificativo che l'utente ha scritto, richiama lo strumento coerente con la precisazione e rispondi con i dati. Chiedere di ripetere un dato che l'utente ha già scritto in chat è sempre un errore. Se non capisci cosa vuole ma un identificativo c'è, cerca quell'identificativo e mostra cosa hai trovato: è sempre meglio di una domanda.
 - Per QUALSIASI richiesta su un ordine (numero) o su un cliente (nome), chiama lo strumento giusto. Non inventare mai lo stato di un ordine.
 - Usa SOLO i dati restituiti dagli strumenti. Se uno strumento non restituisce risultati, dillo onestamente (es. "Non trovo ordini per X").
