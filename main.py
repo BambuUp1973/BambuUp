@@ -3040,10 +3040,12 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
                     "mancanti": 0,
                     "danneggiati": 0,
                     "attesi_su_fully": 0,
+                    "_righe": 0,
                     "dettaglio_taglie": [],
                 }
                 ordine.append(base)
             g = gruppi[base]
+            g["_righe"] += 1
             g["in_produzione"] += r.get("qty_in_production") or 0
             g["prodotti_e_spediti_dal_fornitore"] += r.get("qty_shipped") or 0
             g["ricevuti_conformi"] += r.get("qty_received_good") or 0
@@ -3063,7 +3065,28 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
 
         ordine.sort(key=lambda b: _bto_rank_key(b, q))
         out_gruppi = [gruppi[k] for k in ordine[:25]]
+        # Il mucchio senza nome pesa più di ogni prodotto vero e con _bto_rank_key
+        # (a parità di query vince il nome più corto) finiva in TESTA alla lista:
+        # chi legge di fretta vede 1252 pezzi in cima e crede sia un articolo.
+        # Va in fondo. sort è stabile, quindi gli altri gruppi non si spostano.
+        out_gruppi.sort(key=lambda g: g["prodotto"] == "(senza nome)")
         for g in out_gruppi:
+            n_righe = g.pop("_righe")
+            # Stessa contromisura che l'anagrafica ha già sul dato mancante alla
+            # fonte: su 'stock' esistono righe con product_name a null (hanno solo
+            # lo SKU). Raggruppate finiscono tutte sotto un'unica etichetta e
+            # sembrano UN prodotto enorme. Va detto che non è un prodotto.
+            if g["prodotto"] == "(senza nome)":
+                g["nome_prodotto_non_valorizzato"] = True
+                g["nota_prodotto"] = (
+                    "NON è un prodotto: sono %d righe di btoweb in cui il NOME del "
+                    "prodotto non è valorizzato alla fonte (c'è solo lo SKU), finite "
+                    "insieme qui perché non hanno un nome con cui distinguerle. I "
+                    "numeri di questa voce sono la SOMMA di SKU diversi fra loro: non "
+                    "presentarla come un articolo, non darle un nome tuo e non dedurre "
+                    "di che prodotti si tratti. Se serve sapere cosa sono, vanno "
+                    "guardati gli SKU uno per uno." % n_righe
+                )
             g["dettaglio_taglie"] = g["dettaglio_taglie"][:30]
 
         return {
@@ -3485,21 +3508,28 @@ _BTO_NUMERO_BATCH_RE = re.compile(r"^\d{6}\s*-\s*\d{1,4}$")
 _BTO_NUMERO_PREFISSO_RE = re.compile(r"^\d{6}$")
 
 # I tre valori di products_source dichiarano DA DOVE arrivano le quantità della
-# riga. Le differenze qui sotto sono verificate sui dati reali (1840 righe):
-# lo SKU esiste solo su size_lines, la quantità prodotta solo dove la fonte la
-# registra. Vanno dichiarate, non date per scontate.
+# riga. Le differenze qui sotto sono verificate sui dati reali (qualche migliaio
+# di righe-prodotto: il numero esatto cresce a ogni batch, non va cablato qui).
+# Lo SKU esiste solo su size_lines. La quantità PRODOTTA invece NON segue la
+# sorgente: è valorizzata solo su una parte delle righe, e dentro la stessa
+# sorgente convivono righe che ce l'hanno e righe che non ce l'hanno. Si guarda
+# riga per riga. Vanno dichiarate, non date per scontate.
 _BTO_PRODUCTS_SOURCE_LABELS = {
     "size_lines": (
         "quantità lette dalle righe-taglia del batch: è l'unica sorgente che porta "
-        "anche lo SKU (e spesso il colore) di ogni taglia"
+        "anche lo SKU (e spesso il colore) di ogni taglia. La quantità PRODOTTA su "
+        "questa sorgente c'è su alcune righe e manca su altre: leggila riga per "
+        "riga, non darla per assente"
     ),
     "sizes": (
         "quantità lette dalla ripartizione taglie del prodotto: niente SKU e niente "
         "quantità prodotta, solo taglia e quantità ordinata"
     ),
     "production_quantities": (
-        "quantità lette dai conteggi di produzione del fornitore: niente SKU, ma è "
-        "la sorgente dove la quantità PRODOTTA è valorizzata"
+        "quantità lette dai conteggi di produzione del fornitore: niente SKU. Su "
+        "questa sorgente la quantità PRODOTTA è di norma valorizzata, ma non è "
+        "l'unica sorgente che la porta: leggila riga per riga, non dedurla dalla "
+        "sorgente"
     ),
 }
 
@@ -3754,11 +3784,45 @@ def _bto_scheda_ordine(numero: str, righe: list) -> dict:
             "Dettaglio prodotti NON valorizzato alla fonte per questo ordine: dillo, "
             "non dedurre cosa contiene."
         )
-    if scheda["pezzi_prodotti_totali"] is None:
+    # La quantità prodotta NON dipende dalla sorgente dichiarata: dentro la stessa
+    # products_source convivono righe che ce l'hanno e righe che non ce l'hanno.
+    # Quindi il conto si fa riga per riga, e un totale costruito solo su una parte
+    # delle righe va dichiarato PARZIALE: altrimenti "418 ordinati / 95 prodotti"
+    # sembra un ordine indietro con la produzione, quando invece di 323 pezzi non
+    # si sa niente.
+    righe_taglia = [t for a in articoli for t in a["taglie"]]
+    con_prodotta = [t for t in righe_taglia if t["quantita_prodotta"] is not None]
+    senza_prodotta = [t for t in righe_taglia if t["quantita_prodotta"] is None]
+    pezzi_senza_dato = sum(t["quantita_ordinata"] for t in senza_prodotta)
+
+    if scheda["pezzi_prodotti_totali"] is None and righe_taglia:
         scheda["nota_pezzi_prodotti"] = (
-            "La fonte non registra la quantità prodotta per questo ordine (succede "
-            "quando l'origine delle quantità non è production_quantities): parla solo "
-            "di pezzi ORDINATI."
+            "La fonte non registra la quantità prodotta per NESSUNA delle %d righe di "
+            "questo ordine: parla solo di pezzi ORDINATI. La quantità prodotta è "
+            "valorizzata solo su una parte delle righe e non si deduce dalla sorgente "
+            "('origine_quantita_products_source'): non dire che manca PERCHÉ la "
+            "sorgente è quella, di' che alla fonte non c'è." % len(righe_taglia)
+        )
+    elif senza_prodotta:
+        scheda["quantita_prodotta_parziale"] = True
+        scheda["nota_pezzi_prodotti"] = (
+            "TOTALE PARZIALE, dillo sempre: 'pezzi_prodotti_totali' (%d) è la somma di "
+            "sole %d righe su %d. Sulle altre %d righe, che valgono %d pezzi ORDINATI, "
+            "la fonte NON registra nessuna quantità prodotta: di quei %d pezzi non si "
+            "sa quanti ne siano stati prodotti. È VIETATO dire '%d prodotti su %d "
+            "ordinati' o presentarlo come un ordine indietro con la produzione: di' "
+            "che il dato di produzione copre solo una parte dell'ordine e dichiara "
+            "quale parte resta senza dato."
+            % (
+                scheda["pezzi_prodotti_totali"],
+                len(con_prodotta),
+                len(righe_taglia),
+                len(senza_prodotta),
+                pezzi_senza_dato,
+                pezzi_senza_dato,
+                scheda["pezzi_prodotti_totali"],
+                pezzi,
+            )
         )
     if tot_fonte_visto:
         scheda["totale_dichiarato_dalla_fonte"] = tot_fonte
