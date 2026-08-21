@@ -1803,6 +1803,12 @@ CHAT_TOOLS = [
             "Se lo passi, ricevi anche l'elenco per-ordine (stato + pagamento) del cliente.\n"
             "- 'mese': 'corrente' per il mese in corso, un nome di mese (es. 'giugno') o "
             "'YYYY-MM'. Filtra per data di creazione dell'ordine.\n"
+            "NON SA FILTRARE PER PRODOTTO: i filtri sono SOLO quei due. Qualunque "
+            "conteggio torni da qui è su TUTTI i prodotti insieme, mai su un modello, una "
+            "linea o una categoria. È VIETATO attaccare a questi numeri il nome di un "
+            "prodotto: se l'utente chiede dei rashguard o dei kimoni, '40 in produzione' NON "
+            "diventa '40 rashguard in produzione' né '40 ordini di kimoni'. Il dettaglio per "
+            "prodotto questo strumento non ce l'ha: su btoweb lo dà catalogo_btoweb.\n"
             "Stati ordine (order_status) e loro significato: pending=in lavorazione grafica/"
             "taglie, processing=in produzione, shipped_to_logistics=in viaggio verso la "
             "logistica (Fully), at_logistics=da Fully pronti a partire, shipped_to_customer="
@@ -2155,6 +2161,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
   * La domanda NOMINA gli ordini custom, kanokimonos.app, i clienti, gli ordini dei clienti — allora UN SOLO strumento: statistiche_ordini_custom. Non chiamare anche l'altro.
   * La domanda dice solo "produzione" o "lavorazione" SENZA dire quale delle due — "cosa abbiamo in produzione?", "quanti pezzi ci sono in lavorazione?", "com'è messa la pipeline?" — allora è AMBIGUA e non la si indovina: consulta ENTRAMBI gli strumenti e dai ENTRAMBE le risposte. Non chiedere all'utente quale intendeva: gliele dai tutte e due e sceglie lui. Attenzione alla parola "pipeline": btoweb chiama "pipeline di produzione" i suoi contatori, ma se l'utente la usa SENZA nominare btoweb non ha scelto niente e la domanda resta AMBIGUA: valgono entrambi gli assi.
   Come si scrive la risposta ambigua: i due assi vanno tenuti SEPARATI, in due blocchi distinti, ognuno con la SUA piattaforma dichiarata per nome. Forma corretta: "Su kanokimonos.app (ordini custom): X ordini in lavorazione. Su btoweb (pipeline di fabbrica): Y pezzi in produzione presso i fornitori". È VIETATO sommare i due numeri, VIETATO metterli nella stessa tabella o nella stessa riga, e VIETATO presentarli come un totale unico: uno conta ORDINI e l'altro conta PEZZI, quindi la loro somma è un numero senza nessun significato. E non dire mai un numero senza dire su quale delle due piattaforme sta.
+  QUANDO LA DOMANDA NOMINA UN PRODOTTO ("quanti rashguard sono in produzione?", "quanti kimoni?"): statistiche_ordini_custom NON sa filtrare per prodotto — ha SOLO i filtri cliente e mese — quindi i suoi conteggi sono SEMPRE su tutti i prodotti insieme. È VIETATO presentarli come se riguardassero il prodotto chiesto: "40 ordini in produzione" NON è "40 ordini di rashguard in produzione" e non è "40 ordini di kimoni". Due strade sole: o NON citi l'asse custom, oppure lo citi dicendo per esteso che quel numero è su TUTTI i prodotti e non solo su quello chiesto. Il dettaglio per prodotto lo dà soltanto catalogo_btoweb.
 - CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
 - ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli. ATTENZIONE al caso opposto: i produttori sono POCHI e NOTI (Martin, 7punch/Seventh Punch, Wearica, Tussle, Fair Tex), quindi se lo strumento risponde 'trovato: false' quel nome quasi certamente NON è un produttore ma un CLIENTE (persona, palestra, ASD, azienda): riprova SUBITO con cerca_ordini_per_cliente prima di dire all'utente che non risulta nulla. Non chiudere mai con "non lo trovo" avendo provato una sola delle due strade.
 - ORDINI DI FABBRICA PER NUMERO (ordine_fabbrica_per_numero, solo STAFF): un numero di sei cifre + trattino + quattro cifre (082026-0002, 122025-0007, 062026-0004) è un ORDINE DI FABBRICA btoweb, cioè un BATCH di merce ordinata a un produttore. Quando l'utente lo cita — anche da solo, anche solo dicendo "batch" o "ordine fabbrica" — usa questo strumento. NON è uno SKU/EAN (quelli sono numeri di sole cifre) e non è un ordine cliente. E NON CHIEDERE MAI IL PRODUTTORE: il produttore è dentro l'ordine e te lo restituisce lo strumento. Riporta prodotti, taglie, quantità ordinate, SKU e colore come tornano dallo strumento, dichiara che è un ordine di FABBRICA su btoweb, dichiara l'origine delle quantità ('origine_quantita_products_source': size_lines / sizes / production_quantities) e non spacciare le conferme di ricezione registrate su btoweb per prove che la merce sia arrivata in magazzino. Se lo strumento risponde 'trovato': false quel numero non esiste su btoweb: dillo, senza inventare e senza sostituirlo con un numero simile.
@@ -2996,6 +3003,19 @@ _BTO_CONTATORI_PRODUZIONE = (
     "attesi_su_fully",
 )
 
+# I sei contatori raccontano il CAMMINO di un pezzo (ordinato al fornitore ->
+# spedito -> ricevuto a Fully), non sono sei mucchi separati da mettere insieme.
+# Sommarli produce un numero che non esiste e conta gli stessi pezzi più volte: il
+# modello lo faceva, chiamandolo "totale complessivo". Viaggia in coda a nota_totali.
+_BTO_NOTA_FASI = (
+    " E ATTENZIONE: i sei contatori sono FASI dello stesso percorso, non insiemi "
+    "separati. Un pezzo ordinato al fornitore diventa spedito e poi ricevuto, quindi lo "
+    "stesso pezzo compare in più contatori. È VIETATO sommarli fra loro e chiamare il "
+    "risultato 'totale complessivo', 'totale della pipeline', 'totale pezzi' o simili: "
+    "quella somma non è nessuna quantità reale. Riporta ogni contatore per sé, col suo "
+    "nome e il suo significato."
+)
+
 _BTO_NOTA_PREZZI = (
     "Questa fonte NON contiene prezzi: non dedurre né stimare prezzi da qui. "
     "Per i prezzi usa lo strumento prezzi_listino."
@@ -3152,13 +3172,13 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
                 "E se un contatore è 0 nell'elenco ma non nei totali, NON dire che non c'è "
                 "niente in quello stato: quel dato sta tutto nei gruppi non elencati."
                 % (len(out_gruppi), len(ordine), len(ordine) - len(out_gruppi), len(out_gruppi))
-            )
+            ) + _BTO_NOTA_FASI
         else:
             nota_totali = (
                 "TOTALI: usa 'totali_pipeline_tutti_i_gruppi'. Qui l'elenco 'prodotti' NON è "
                 "troncato (%d gruppi su %d): i totali coprono esattamente i gruppi elencati."
                 % (len(out_gruppi), len(ordine))
-            )
+            ) + _BTO_NOTA_FASI
 
         return {
             "tipo": "produzione_pipeline",
