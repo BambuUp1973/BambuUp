@@ -2980,6 +2980,17 @@ def _bto_rank_key(base: str, q: str):
     phrase = 0 if (q and q.strip().lower() in b) else 1
     return (phrase, len(b), b)
 
+# I sei contatori della pipeline btoweb, in un posto solo: servono sia per
+# sommare i gruppi sia per i totali su tutti i gruppi, e devono restare gli stessi.
+_BTO_CONTATORI_PRODUZIONE = (
+    "in_produzione",
+    "prodotti_e_spediti_dal_fornitore",
+    "ricevuti_conformi",
+    "mancanti",
+    "danneggiati",
+    "attesi_su_fully",
+)
+
 _BTO_NOTA_PREZZI = (
     "Questa fonte NON contiene prezzi: non dedurre né stimare prezzi da qui. "
     "Per i prezzi usa lo strumento prezzi_listino."
@@ -3082,6 +3093,15 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
                 }
             )
 
+        # I gruppi consegnati sono un TAGLIO della lista (ordine[:25] qui sotto) e il
+        # taglio segue la PERTINENZA, non la quantità: i gruppi più grossi possono
+        # restare fuori tutti insieme. Chi legge solo l'elenco somma una parte e la
+        # chiama totale. I totali quindi si calcolano QUI, su TUTTI i gruppi e PRIMA
+        # di qualunque taglio, e viaggiano nel payload accanto all'elenco.
+        totali_tutti = {
+            c: sum(g[c] for g in gruppi.values()) for c in _BTO_CONTATORI_PRODUZIONE
+        }
+
         ordine.sort(key=lambda b: _bto_rank_key(b, q))
         out_gruppi = [gruppi[k] for k in ordine[:25]]
         # Il mucchio senza nome pesa più di ogni prodotto vero e con _bto_rank_key
@@ -3108,6 +3128,33 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
                 )
             g["dettaglio_taglie"] = g["dettaglio_taglie"][:30]
 
+        # La somma dell'elenco viaggia dichiarata per quello che è, così il divario
+        # con i totali veri è visibile invece che da indovinare.
+        somma_mostrati = {
+            c: sum(g[c] for g in out_gruppi) for c in _BTO_CONTATORI_PRODUZIONE
+        }
+        troncato = len(out_gruppi) < len(ordine)
+        if troncato:
+            nota_totali = (
+                "TOTALI: usa SOLO 'totali_pipeline_tutti_i_gruppi'. L'elenco 'prodotti' è "
+                "TRONCATO: sono %d gruppi su %d, scelti per PERTINENZA e non per quantità, "
+                "quindi i %d gruppi non elencati possono contenere la maggior parte dei "
+                "pezzi e, su un singolo contatore, anche tutti. È VIETATO sommare i gruppi "
+                "dell'elenco e presentare quella somma come il totale della pipeline, come "
+                "totale 'complessivo' o come quadro completo: è la somma di una parte. "
+                "'somma_dei_soli_gruppi_mostrati' è lì per confronto e NON è un totale: "
+                "se riporti quei numeri devi dire che riguardano solo i %d gruppi elencati. "
+                "E se un contatore è 0 nell'elenco ma non nei totali, NON dire che non c'è "
+                "niente in quello stato: quel dato sta tutto nei gruppi non elencati."
+                % (len(out_gruppi), len(ordine), len(ordine) - len(out_gruppi), len(out_gruppi))
+            )
+        else:
+            nota_totali = (
+                "TOTALI: usa 'totali_pipeline_tutti_i_gruppi'. Qui l'elenco 'prodotti' NON è "
+                "troncato (%d gruppi su %d): i totali coprono esattamente i gruppi elencati."
+                % (len(out_gruppi), len(ordine))
+            )
+
         return {
             "tipo": "produzione_pipeline",
             "query": q or None,
@@ -3116,6 +3163,10 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
             "righe_corrispondenti": len(sel),
             "prodotti_trovati": len(ordine),
             "gruppi_mostrati": len(out_gruppi),
+            "elenco_prodotti_troncato": troncato,
+            "totali_pipeline_tutti_i_gruppi": totali_tutti,
+            "somma_dei_soli_gruppi_mostrati": somma_mostrati,
+            "nota_totali": nota_totali,
             "prodotti": out_gruppi,
             "disclaimer": res.get("disclaimer"),
             "avvertenza": (
