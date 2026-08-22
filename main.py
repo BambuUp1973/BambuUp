@@ -2161,7 +2161,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
   * La domanda NOMINA gli ordini custom, kanokimonos.app, i clienti, gli ordini dei clienti — allora UN SOLO strumento: statistiche_ordini_custom. Non chiamare anche l'altro.
   * La domanda dice solo "produzione" o "lavorazione" SENZA dire quale delle due — "cosa abbiamo in produzione?", "quanti pezzi ci sono in lavorazione?", "com'è messa la pipeline?" — allora è AMBIGUA e non la si indovina: consulta ENTRAMBI gli strumenti e dai ENTRAMBE le risposte. Non chiedere all'utente quale intendeva: gliele dai tutte e due e sceglie lui. Attenzione alla parola "pipeline": btoweb chiama "pipeline di produzione" i suoi contatori, ma se l'utente la usa SENZA nominare btoweb non ha scelto niente e la domanda resta AMBIGUA: valgono entrambi gli assi.
   Come si scrive la risposta ambigua: i due assi vanno tenuti SEPARATI, in due blocchi distinti, ognuno con la SUA piattaforma dichiarata per nome. Forma corretta: "Su kanokimonos.app (ordini custom): X ordini in lavorazione. Su btoweb (pipeline di fabbrica): Y pezzi in produzione presso i fornitori". È VIETATO sommare i due numeri, VIETATO metterli nella stessa tabella o nella stessa riga, e VIETATO presentarli come un totale unico: uno conta ORDINI e l'altro conta PEZZI, quindi la loro somma è un numero senza nessun significato. E non dire mai un numero senza dire su quale delle due piattaforme sta.
-  QUANDO LA DOMANDA NOMINA UN PRODOTTO ("quanti rashguard sono in produzione?", "quanti kimoni?"): statistiche_ordini_custom NON sa filtrare per prodotto — ha SOLO i filtri cliente e mese — quindi i suoi conteggi sono SEMPRE su tutti i prodotti insieme. È VIETATO presentarli come se riguardassero il prodotto chiesto: "40 ordini in produzione" NON è "40 ordini di rashguard in produzione" e non è "40 ordini di kimoni". Due strade sole: o NON citi l'asse custom, oppure lo citi dicendo per esteso che quel numero è su TUTTI i prodotti e non solo su quello chiesto. Il dettaglio per prodotto lo dà soltanto catalogo_btoweb.
+  QUANDO LA DOMANDA NOMINA UN PRODOTTO ("quanti rashguard sono in produzione?", "quanti kimoni?"): statistiche_ordini_custom NON sa filtrare per prodotto — ha SOLO i filtri cliente e mese — quindi i suoi conteggi sono SEMPRE su tutti i prodotti insieme. È VIETATO presentarli come se riguardassero il prodotto chiesto: "40 ordini in produzione" NON è "40 ordini di rashguard in produzione" e non è "40 ordini di kimoni". Due strade sole: o NON citi l'asse custom, oppure lo citi dicendo per esteso che quel numero è su TUTTI i prodotti e non solo su quello chiesto. Il dettaglio per prodotto lo dà soltanto catalogo_btoweb, E LO SI CHIAMA CON 'query' UGUALE AL NOME DEL PRODOTTO, MAI SENZA. Senza 'query' quello strumento torna il quadro di TUTTI i prodotti, e il suo elenco è TRONCATO ai primi 25 gruppi su oltre cento: se il prodotto che ti hanno chiesto non compare lì dentro NON vuol dire che sia zero, vuol dire che non l'hai cercato — i gruppi più grossi sono proprio quelli che restano fuori dall'elenco. Scrivi la 'query' come il prodotto sta scritto A CATALOGO: al SINGOLARE e, se il catalogo è in inglese, in inglese (quindi 'kimono' e non 'kimoni', 'belt' e non 'cintura' o 'cinture', 't-shirt' e non 'tshirt'). E se la query torna ZERO righe non hai finito: RIPROVA con un'altra forma della stessa parola (singolare, radice più corta, il termine inglese) PRIMA di dire che quel prodotto non esiste o che non è in produzione. Zero righe significa che non l'hai ancora trovato, non che non ci sia.
 - CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
 - ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli. ATTENZIONE al caso opposto: i produttori sono POCHI e NOTI (Martin, 7punch/Seventh Punch, Wearica, Tussle, Fair Tex), quindi se lo strumento risponde 'trovato: false' quel nome quasi certamente NON è un produttore ma un CLIENTE (persona, palestra, ASD, azienda): riprova SUBITO con cerca_ordini_per_cliente prima di dire all'utente che non risulta nulla. Non chiudere mai con "non lo trovo" avendo provato una sola delle due strade.
 - ORDINI DI FABBRICA PER NUMERO (ordine_fabbrica_per_numero, solo STAFF): un numero di sei cifre + trattino + quattro cifre (082026-0002, 122025-0007, 062026-0004) è un ORDINE DI FABBRICA btoweb, cioè un BATCH di merce ordinata a un produttore. Quando l'utente lo cita — anche da solo, anche solo dicendo "batch" o "ordine fabbrica" — usa questo strumento. NON è uno SKU/EAN (quelli sono numeri di sole cifre) e non è un ordine cliente. E NON CHIEDERE MAI IL PRODUTTORE: il produttore è dentro l'ordine e te lo restituisce lo strumento. Riporta prodotti, taglie, quantità ordinate, SKU e colore come tornano dallo strumento, dichiara che è un ordine di FABBRICA su btoweb, dichiara l'origine delle quantità ('origine_quantita_products_source': size_lines / sizes / production_quantities) e non spacciare le conferme di ricezione registrate su btoweb per prove che la merce sia arrivata in magazzino. Se lo strumento risponde 'trovato': false quel numero non esiste su btoweb: dillo, senza inventare e senza sostituirlo con un numero simile.
@@ -2944,10 +2944,92 @@ def _bto_base_name(name: str) -> str:
     return _SIZE_SUFFIX_RE.sub("", (name or "").strip()).strip()
 
 
+# Radici dei nomi prodotto, calcolate una volta sola: i nomi sono poche
+# centinaia e tornano identici a ogni chiamata, tokenizzarli ogni volta su 915
+# righe sarebbe lavoro ripetuto per niente.
+_BTO_STEMS_NOME = {}
+
+
+def _bto_stems_nome(nome_lower: str) -> frozenset:
+    st = _BTO_STEMS_NOME.get(nome_lower)
+    if st is None:
+        st = frozenset(_radice(t) for t in _tokenizza(nome_lower))
+        _BTO_STEMS_NOME[nome_lower] = st
+    return st
+
+
 def _bto_match(name: str, tokens: list) -> bool:
     """AND su tutti i token della query nel nome prodotto (come product_pricing)."""
     n = (name or "").lower()
     return all(t in n for t in tokens)
+
+
+def _bto_match_radice(name: str, tokens: list) -> bool:
+    """Come _bto_match ma sulle RADICI (_radice + _combacia, prefisso nei due
+    versi), le stesse gia' usate dalla ricerca nel manuale. Serve a unire il
+    plurale italiano dell'utente al singolare del catalogo: "kimoni" non e'
+    sottostringa di "Kimono STEALTH", quindi il solo letterale tornava zero
+    righe e il bot concludeva che il prodotto non esistesse.
+    Due guardie. Se la query non produce nessuna radice — token sotto i 3
+    caratteri, o un jolly come "*" che il tokenizzatore scarta — si torna
+    False: un AND su lista vuota direbbe True e il jolly si porterebbe a casa
+    l'intero catalogo, esattamente il difetto chiuso il 18/08."""
+    radici_query = [_radice(t) for tok in tokens for t in _tokenizza(tok)]
+    if not radici_query:
+        return False
+    stems = _bto_stems_nome((name or "").lower())
+    if not stems:
+        return False
+    return all(_combacia(r, stems) for r in radici_query)
+
+
+def _bto_filtra(rows: list, tokens: list):
+    """Righe che corrispondono alla query, e se si e' dovuto allargare.
+    Le radici NON sono in OR riga per riga: sono un RIPIEGO sull'intero
+    risultato. Prima si filtra col confronto letterale di sempre; solo se non
+    resta NIENTE si rifiltra con le radici. In OR le radici allargavano anche
+    le query che gia' funzionavano — 'shorts' passava da 72 a 173 righe
+    pescando le RASHGUARD ... SHORT SLEEVES, perche' 'shorts' ha per prefisso
+    'short'. Come ripiego questo non puo' succedere: se il letterale trova
+    qualcosa, il risultato e' identico a prima per costruzione, e la radice
+    aggiunge solo dove prima c'era il nulla."""
+    if not tokens:
+        return rows, False
+    sel = [r for r in rows if _bto_match(r.get("product_name"), tokens)]
+    if sel:
+        return sel, False
+    sel = [r for r in rows if _bto_match_radice(r.get("product_name"), tokens)]
+    return sel, bool(sel)
+
+
+# Il numero che esce da un ripiego non e' il numero che esce dalla query
+# scritta: il modello deve poterlo dire.
+_BTO_NOTA_ALLARGATA = (
+    "RICERCA ALLARGATA: la query %r non compare LETTERALMENTE in nessun nome di "
+    "prodotto, quindi la ricerca e' stata rifatta sulle RADICI delle parole "
+    "(cosi' 'kimoni' trova 'Kimono'). I numeri qui sotto vengono da questa "
+    "seconda ricerca, piu' larga di quella che hai scritto: sono validi, ma "
+    "quando li riporti di' su quale prodotto hai davvero trovato i dati "
+    "(il campo 'prodotti' elenca i nomi a catalogo), non limitarti a ripetere "
+    "la parola della domanda."
+)
+
+
+# La nota di zero righe e' la stessa nei due rami (produzione e anagrafica):
+# lo zero e' lo stesso, e lo stesso e' l'errore che induce.
+_BTO_NOTA_ZERO_RIGHE = (
+    "ZERO RIGHE, MA NON E' UNA RISPOSTA: la query %r non combacia con nessun "
+    "NOME di prodotto a catalogo, ne' alla lettera ne' per radice (il ripiego "
+    "sulle radici e' gia' stato provato in automatico e non ha trovato nulla). "
+    "Il confronto e' sul NOME del prodotto, quindi una parola nella forma "
+    "sbagliata non trova niente anche quando il prodotto esiste eccome. NON "
+    "concludere che il prodotto non esista, non dire che non e' in produzione "
+    "e non rispondere 0: RIPROVA SUBITO questa stessa chiamata cambiando la "
+    "parola — con una radice piu' corta, oppure con il termine INGLESE ('belt' "
+    "per cintura, 't-shirt' per maglietta, 'shorts' per pantaloncini). Solo se "
+    "anche il secondo tentativo torna zero puoi dire che a catalogo non "
+    "risulta, e devi dire con quali parole hai cercato."
+)
 
 
 # La risorsa 'stock' ignora il parametro q lato server (verificato): va scaricata
@@ -3080,7 +3162,15 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
         rows, res = _bto_get_paged({"resource": "stock"})
         if rows is None:
             return res
-        sel = [r for r in rows if _bto_match(r.get("product_name"), tokens)] if tokens else rows
+        sel, allargata = _bto_filtra(rows, tokens)
+
+        # Zero righe con una query addosso non e' una risposta sul merito: e' una
+        # parola che non combacia col nome a catalogo. Senza dirlo, il modello
+        # legge 0 e conclude che il prodotto non esiste o non e' in produzione
+        # (misurato: "il catalogo btoweb non contiene t-shirt", mentre ne ha 2397
+        # in produzione). La nota va nel payload, dove il modello la vede insieme
+        # allo zero che l'ha prodotta.
+        nota_query_vuota = (_BTO_NOTA_ZERO_RIGHE % q) if (tokens and not sel) else None
 
         gruppi = {}
         ordine = []
@@ -3192,6 +3282,9 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
             "totali_pipeline_tutti_i_gruppi": totali_tutti,
             "somma_dei_soli_gruppi_mostrati": somma_mostrati,
             "nota_totali": nota_totali,
+            "ricerca_allargata_alle_radici": allargata,
+            "nota_ricerca_allargata": (_BTO_NOTA_ALLARGATA % q) if allargata else None,
+            "nota_query_senza_risultati": nota_query_vuota,
             "prodotti": out_gruppi,
             "disclaimer": res.get("disclaimer"),
             "avvertenza": (
@@ -3212,7 +3305,7 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
     rows, res = _bto_get_paged(params)
     if rows is None:
         return res
-    sel = [r for r in rows if _bto_match(r.get("product_name"), tokens)] if tokens else rows
+    sel, allargata = _bto_filtra(rows, tokens)
 
     gruppi = {}
     ordine = []
@@ -3253,6 +3346,11 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
         "righe_corrispondenti": len(sel),
         "prodotti_trovati": len(ordine),
         "gruppi_mostrati": len(out_gruppi),
+        # Stesso zero, stesso errore indotto: qui il modello risponde "quel
+        # prodotto non è a catalogo" invece di "non è in produzione".
+        "ricerca_allargata_alle_radici": allargata,
+        "nota_ricerca_allargata": (_BTO_NOTA_ALLARGATA % q) if allargata else None,
+        "nota_query_senza_risultati": (_BTO_NOTA_ZERO_RIGHE % q) if (tokens and not sel) else None,
         "prodotti": out_gruppi,
         "fonte": (res.get("source") or {}).get("file_name"),
         "nota": (
