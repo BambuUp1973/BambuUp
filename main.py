@@ -2041,11 +2041,33 @@ CHAT_TOOLS = [
             "in più) -> pronto o no per il cliente -> eventuale ripartenza verso il cliente. "
             "Usalo per 'traccia l'ordine X', 'a che punto è X con Fully?', 'la merce di X è "
             "arrivata? manca qualcosa?', 'com'è andato il carico/la spedizione ASN-...?'.\n"
-            "Ingresso: 'numero' = numero d'ordine custom (es. 0495-05-26-A) OPPURE un numero "
-            "di spedizione ASN (es. ASN-Martin-2026-07-20-001); in alternativa 'cliente' = "
-            "nome persona/azienda/email, tollerante a refusi e maiuscole: passalo così com'è, "
-            "non correggerlo (stesse regole di ordini_per_produttore per nota_interpretazione, "
-            "richiesta_chiarimento e candidati).\n"
+            "È ANCHE LA RICERCA AL CONTRARIO, da un DETTAGLIO agli ORDINI. 'numero' accetta "
+            "un codice QUALUNQUE e lo strumento capisce da solo di che cosa si tratta: numero "
+            "d'ordine custom (0495-05-26-A), numero ASN (ASN-Martin-2026-07-20-001), SKU/EAN "
+            "di una riga d'ordine (6131125574656), numero di tracking del corriere "
+            "(7281883523), numero di carico Fully in entrata o in uscita (835722). Usalo "
+            "SEMPRE per 'di che ordine è lo SKU X?', 'quali ordini sono collegati al tracking "
+            "X?', 'il carico X è arrivato/consegnato?', 'a cosa corrisponde il numero X?'. "
+            "Non serve sapere in anticipo che tipo di numero sia: passaglielo e basta.\n"
+            "In alternativa 'cliente' = nome persona/azienda/email, tollerante a refusi e "
+            "maiuscole: passalo così com'è, non correggerlo (stesse regole di "
+            "ordini_per_produttore per nota_interpretazione, richiesta_chiarimento e "
+            "candidati).\n"
+            "REGOLE quando lo strumento ha risolto un CODICE (campo 'riconosciuto_come'):\n"
+            "- PRIMA IL CONTEGGIO, POI L'ELENCO: apri dicendo che cosa è quel numero e "
+            "quanti ordini copre ('ordini_collegati'), e solo dopo elenca. Un tracking può "
+            "coprire decine di ordini: non dire mai 'l'ordine è questo' se sono più di uno.\n"
+            "- Elenco COMPATTO: una riga per ordine (numero, cliente, stato). NON produrre il "
+            "tracciamento completo di ogni ordine.\n"
+            "- Se c'è 'un_solo_ordine', dillo esplicitamente che l'ordine è uno solo.\n"
+            "- Se c'è 'nota_limite'/'ordini_non_elencati', dichiara che l'elenco è tagliato.\n"
+            "- Se c'è 'ambiguita', il numero cade in più famiglie: NON sceglierne una, "
+            "dichiara l'ambiguità e chiedi da quale schermata viene il numero.\n"
+            "- SEGNAPOSTO: non stabilire tu se un tracking sia finto. Riporta i fatti di "
+            "'quanti_asn' e 'quanti_produttori' e lascia decidere chi legge.\n"
+            "- Se 'trovato' è false, elenca le 'famiglie_consultate' invece di un 'non "
+            "trovato' secco, e riporta 'nota_copertura_sku' così com'è: uno SKU esiste solo "
+            "per una parte degli ordini, quindi 'non lo trovo' NON vuol dire 'non esiste'.\n"
             "REGOLE OBBLIGATORIE quando riporti i risultati:\n"
             "- ARRIVO DELLA MERCE: l'unica fonte è il blocco 'arrivo_in_fully' "
             "(stato_arrivo + in_parole + come_lo_sappiamo). NON dedurre l'arrivo dallo "
@@ -2099,8 +2121,12 @@ CHAT_TOOLS = [
                 "numero": {
                     "type": "string",
                     "description": (
-                        "Numero d'ordine custom (es. '0495-05-26-A') o numero di "
-                        "spedizione ASN (es. 'ASN-Martin-2026-07-20-001')."
+                        "Un codice QUALUNQUE, passato così come lo ha scritto l'utente: "
+                        "numero d'ordine custom ('0495-05-26-A'), numero di spedizione ASN "
+                        "('ASN-Martin-2026-07-20-001'), SKU/EAN di riga ('6131125574656'), "
+                        "numero di tracking del corriere ('7281883523') o numero di carico "
+                        "Fully ('835722'). Lo strumento riconosce da solo di che cosa si "
+                        "tratta: non devi deciderlo tu prima di chiamarlo."
                     ),
                 },
                 "cliente": {
@@ -3130,6 +3156,19 @@ def tool_catalogo_btoweb(query: str = None, sku: str = None, tipo: str = None) -
                     "cifre): ha la forma di un numero di ORDINE DI FABBRICA (batch). "
                     "NON rispondere che non trovi niente: richiama SUBITO "
                     "ordine_fabbrica_per_numero con questo numero."
+                )
+            else:
+                # btoweb e kanokimonos.app hanno DUE numerazioni SKU separate, senza
+                # un solo codice in comune: gli SKU di riga degli ordini custom non
+                # sono in anagrafica btoweb e non ci saranno mai. Un buco qui non e'
+                # una risposta: e' meta' della ricerca. Stessa regola del batch.
+                nota += (
+                    " ATTENZIONE: questa e' l'anagrafica prodotti di BTOWEB, che NON "
+                    "contiene gli SKU delle righe degli ordini custom di "
+                    "kanokimonos.app (sono due numerazioni separate, senza codici in "
+                    "comune). NON rispondere che il codice non esiste: richiama SUBITO "
+                    f"tracciamento_fully con numero='{sku_clean}', che cerca anche fra "
+                    "gli SKU di riga, i tracking e i numeri di carico Fully."
                 )
             return {
                 "tipo": "anagrafica_prodotti",
@@ -4964,6 +5003,422 @@ def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
     return tr
 
 
+# --- INDICE INVERSO: dal DETTAGLIO agli ORDINI -------------------------------
+# Tutti gli strumenti partivano da un ordine o da un cliente. Chi aveva in mano
+# uno SKU, un tracking o un numero di carico Fully non aveva NESSUNA strada, e il
+# bot rispondeva "non trovo" su dati che aveva gia' scaricato nella stessa
+# chiamata. L'indice si costruisce sulle righe che tool_tracciamento_fully
+# scarica comunque: per tracking e carichi non costa una sola chiamata in piu'.
+#
+# ATTENZIONE AI FILTRI DELLA FONTE: la edge function IGNORA IN SILENZIO i filtri
+# su ean_code, sku, tracking_number, fully_replenishment_id e order_number della
+# risorsa orders (risponde HTTP 200 con l'insieme INTERO, verificato in
+# produzione). Quindi qui si filtra SEMPRE in locale, come gia' si fa per lo
+# stock di btoweb. Non aggiungere filtri server-side dandoli per buoni.
+
+_FULLY_MAX_ORDINI_ELENCO = 10
+
+_FULLY_FAMIGLIE_CODICE = [
+    "numero d'ordine custom (es. 0495-05-26-A)",
+    "numero di spedizione ASN (es. ASN-Martin-2026-07-20-001)",
+    "SKU/EAN di una riga d'ordine",
+    "numero di tracking del corriere",
+    "numero di carico Fully IN ENTRATA (fabbrica -> Fully)",
+    "numero di invio Fully IN USCITA (Fully -> cliente)",
+]
+
+# Lo strumento NON giudica se un tracking sia vero o un segnaposto: non esiste
+# alcun campo a sistema che lo dica, e qualsiasi soglia sarebbe un'invenzione.
+# Riporta i fatti misurabili e lascia decidere chi legge.
+_FULLY_NOTA_SEGNAPOSTO = (
+    "Lo strumento NON stabilisce se questo numero sia un tracking reale o un "
+    "valore segnaposto: a sistema non esiste un campo che lo dica. Riporta i "
+    "fatti cosi' come sono (quanti ordini tocca, quanti ASN e quanti produttori "
+    "diversi coinvolge) e lascia la valutazione a chi legge."
+)
+
+
+def _fully_nome_cliente(o: dict):
+    """Nome leggibile del cliente di un ordine: persona | ragione sociale."""
+    c = o.get("customers") or {}
+    if not isinstance(c, dict):
+        c = {}
+    return " | ".join(
+        v for v in (
+            " ".join(f"{c.get('first_name', '')} {c.get('last_name', '')}".split()),
+            c.get("business_name"),
+        ) if v
+    ) or None
+
+
+def _fully_riga_elenco(o: dict) -> dict:
+    """Una riga compatta dell'elenco: ordine, cliente, stato. Niente di piu':
+    un tracking puo' coprire 26 ordini, e il tracciamento A-Z moltiplicato per 26
+    non e' una risposta."""
+    os_code = o.get("order_status")
+    return {
+        "ordine": o.get("order_number"),
+        "cliente": _fully_nome_cliente(o),
+        "stato_ordine": os_code,
+        "stato_descrizione": CUSTOM_STATUS_LABELS.get(os_code, os_code or "N/A"),
+    }
+
+
+def _fully_elenco_ordini(numeri, num2ord: dict) -> dict:
+    """Il CONTEGGIO prima, l'elenco dopo, con lo stesso schema di nota_limite gia'
+    usato per gli ordini di un cliente."""
+    numeri = sorted({n for n in numeri if n})
+    out = {"ordini_collegati": len(numeri)}
+    if len(numeri) == 1:
+        out["un_solo_ordine"] = True
+        out["nota_conteggio"] = (
+            "Questo codice corrisponde a UN SOLO ordine: DILLO ESPLICITAMENTE. "
+            "Non e' scontato, perche' per un tracking o un carico Fully quasi "
+            "sempre gli ordini sono piu' di uno."
+        )
+    else:
+        out["nota_conteggio"] = (
+            f"Questo codice copre {len(numeri)} ordini DIVERSI. Di' PRIMA quanti "
+            f"sono e solo DOPO elencali. E' VIETATO presentarlo come 'l'ordine e' "
+            f"questo': non c'e' un ordine, ce ne sono {len(numeri)}."
+        )
+    mostrati = numeri[:_FULLY_MAX_ORDINI_ELENCO]
+    out["ordini"] = [
+        _fully_riga_elenco(num2ord[n]) if n in num2ord else {
+            "ordine": n,
+            "nota": (
+                "numero presente nel collegamento ma nessun ordine custom "
+                "corrispondente fra quelli scaricati: riportalo cosi', non dedurre."
+            ),
+        }
+        for n in mostrati
+    ]
+    if len(numeri) > _FULLY_MAX_ORDINI_ELENCO:
+        restanti = numeri[_FULLY_MAX_ORDINI_ELENCO:]
+        out["ordini_non_elencati"] = restanti
+        out["nota_limite"] = (
+            f"Elencati in dettaglio solo i primi {_FULLY_MAX_ORDINI_ELENCO} ordini "
+            f"su {len(numeri)}; gli altri {len(restanti)} sono solo nominati in "
+            "'ordini_non_elencati'. Dichiaralo."
+        )
+    return out
+
+
+def _fully_copertura_sku(raw_orders: list, righe_recon: list, righe_lri: list) -> str:
+    """La verita' sulla copertura, calcolata dai dati e non cablata: uno SKU
+    esiste solo per gli ordini passati dal conteggio Fully o dal modulo logistico."""
+    coperti = {r.get("order_number") for r in (righe_recon or [])}
+    coperti |= {r.get("order_number") for r in (righe_lri or [])}
+    coperti = {n for n in coperti if n}
+    return (
+        "COPERTURA DEGLI SKU: un codice SKU/EAN esiste a sistema SOLO per gli "
+        "ordini passati dal conteggio Fully o dal modulo logistico, oggi "
+        f"{len(coperti)} ordini su {len(raw_orders)}. Per tutti gli altri lo SKU "
+        "non e' MAI stato registrato. Quindi 'non lo trovo' significa 'quell'ordine "
+        "non e' fra quelli con SKU a sistema', NON 'quel codice non esiste'."
+    )
+
+
+def _fully_indice_sku(righe_recon: list, righe_lri: list) -> dict:
+    """SKU/EAN -> righe d'ordine. Due risorse, due nomi di campo, stesso dato:
+    fully_reconciliation.ean_code e logistics_received_items.sku. I due insiemi
+    non hanno codici in comune, ma si cercano comunque tutti e due."""
+    idx = {}
+    for r in righe_recon or []:
+        k = _fully_norm_num(r.get("ean_code"))
+        if k:
+            idx.setdefault(k, []).append({
+                "ordine": r.get("order_number"),
+                "prodotto": r.get("product_name"),
+                "taglia": r.get("size_variation"),
+                "asn": r.get("shipment_number"),
+                "letto_da": "fully_reconciliation.ean_code",
+            })
+    for r in righe_lri or []:
+        k = _fully_norm_num(r.get("sku"))
+        if k:
+            idx.setdefault(k, []).append({
+                "ordine": r.get("order_number"),
+                "prodotto": r.get("product_name"),
+                "taglia": r.get("size"),
+                "pezzi_ricevuti": r.get("quantity_received"),
+                "letto_da": "logistics_received_items.sku",
+            })
+    return idx
+
+
+def _fully_indice_tracking(raw_orders: list, spedizioni: list, id2num: dict) -> dict:
+    """Tracking -> ordini, UNIONE delle due strade. Nessuna delle due basta da
+    sola: le spedizioni non conoscono i tracking verso il CLIENTE (che vivono solo
+    su orders.logistics_tracking), e il link shipment_orders e' risultato
+    incompleto su un caso su 62 (1ZH8997V6808423275, un ordine mancante).
+    La gamba del viaggio NON si deduce: si dichiara il campo da cui il numero e'
+    stato letto, e la destinazione solo quando la spedizione la dichiara."""
+    idx = {}
+
+    def _ins(k, ordine, **info):
+        if not k or not ordine:
+            return
+        v = idx.setdefault(k, {
+            "ordini": set(), "corrieri": set(), "asn": set(),
+            "produttori": set(), "destinazioni": set(), "letto_da": set(),
+        })
+        v["ordini"].add(ordine)
+        for campo, val in info.items():
+            if val:
+                v[campo].add(val)
+
+    for s in spedizioni or []:
+        k = _fully_norm_num(s.get("tracking_number"))
+        if not k:
+            continue
+        prod = s.get("producers")
+        prod = prod.get("name") if isinstance(prod, dict) else None
+        for so in (s.get("shipment_orders") or []):
+            if isinstance(so, dict):
+                _ins(
+                    k, id2num.get(so.get("custom_order_id")),
+                    corrieri=s.get("courier"), asn=s.get("shipment_number"),
+                    produttori=prod, destinazioni=s.get("destination"),
+                    letto_da="shipments.tracking_number",
+                )
+
+    for o in raw_orders or []:
+        prod = o.get("producers")
+        prod = prod.get("name") if isinstance(prod, dict) else None
+        _ins(
+            _fully_norm_num(o.get("producer_tracking")), o.get("order_number"),
+            corrieri=o.get("producer_courier"), produttori=prod,
+            letto_da="orders.producer_tracking (viaggio in partenza dalla fabbrica)",
+        )
+        _ins(
+            _fully_norm_num(o.get("logistics_tracking")), o.get("order_number"),
+            corrieri=o.get("logistics_courier"),
+            letto_da="orders.logistics_tracking (viaggio da Fully verso il cliente)",
+        )
+    return idx
+
+
+def _fully_indice_carichi(spedizioni: list, righe_recon: list, outbound: list,
+                          id2num: dict) -> dict:
+    """I numeri di carico Fully sono DUE famiglie diverse di interi a sei cifre:
+    fully_replenishment_id (carico IN ENTRATA, fabbrica -> Fully) e fully_order_id
+    (invio IN USCITA, Fully -> cliente). Oggi non hanno un solo valore in comune,
+    ma e' una COINCIDENZA OSSERVATA e non una regola dichiarata dalla fonte: si
+    cerca sempre in tutte e due e, se un numero comparisse in entrambe,
+    l'ambiguita' si dichiara invece di sceglierne una."""
+    entrata = {}
+    for s in spedizioni or []:
+        k = _fully_norm_num(s.get("fully_replenishment_id"))
+        if not k:
+            continue
+        v = entrata.setdefault(k, {"ordini": set(), "spedizioni": []})
+        v["spedizioni"].append(s)
+        for so in (s.get("shipment_orders") or []):
+            if isinstance(so, dict):
+                n = id2num.get(so.get("custom_order_id"))
+                if n:
+                    v["ordini"].add(n)
+    # fully_reconciliation porta il numero di carico su 306 righe su 306 e cita
+    # l'ordine per numero: aggancia anche i carichi correttivi senza link diretto.
+    for r in righe_recon or []:
+        k = _fully_norm_num(r.get("fully_replenishment_id"))
+        if not k:
+            continue
+        v = entrata.setdefault(k, {"ordini": set(), "spedizioni": []})
+        if r.get("order_number"):
+            v["ordini"].add(r.get("order_number"))
+
+    uscita = {}
+    for r in outbound or []:
+        k = _fully_norm_num(r.get("fully_order_id"))
+        if not k:
+            continue
+        v = uscita.setdefault(k, {"ordini": set(), "righe": []})
+        v["righe"].append(r)
+        if r.get("order_number"):
+            v["ordini"].add(r.get("order_number"))
+    return {"entrata": entrata, "uscita": uscita}
+
+
+def _fully_esito_sku(righe: list, num2ord: dict) -> dict:
+    """Un codice SKU/EAN risolto sulle sue righe d'ordine."""
+    out = {
+        "riconosciuto_come": "SKU/EAN di una riga d'ordine (kanokimonos.app)",
+        "righe_trovate": [
+            {k: v for k, v in r.items() if v is not None} for r in righe
+        ],
+    }
+    out.update(_fully_elenco_ordini({r.get("ordine") for r in righe}, num2ord))
+    out["nota_sku"] = (
+        "Lo SKU/EAN qui e' il codice della RIGA d'ordine, non di un prodotto a "
+        "catalogo: e' per questo che non si trova nell'anagrafica btoweb. "
+        "Dichiara la piattaforma: kanokimonos.app."
+    )
+    return out
+
+
+def _fully_esito_carico_entrata(voce: dict, num2ord: dict, rep_per_asn: dict) -> dict:
+    """Un carico IN ENTRATA: gli ordini che contiene e, soprattutto, se Fully lo
+    ha davvero ricevuto. Lo stato di arrivo passa da _fully_blocco_arrivo, la
+    stessa funzione del tracciamento: cosi' 'verifica manuale di Bambu' e
+    'conteggio di Fully' restano distinti con le parole gia' collaudate."""
+    sped = voce.get("spedizioni") or []
+    s = sped[0] if sped else {}
+    rep = rep_per_asn.get(_fully_norm_num(s.get("shipment_number"))) if s else None
+    prod = s.get("producers")
+    out = {
+        "riconosciuto_come": (
+            "numero di carico Fully IN ENTRATA (fully_replenishment_id): la merce "
+            "che la fabbrica ha spedito ALLA logistica Fully"
+        ),
+        "asn": s.get("shipment_number") or "nessun ASN collegato a questo numero di carico",
+        "produttore": prod.get("name") if isinstance(prod, dict) else None,
+        "corriere": s.get("courier"),
+        "tracking": s.get("tracking_number"),
+        "arrivo_in_fully": _fully_blocco_arrivo(rep, s),
+    }
+    if s.get("fully_verified_on"):
+        out["verifica_manuale_bambu"] = {
+            "data": s.get("fully_verified_on"),
+            "nota": _FULLY_NOTA_VERIFICA,
+        }
+    if len(sped) > 1:
+        out["nota_piu_spedizioni"] = (
+            f"Questo numero di carico e' collegato a {len(sped)} spedizioni ASN "
+            "diverse: lo stato di arrivo qui sopra e' quello della prima. Dichiaralo."
+        )
+    out.update(_fully_elenco_ordini(voce.get("ordini") or set(), num2ord))
+    return out
+
+
+def _fully_esito_carico_uscita(voce: dict, num2ord: dict) -> dict:
+    """Un invio IN USCITA: Fully -> cliente. Il registro invii NON contiene alcuna
+    conferma di consegna, e questo va detto invece di lasciarlo intendere."""
+    righe = voce.get("righe") or []
+    r = righe[0] if righe else {}
+    out = {
+        "riconosciuto_come": (
+            "numero di invio Fully IN USCITA (fully_order_id): la spedizione che "
+            "Fully ha preparato VERSO IL CLIENTE"
+        ),
+        "asn_di_origine": r.get("shipment_number"),
+        "stato_registro_invii": r.get("status"),
+        "inviato_il": r.get("sent_at"),
+        "nota_consegna": (
+            "Il registro invii Fully NON contiene alcuna conferma di consegna al "
+            "cliente: 'inviato' e' la registrazione dell'invio, NON una consegna. "
+            "Non trasformarlo in 'consegnato', 'in consegna' o 'ricevuto'."
+        ),
+        "nota_non_e_tracking": (
+            "Questo numero NON e' un tracking del corriere: non darlo mai al "
+            "cliente per tracciare il pacco."
+        ),
+    }
+    out.update(_fully_elenco_ordini(voce.get("ordini") or set(), num2ord))
+    return out
+
+
+def _fully_dedup_ci(valori) -> list:
+    """Stesso nome scritto in due modi ('DHL' e 'dhl') e' UNA cosa sola: senza
+    questo il corriere usciva come 'DHL / dhl'. Si tiene la prima forma vista."""
+    visti, out = set(), []
+    for v in sorted(valori):
+        k = str(v).strip().lower()
+        if k and k not in visti:
+            visti.add(k)
+            out.append(v)
+    return out
+
+
+def _fully_esito_tracking(voce: dict, num2ord: dict) -> dict:
+    """Un tracking del corriere: prima quanti ordini copre, poi quali."""
+    corrieri = _fully_dedup_ci(voce["corrieri"])
+    produttori = _fully_dedup_ci(voce["produttori"])
+    out = {
+        "riconosciuto_come": "numero di tracking del corriere",
+        "corriere": " / ".join(corrieri) or "corriere non valorizzato a sistema",
+        "asn_coinvolti": sorted(voce["asn"]),
+        "quanti_asn": len(voce["asn"]),
+        "produttori_coinvolti": produttori,
+        "quanti_produttori": len(produttori),
+        "letto_da": sorted(voce["letto_da"]),
+        "nota_valutazione": _FULLY_NOTA_SEGNAPOSTO,
+    }
+    if voce["destinazioni"]:
+        out["destinazione_dichiarata_dalla_spedizione"] = sorted(voce["destinazioni"])
+    out.update(_fully_elenco_ordini(voce["ordini"], num2ord))
+    return out
+
+
+def _fully_codice_a_ordini(codice: str, raw_orders: list, spedizioni: list,
+                           outbound: list, righe_recon: list, righe_lri: list,
+                           rep_per_asn: dict) -> dict:
+    """IL PUNTO D'INGRESSO CHE MANCAVA: un codice qualunque -> gli ordini.
+    Si cerca in TUTTE le famiglie, non nella prima che sembra plausibile: la
+    FORMA del numero non e' una prova (carichi in entrata e in uscita sono
+    entrambi interi a sei cifre; SKU e certi tracking sono entrambi sole cifre).
+    Se un codice cadesse in due famiglie, l'ambiguita' si DICHIARA."""
+    num2ord = {o.get("order_number"): o for o in raw_orders if o.get("order_number")}
+    id2num = {o["id"]: o.get("order_number") for o in raw_orders if o.get("id")}
+    k = _fully_norm_num(codice)
+
+    trovati = []
+    righe_sku = _fully_indice_sku(righe_recon, righe_lri).get(k)
+    if righe_sku:
+        trovati.append(("sku", _fully_esito_sku(righe_sku, num2ord)))
+
+    voce_tr = _fully_indice_tracking(raw_orders, spedizioni, id2num).get(k)
+    if voce_tr:
+        trovati.append(("tracking", _fully_esito_tracking(voce_tr, num2ord)))
+
+    carichi = _fully_indice_carichi(spedizioni, righe_recon, outbound, id2num)
+    if k in carichi["entrata"]:
+        trovati.append((
+            "carico_entrata",
+            _fully_esito_carico_entrata(carichi["entrata"][k], num2ord, rep_per_asn),
+        ))
+    if k in carichi["uscita"]:
+        trovati.append((
+            "carico_uscita",
+            _fully_esito_carico_uscita(carichi["uscita"][k], num2ord),
+        ))
+
+    if not trovati:
+        return {
+            "cercato": codice,
+            "trovato": False,
+            "famiglie_consultate": _FULLY_FAMIGLIE_CODICE,
+            "nota": (
+                f"Il codice '{codice}' non compare in NESSUNA delle famiglie di "
+                "numeri di kanokimonos.app. NON rispondere con un 'non trovato' "
+                "secco: di' esplicitamente quali famiglie sono state consultate "
+                "(sono elencate in 'famiglie_consultate'), poi chiedi da dove viene "
+                "il numero. NON ripiegare su altre piattaforme e non dedurre."
+            ),
+            "nota_copertura_sku": _fully_copertura_sku(
+                raw_orders, righe_recon, righe_lri
+            ),
+        }
+
+    if len(trovati) == 1:
+        return {"cercato": codice, "trovato": True, **trovati[0][1]}
+
+    return {
+        "cercato": codice,
+        "trovato": True,
+        "ambiguita": True,
+        "riconosciuto_come": [e["riconosciuto_come"] for _, e in trovati],
+        "nota_ambiguita": (
+            f"Il codice '{codice}' compare in {len(trovati)} famiglie di numeri "
+            "DIVERSE. NON sceglierne una: dichiara l'ambiguita', mostra tutte le "
+            "corrispondenze e chiedi all'utente da quale schermata ha preso il "
+            "numero."
+        ),
+        "corrispondenze": [{"famiglia": f, **e} for f, e in trovati],
+    }
+
+
 def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
     """Tracciamento A-Z di un ordine custom (solo staff): ordine -> fabbrica ->
     ASN -> carico Fully -> conteggio riga per riga -> anomalie -> ripartenza.
@@ -5065,6 +5520,14 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
             if _fully_norm_num(r.get("order_number")) == _fully_norm_num(order_number)
         ]
 
+    def _lri_tutte():
+        """Tutte le righe del modulo logistico: serve all'indice degli SKU, che
+        non parte da un ordine. Stessa cache di _lri_di: un solo scarico."""
+        if "righe" not in _lri_cache:
+            righe, err2 = _fully_rows("logistics_received_items")
+            _lri_cache["righe"] = righe or [] if not err2 else []
+        return _lri_cache["righe"]
+
     base = {
         "tipo": "tracciamento_fully",
         "piattaforma": "kanokimonos.app (ordini custom). La piattaforma REGISTRA l'ordine: non spedisce e non riceve merce",
@@ -5135,12 +5598,17 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
             None,
         )
         if not o:
+            # Non e' un numero d'ordine e non e' un ASN: prima di rispondere
+            # "non trovo" si guarda se e' un DETTAGLIO (SKU, tracking, carico).
+            # I dati sono gia' scaricati qui sopra: era solo l'ingresso a mancare.
+            righe_recon_tutte, err2 = _recon_di()
+            if err2:
+                return err2
             return {
-                **base, "cercato": numero, "trovato": False,
-                "nota": (
-                    f"Nessun ordine custom con numero '{numero}'. NON dedurre e non "
-                    "ripiegare su altre piattaforme: chiedi il numero completo "
-                    "(formato NNNN-MM-YY, con eventuale suffisso)."
+                **base,
+                **_fully_codice_a_ordini(
+                    numero, raw_orders, spedizioni_tutte, outbound,
+                    righe_recon_tutte, _lri_tutte(), rep_per_asn,
                 ),
             }
         recon_o, err2 = _recon_di(order_number=o.get("order_number"))
