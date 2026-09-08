@@ -6480,6 +6480,44 @@ def wc_giacenza(query: str = None, sku: str = None, debug: int = 0):
     except Exception as e:
         return {"error": str(e)}
 
+
+@app.get("/wc-sonda", dependencies=SOLO_ADMIN)
+def wc_sonda(request: Request, endpoint: str = "products", via: str = "rest"):
+    """Sonda grezza su WooCommerce per bisezionare un 401 che compare con certi
+    parametri e non con altri: inoltra alla REST tutti i parametri extra della
+    query string (search, per_page, sku, ...) e restituisce SOLO codice HTTP,
+    corpo troncato e la lista dei parametri inoltrati. Mai credenziali, mai
+    l'URL completo. via='rest' = requests con auth basic; via='libreria' =
+    get_wcapi(), la stessa del ramo ordini."""
+    extra = {
+        k: v for k, v in request.query_params.items()
+        if k not in ("endpoint", "via")
+    }
+    try:
+        if via == "libreria":
+            r = get_wcapi().get(endpoint, params=extra or {})
+        else:
+            radice = _wc_radice_url()
+            r = requests.get(
+                f"{radice}/wp-json/wc/v3/{endpoint}",
+                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                params=extra or None,
+                timeout=30,
+            )
+    except Exception as e:
+        return {
+            "via": via, "endpoint": endpoint, "parametri": extra,
+            "eccezione": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+    corpo = (r.text or "")
+    return {
+        "via": via, "endpoint": endpoint, "parametri": extra,
+        "http": r.status_code,
+        "righe_json": len(r.json()) if r.status_code == 200 and corpo.startswith("[") else None,
+        "x_wp_total": r.headers.get("X-WP-Total"),
+        "corpo": corpo[:400],
+    }
+
 # --- REIMPORT DEL MANUALE: non è più una rotta HTTP ---------------------------
 # Prima era GET /import-knowledge, raggiungibile da chiunque senza credenziali,
 # e faceva DELETE + INSERT sui chunk del manuale nel DB di produzione: una
