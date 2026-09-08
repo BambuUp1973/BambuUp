@@ -6105,3 +6105,428 @@ def search_knowledge(q: str, limit: int = 10, consegna: int = 0):
         return {"query": q, "matches": righe}
     except Exception as e:
         return {"error": str(e)}
+
+
+# --- DIAGNOSTICA DEI COLLEGAMENTI ESTERNI ------------------------------------
+# Endpoint di SOLA LETTURA, aggiunto per la migrazione: dice quali canali
+# rispondono davvero e con quale dato vero. Non tocca niente di quello che il
+# bot fa gia': non usa gli strumenti, non passa dal modello, non scrive nulla.
+#
+# REGOLA FERREA: qui non esce MAI il valore di una chiave, nemmeno parziale,
+# nemmeno nei log. Solo i NOMI delle variabili e se sono presenti o no.
+#
+# Perche' le chiamate sono riscritte qui invece di riusare _bto_get e
+# get_custom_resource: quelle passano da errore_canale, che NASCONDE apposta
+# codice HTTP e corpo della risposta (non devono arrivare al modello). Per una
+# diagnosi serve l'opposto, il codice HTTP in chiaro; riusarle avrebbe voluto
+# dire cambiarle, e questo lotto non cambia niente di esistente.
+
+# I prefissi da cercare fra le variabili d'ambiente. 'WC' e' in elenco anche se
+# non richiesto: le variabili WooCommerce del bot si chiamano WC_API_URL,
+# WC_CONSUMER_KEY e WC_CONSUMER_SECRET, quindi un filtro sul solo 'WOO' non le
+# vedrebbe e l'inventario direbbe "non c'e' niente" su un canale configurato.
+_DIAG_PREFISSI = ("SHOPIFY", "FULLY", "WOO", "WC", "KANOCUSTOM", "BTO")
+
+_DIAG_MAX_TESTO = 300
+
+
+def _diag_nomi_variabili() -> list:
+    """SOLO i nomi, in ordine alfabetico. Il valore non viene mai letto."""
+    return sorted(
+        n for n in os.environ
+        if any(p in n.upper() for p in _DIAG_PREFISSI)
+    )
+
+
+def _diag_mancanti(coppie) -> list:
+    """Nomi delle variabili non valorizzate. Riceve (nome, valore) e restituisce
+    solo i NOMI: il valore serve per il test di presenza e muore qui dentro."""
+    return [nome for nome, valore in coppie if not valore]
+
+
+def _diag_errore(prefisso: str, risposta) -> str:
+    """Messaggio d'errore col codice HTTP e il corpo troncato. Usato solo su
+    risposte di risorse, mai su una risposta che possa contenere un token."""
+    testo = (risposta.text or "").strip().replace("\n", " ")
+    if len(testo) > _DIAG_MAX_TESTO:
+        testo = testo[:_DIAG_MAX_TESTO] + "..."
+    return f"errore: {prefisso} HTTP {risposta.status_code} - {testo}"
+
+
+def _diag_b2b() -> dict:
+    """kanokimonos.app, edge function bot-read-data, header x-bot-api-key."""
+    mancanti = _diag_mancanti([
+        ("KANOCUSTOM_FUNCTION_URL", KANOCUSTOM_FUNCTION_URL),
+        ("KANOCUSTOM_API_KEY", KANOCUSTOM_API_KEY),
+    ])
+    if mancanti:
+        return {"esito": "chiave mancante", "variabili_non_valorizzate": mancanti}
+    try:
+        r = requests.get(
+            KANOCUSTOM_FUNCTION_URL,
+            headers={"x-bot-api-key": KANOCUSTOM_API_KEY},
+            params={"resource": "orders", "limit": 1},
+            timeout=60,
+        )
+    except Exception as e:
+        return {"esito": f"errore: connessione fallita ({type(e).__name__}: {e})"}
+    if r.status_code != 200:
+        return {"esito": _diag_errore("bot-read-data", r)}
+    try:
+        data = r.json()
+    except Exception:
+        return {"esito": f"errore: risposta non JSON (HTTP {r.status_code})"}
+    righe = data.get("data") if isinstance(data, dict) else data
+    prima = righe[0] if isinstance(righe, list) and righe else {}
+    if not isinstance(prima, dict):
+        prima = {}
+    return {
+        "esito": "ok",
+        "risorsa_letta": "orders (limit=1)",
+        "ordine_letto": prima.get("order_number"),
+        "stato_ordine_letto": prima.get("order_status"),
+        "count_dichiarato": data.get("count") if isinstance(data, dict) else None,
+    }
+
+
+def _diag_btoweb() -> dict:
+    """Edge function bto-bot-api, header x-api-key."""
+    mancanti = _diag_mancanti([("BTO_API_KEY", BTO_API_KEY)])
+    if mancanti:
+        return {"esito": "chiave mancante", "variabili_non_valorizzate": mancanti}
+    try:
+        r = requests.get(
+            BTO_API_URL,
+            headers={"x-api-key": BTO_API_KEY},
+            params={"resource": "products", "limit": 1},
+            timeout=60,
+        )
+    except Exception as e:
+        return {"esito": f"errore: connessione fallita ({type(e).__name__}: {e})"}
+    if r.status_code != 200:
+        return {"esito": _diag_errore("bto-bot-api", r)}
+    try:
+        data = r.json()
+    except Exception:
+        return {"esito": f"errore: risposta non JSON (HTTP {r.status_code})"}
+    righe = data.get("data") if isinstance(data, dict) else data
+    prima = righe[0] if isinstance(righe, list) and righe else {}
+    if not isinstance(prima, dict):
+        prima = {}
+    return {
+        "esito": "ok",
+        "risorsa_letta": "products (limit=1)",
+        "prodotto_letto": prima.get("product_name") or prima.get("name"),
+        "total_dichiarato": data.get("total") if isinstance(data, dict) else None,
+        "count_dichiarato": data.get("count") if isinstance(data, dict) else None,
+    }
+
+
+# Il token Shopify da client_credentials dura 24 ore: si tiene in memoria e si
+# richiede solo quando e' scaduto. In cache c'e' il token, ma da qui non esce
+# mai: nella risposta va soltanto quanto manca alla scadenza.
+_SHOPIFY_TOKEN_CACHE = {"token": None, "scade_il": 0.0}
+_SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION") or "2026-01"
+
+
+def _diag_ora() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
+def _shopify_store_pulito(valore: str) -> str:
+    """SHOPIFY_STORE puo' arrivare come 'negozio.myshopify.com', con lo schema
+    davanti o con la barra finale: qui si normalizza al solo host."""
+    v = (valore or "").strip()
+    for schema in ("https://", "http://"):
+        if v.lower().startswith(schema):
+            v = v[len(schema):]
+    return v.strip("/")
+
+
+def _shopify_token(store: str, client_id: str, client_secret: str):
+    """(token, None) oppure (None, messaggio d'errore). Il token non finisce mai
+    nei log ne' dentro un messaggio d'errore."""
+    if _SHOPIFY_TOKEN_CACHE["token"] and _SHOPIFY_TOKEN_CACHE["scade_il"] > _diag_ora():
+        return _SHOPIFY_TOKEN_CACHE["token"], None
+    try:
+        r = requests.post(
+            f"https://{store}/admin/oauth/access_token",
+            json={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=30,
+        )
+    except Exception as e:
+        return None, f"errore: token, connessione fallita ({type(e).__name__}: {e})"
+    if r.status_code != 200:
+        # Corpo troncato: una risposta d'errore non contiene nessun token.
+        return None, _diag_errore("token client_credentials", r)
+    try:
+        data = r.json()
+    except Exception:
+        return None, f"errore: token, risposta non JSON (HTTP {r.status_code})"
+    token = data.get("access_token")
+    if not token:
+        return None, "errore: token, risposta HTTP 200 senza access_token"
+    durata = data.get("expires_in")
+    durata = durata if isinstance(durata, (int, float)) and durata > 0 else 86400
+    _SHOPIFY_TOKEN_CACHE["token"] = token
+    _SHOPIFY_TOKEN_CACHE["scade_il"] = _diag_ora() + durata - 60
+    return token, None
+
+
+def _diag_shopify() -> dict:
+    """Client credentials grant e poi una query GraphQL minima all'Admin API."""
+    store_raw = os.getenv("SHOPIFY_STORE")
+    client_id = os.getenv("SHOPIFY_CLIENT_ID")
+    client_secret = os.getenv("SHOPIFY_CLIENT_SECRET")
+    mancanti = _diag_mancanti([
+        ("SHOPIFY_STORE", store_raw),
+        ("SHOPIFY_CLIENT_ID", client_id),
+        ("SHOPIFY_CLIENT_SECRET", client_secret),
+    ])
+    if mancanti:
+        return {"esito": "chiave mancante", "variabili_non_valorizzate": mancanti}
+
+    store = _shopify_store_pulito(store_raw)
+    token, errore = _shopify_token(store, client_id, client_secret)
+    if errore:
+        return {"esito": errore, "negozio_interrogato": store}
+
+    query = "{ shop { name myshopifyDomain currencyCode } productsCount { count } }"
+    try:
+        r = requests.post(
+            f"https://{store}/admin/api/{_SHOPIFY_API_VERSION}/graphql.json",
+            headers={
+                "X-Shopify-Access-Token": token,
+                "Content-Type": "application/json",
+            },
+            json={"query": query},
+            timeout=30,
+        )
+    except Exception as e:
+        return {"esito": f"errore: GraphQL, connessione fallita ({type(e).__name__}: {e})"}
+    if r.status_code != 200:
+        return {
+            "esito": _diag_errore("GraphQL Admin API", r),
+            "negozio_interrogato": store,
+            "versione_api": _SHOPIFY_API_VERSION,
+        }
+    try:
+        data = r.json()
+    except Exception:
+        return {"esito": f"errore: GraphQL, risposta non JSON (HTTP {r.status_code})"}
+    if data.get("errors"):
+        testo = json.dumps(data["errors"], ensure_ascii=False)[:_DIAG_MAX_TESTO]
+        return {
+            "esito": f"errore: GraphQL HTTP 200 con 'errors' - {testo}",
+            "versione_api": _SHOPIFY_API_VERSION,
+        }
+
+    shop = (data.get("data") or {}).get("shop") or {}
+    conteggio = ((data.get("data") or {}).get("productsCount") or {}).get("count")
+    scadenza = _SHOPIFY_TOKEN_CACHE["scade_il"] - _diag_ora()
+    return {
+        "esito": "ok",
+        "negozio": shop.get("name"),
+        "dominio": shop.get("myshopifyDomain"),
+        "valuta": shop.get("currencyCode"),
+        "prodotti_a_catalogo": conteggio,
+        "versione_api": _SHOPIFY_API_VERSION,
+        "token": f"in cache, scade fra {int(max(scadenza, 0))} secondi",
+    }
+
+
+# Di api.fully.si non esiste documentazione pubblica: il percorso esatto della
+# lettura minima non e' noto in anticipo. Si prova una lista di candidati, tutti
+# in GET (nessuna scrittura), e si riporta il codice HTTP di OGNUNO: cosi' la
+# risposta e' utile anche quando nessuno risponde 200.
+_FULLY_DIAG_SHOP_ID = 721
+_FULLY_DIAG_PERCORSI = [
+    "/api/v2-jwt/shops/{shop}",
+    "/api/v2-jwt/shop/{shop}",
+    "/api/v2-jwt/shops/{shop}/products?limit=1",
+    "/api/v2-jwt/products?shop_id={shop}&limit=1",
+    "/api/v2-jwt/orders?shop_id={shop}&limit=1",
+    "/api/v2-jwt/stocks?shop_id={shop}&limit=1",
+    "/api/v2-jwt",
+]
+
+
+def _diag_fully_dato(data) -> dict:
+    """Un dato vero dalla risposta, qualunque forma abbia: lo schema non e' noto,
+    quindi si dichiara quello che si vede senza inventarne il significato."""
+    if isinstance(data, list):
+        primo = data[0] if data else None
+        return {
+            "forma": "lista",
+            "elementi": len(data),
+            "primo_elemento": (
+                {k: primo[k] for k in list(primo)[:6]} if isinstance(primo, dict) else primo
+            ),
+        }
+    if isinstance(data, dict):
+        return {"forma": "oggetto", "chiavi": list(data)[:12]}
+    return {"forma": str(type(data)), "valore": str(data)[:_DIAG_MAX_TESTO]}
+
+
+def _diag_fully() -> dict:
+    """Base api.fully.si (staging: staging-api.fully.si), Bearer statico,
+    shop_id 721. FULLY_ENV sceglie l'ambiente; senza, si prova la produzione."""
+    ambiente = (os.getenv("FULLY_ENV") or "").strip().lower()
+    staging = ambiente in ("staging", "stage", "test")
+    nome_var = "FULLY_STAGING_TOKEN" if staging else "FULLY_API_TOKEN"
+    token = os.getenv(nome_var)
+    base = "https://staging-api.fully.si" if staging else "https://api.fully.si"
+
+    mancanti = _diag_mancanti([(nome_var, token)])
+    if mancanti:
+        return {
+            "esito": "chiave mancante",
+            "variabili_non_valorizzate": mancanti,
+            "ambiente_scelto": "staging" if staging else "produzione",
+            "come_e_stato_scelto": (
+                "da FULLY_ENV" if ambiente else "FULLY_ENV assente: produzione per default"
+            ),
+        }
+
+    tentativi = []
+    for schema in _FULLY_DIAG_PERCORSI:
+        percorso = schema.format(shop=_FULLY_DIAG_SHOP_ID)
+        try:
+            r = requests.get(
+                base + percorso,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+                timeout=30,
+            )
+        except Exception as e:
+            tentativi.append({
+                "percorso": percorso,
+                "esito": f"connessione fallita ({type(e).__name__})",
+            })
+            continue
+        tentativi.append({"percorso": percorso, "http": r.status_code})
+        if r.status_code == 200:
+            try:
+                data = r.json()
+            except Exception:
+                return {
+                    "esito": f"errore: HTTP 200 ma risposta non JSON su {percorso}",
+                    "tentativi": tentativi,
+                }
+            return {
+                "esito": "ok",
+                "ambiente": "staging" if staging else "produzione",
+                "base": base,
+                "percorso_che_risponde": percorso,
+                "shop_id": _FULLY_DIAG_SHOP_ID,
+                "dato_letto": _diag_fully_dato(data),
+                "tentativi": tentativi,
+            }
+
+    ultimo = tentativi[-1] if tentativi else {}
+    return {
+        "esito": (
+            f"errore: nessun percorso ha risposto 200 su {base} (ultimo tentativo: "
+            f"{ultimo.get('percorso')} -> HTTP {ultimo.get('http') or ultimo.get('esito')})"
+        ),
+        "ambiente": "staging" if staging else "produzione",
+        "nota": (
+            "I percorsi sono CANDIDATI: di api.fully.si non c'e' documentazione "
+            "pubblica. Il codice HTTP di ognuno sta in 'tentativi': un 401/403 dice "
+            "che il percorso esiste ma il token non basta, un 404 che il percorso "
+            "e' sbagliato."
+        ),
+        "tentativi": tentativi,
+    }
+
+
+def _diag_woocommerce() -> dict:
+    """I nomi indicati per la migrazione sono WOO_*, ma il bot oggi usa WC_*.
+    Si guardano prima i WOO_ e si ripiega sui WC_, dichiarando SEMPRE quali nomi
+    sono stati usati: e' esattamente il refuso che questo endpoint deve far
+    vedere invece di nasconderlo dentro un 'chiave mancante'."""
+    base = os.getenv("WOO_BASE_URL")
+    key = os.getenv("WOO_CONSUMER_KEY")
+    secret = os.getenv("WOO_CONSUMER_SECRET")
+    nomi = ["WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET"]
+    if not (base and key and secret) and (WC_API_URL and WC_CONSUMER_KEY and WC_CONSUMER_SECRET):
+        base, key, secret = WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
+        nomi = ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"]
+
+    mancanti = _diag_mancanti(list(zip(nomi, (base, key, secret))))
+    if mancanti:
+        return {
+            "esito": "chiave mancante",
+            "variabili_non_valorizzate": mancanti,
+            "nomi_provati": [
+                "WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET",
+                "WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET",
+            ],
+        }
+
+    radice = str(base).rstrip("/")
+    if radice.endswith("/wp-json/wc/v3"):
+        radice = radice[: -len("/wp-json/wc/v3")]
+    try:
+        r = requests.get(
+            f"{radice}/wp-json/wc/v3/products",
+            auth=(key, secret),
+            params={"per_page": 1},
+            timeout=30,
+        )
+    except Exception as e:
+        return {
+            "esito": f"errore: connessione fallita ({type(e).__name__}: {e})",
+            "nomi_usati": nomi,
+        }
+    if r.status_code != 200:
+        return {"esito": _diag_errore("wc/v3/products", r), "nomi_usati": nomi}
+    try:
+        data = r.json()
+    except Exception:
+        return {
+            "esito": f"errore: risposta non JSON (HTTP {r.status_code})",
+            "nomi_usati": nomi,
+        }
+    primo = data[0] if isinstance(data, list) and data else {}
+    if not isinstance(primo, dict):
+        primo = {}
+    return {
+        "esito": "ok",
+        "nomi_usati": nomi,
+        "prodotto_letto": primo.get("name"),
+        "prodotti_totali_dichiarati": r.headers.get("X-WP-Total"),
+    }
+
+
+@app.get("/diagnostica-collegamenti", dependencies=SOLO_ADMIN)
+def diagnostica_collegamenti():
+    """Inventario dei NOMI delle variabili d'ambiente dei cinque canali, e poi
+    una lettura vera su ognuno. Nessun valore di chiave esce da qui."""
+    canali = {}
+    for nome, funzione in (
+        ("b2b", _diag_b2b),
+        ("btoweb", _diag_btoweb),
+        ("shopify", _diag_shopify),
+        ("fully", _diag_fully),
+        ("woocommerce", _diag_woocommerce),
+    ):
+        try:
+            canali[nome] = funzione()
+        except Exception as e:
+            # Un canale che esplode non deve portarsi via la diagnosi degli altri.
+            canali[nome] = {
+                "esito": f"errore: eccezione non prevista ({type(e).__name__}: {e})"
+            }
+    return {
+        "letto_il": datetime.now(timezone.utc).isoformat(),
+        "nota": "Solo NOMI di variabili: nessun valore di chiave viene mai restituito.",
+        "variabili_presenti_nel_processo": _diag_nomi_variabili(),
+        "canali": canali,
+    }
