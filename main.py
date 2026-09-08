@@ -5881,8 +5881,28 @@ def _wc_get(endpoint: str, params: dict = None):
         if data is not None:
             return data, None
 
-    # 2) e 3) OAuth1 con i due set
-    for nome_set, radice, key, secret in _wc_set_credenziali():
+    # 2) basic auth con il set WOO_* (l'8/9/2026 e' l'unico che risponde 200
+    #    senza cache: le chiavi WC_* risultano revocate sul sito, 'Consumer
+    #    key is invalid'); 3) OAuth1 con i due set, come ultima strada.
+    set_credenziali = _wc_set_credenziali()
+    for nome_set, radice, key, secret in set_credenziali[1:]:
+        via = f"basic auth ({nome_set})"
+        if not (radice and key and secret):
+            _registra(via, eccezione=f"variabili {nome_set} non valorizzate")
+            continue
+        try:
+            r = requests.get(
+                f"{radice}/wp-json/wc/v3/{endpoint}",
+                auth=(key, secret), params=params, timeout=30,
+                headers={"accept": "application/json"},
+            )
+        except Exception as e:
+            _registra(via, eccezione=f"{type(e).__name__}: {str(e)[:200]}")
+            continue
+        data = _leggi(via, r)
+        if data is not None:
+            return data, None
+    for nome_set, radice, key, secret in set_credenziali:
         via = f"oauth1 ({nome_set})"
         if not (radice and key and secret):
             _registra(via, eccezione=f"variabili {nome_set} non valorizzate")
