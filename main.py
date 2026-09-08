@@ -6483,28 +6483,17 @@ def _diag_fully() -> dict:
     }
 
 
-def _diag_woocommerce() -> dict:
-    """I nomi indicati per la migrazione sono WOO_*, ma il bot oggi usa WC_*.
-    Si guardano prima i WOO_ e si ripiega sui WC_, dichiarando SEMPRE quali nomi
-    sono stati usati: e' esattamente il refuso che questo endpoint deve far
-    vedere invece di nasconderlo dentro un 'chiave mancante'."""
-    base = os.getenv("WOO_BASE_URL")
-    key = os.getenv("WOO_CONSUMER_KEY")
-    secret = os.getenv("WOO_CONSUMER_SECRET")
-    nomi = ["WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET"]
-    if not (base and key and secret) and (WC_API_URL and WC_CONSUMER_KEY and WC_CONSUMER_SECRET):
-        base, key, secret = WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
-        nomi = ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"]
-
+def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
+    """Una lettura minima su wp-json/wc/v3/products con un set di credenziali.
+    Sta qui in un pezzo solo perche' i due set (WOO_* e WC_*) vanno provati
+    NELLO STESSO MODO: se la prova fosse scritta due volte, la differenza fra i
+    due esiti potrebbe venire dal codice invece che dalle chiavi."""
     mancanti = _diag_mancanti(list(zip(nomi, (base, key, secret))))
     if mancanti:
         return {
             "esito": "chiave mancante",
+            "nomi_provati": nomi,
             "variabili_non_valorizzate": mancanti,
-            "nomi_provati": [
-                "WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET",
-                "WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET",
-            ],
         }
 
     radice = str(base).strip().rstrip("/")
@@ -6532,12 +6521,14 @@ def _diag_woocommerce() -> dict:
         return {
             "esito": f"errore: connessione fallita ({type(e).__name__}: {e})",
             "nomi_usati": nomi,
+            "http": None,
             "nota_variabile": schema_aggiunto,
         }
     if r.status_code != 200:
         return {
             "esito": _diag_errore("wc/v3/products", r),
             "nomi_usati": nomi,
+            "http": r.status_code,
             "nota_variabile": schema_aggiunto,
         }
     try:
@@ -6546,6 +6537,7 @@ def _diag_woocommerce() -> dict:
         return {
             "esito": f"errore: risposta non JSON (HTTP {r.status_code})",
             "nomi_usati": nomi,
+            "http": r.status_code,
             "nota_variabile": schema_aggiunto,
         }
     primo = data[0] if isinstance(data, list) and data else {}
@@ -6554,16 +6546,42 @@ def _diag_woocommerce() -> dict:
     return {
         "esito": "ok",
         "nomi_usati": nomi,
+        "http": r.status_code,
         "prodotto_letto": primo.get("name"),
         "prodotti_totali_dichiarati": r.headers.get("X-WP-Total"),
         "nota_variabile": schema_aggiunto,
     }
 
 
+def _diag_woocommerce() -> dict:
+    """Il set WOO_*, quello indicato per la migrazione. Se non c'e', ripiega sui
+    WC_* dichiarando in 'nomi_usati' quali ha davvero usato."""
+    base = os.getenv("WOO_BASE_URL")
+    key = os.getenv("WOO_CONSUMER_KEY")
+    secret = os.getenv("WOO_CONSUMER_SECRET")
+    nomi = ["WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET"]
+    if not (base and key and secret) and (WC_API_URL and WC_CONSUMER_KEY and WC_CONSUMER_SECRET):
+        base, key, secret = WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
+        nomi = ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"]
+    return _diag_woo_prova(nomi, base, key, secret)
+
+
+def _diag_woocommerce_wc() -> dict:
+    """Il set WC_*: quello che il bot usa DAVVERO in get_wcapi(). Provato a
+    parte, e non come ripiego, perche' i due set possono avere esiti diversi e
+    fin qui l'esito buono di uno copriva quello rotto dell'altro."""
+    return _diag_woo_prova(
+        ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"],
+        WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET,
+    )
+
+
 @app.get("/diagnostica-collegamenti", dependencies=SOLO_ADMIN)
 def diagnostica_collegamenti():
-    """Inventario dei NOMI delle variabili d'ambiente dei cinque canali, e poi
-    una lettura vera su ognuno. Nessun valore di chiave esce da qui."""
+    """Inventario dei NOMI delle variabili d'ambiente dei canali, e poi una
+    lettura vera su ognuno. Nessun valore di chiave esce da qui. WooCommerce
+    compare DUE volte, una per set di credenziali: 'woocommerce' e' il set WOO_*
+    della migrazione, 'woocommerce_wc' e' il set WC_* che get_wcapi() usa oggi."""
     canali = {}
     for nome, funzione in (
         ("b2b", _diag_b2b),
@@ -6571,6 +6589,7 @@ def diagnostica_collegamenti():
         ("shopify", _diag_shopify),
         ("fully", _diag_fully),
         ("woocommerce", _diag_woocommerce),
+        ("woocommerce_wc", _diag_woocommerce_wc),
     ):
         try:
             canali[nome] = funzione()
