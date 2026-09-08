@@ -163,10 +163,14 @@ def errore_canale(fonte: str, dettaglio: str = None) -> str:
 
 
 def get_wcapi():
+    # WOO_* prima: le WC_* risultano revocate sul sito ('Consumer key is
+    # invalid', verificato l'8/9/2026). WC_* solo se le WOO_* non ci sono.
+    woo = (os.getenv("WOO_BASE_URL"), os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET"))
+    url, key, secret = woo if all(woo) else (WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
     return API(
-        url=WC_API_URL,
-        consumer_key=WC_CONSUMER_KEY,
-        consumer_secret=WC_CONSUMER_SECRET,
+        url=url,
+        consumer_key=key,
+        consumer_secret=secret,
         version="wc/v3",
         timeout=30
     )
