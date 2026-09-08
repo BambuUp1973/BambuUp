@@ -5793,11 +5793,11 @@ def _wc_norm(testo) -> str:
 _WC_ULTIMA_DIAGNOSTICA = {"tentativi": []}
 
 
-def _wc_radice_url() -> str:
-    """La radice del sito dalle stesse variabili di get_wcapi(), normalizzata
-    come nella diagnosi dei collegamenti: senza il suffisso wp-json/wc/v3 e con
-    lo schema https:// se manca."""
-    radice = str(WC_API_URL or "").strip().rstrip("/")
+def _wc_radice(valore) -> str:
+    """La radice del sito da una variabile d'ambiente, normalizzata come nella
+    diagnosi dei collegamenti: senza il suffisso wp-json/wc/v3 e con lo schema
+    https:// se manca."""
+    radice = str(valore or "").strip().rstrip("/")
     if radice.endswith("/wp-json/wc/v3"):
         radice = radice[: -len("/wp-json/wc/v3")]
     if radice and not radice.lower().startswith(("http://", "https://")):
@@ -5805,14 +5805,52 @@ def _wc_radice_url() -> str:
     return radice
 
 
+def _wc_radice_url() -> str:
+    return _wc_radice(WC_API_URL)
+
+
+# I due set di credenziali presenti sull'ambiente, in ordine di prova. Il
+# secondo esiste per la migrazione; si dichiara sempre quale ha risposto.
+def _wc_set_credenziali() -> list:
+    return [
+        ("WC_*", _wc_radice(WC_API_URL), WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+        ("WOO_*", _wc_radice(os.getenv("WOO_BASE_URL")),
+         os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET")),
+    ]
+
+
+def _wc_cache_buster(params: dict) -> dict:
+    """Il CDN del sito (hcdn + LiteSpeed) serve /wp-json/wc/v3/products dalla
+    cache A CHIUNQUE, anche senza credenziali: un 200 su un URL gia' visto non
+    prova niente. Un parametro unico per chiamata rende l'URL nuovo e obbliga
+    il server a rispondere davvero. Verificato l'8/9/2026: stesso URL, 200 con
+    x-litespeed-cache: hit senza auth; con il buster 401 come deve."""
+    return {**(params or {}), "_": int(datetime.now(timezone.utc).timestamp() * 1000)}
+
+
+def _wc_get_oauth(radice: str, key: str, secret: str, endpoint: str, params: dict):
+    """GET firmata OAuth1 (HMAC-SHA256) spedita in https. Serve perche' dietro
+    il CDN WordPress NON vede la richiesta come SSL, e WooCommerce in quel caso
+    IGNORA basic auth e credenziali in query string e accetta SOLO la firma
+    OAuth1 (verificato con chiavi finte: basic -> 'invalid_username' del core
+    WP, query string -> 'cannot list resources', OAuth1 -> 'Consumer key is
+    invalid', cioe' l'unico ramo che arriva alla verifica della chiave)."""
+    from woocommerce.oauth import OAuth
+    from urllib.parse import urlencode
+    url = f"{radice}/wp-json/wc/v3/{endpoint}"
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    firmata = OAuth(url, key, secret, version="wc/v3", method="GET").get_oauth_url()
+    return requests.get(firmata, timeout=30, headers={"accept": "application/json"})
+
+
 def _wc_get(endpoint: str, params: dict = None):
-    """Una GET su WooCommerce, in due passi. Prima la libreria (get_wcapi(), la
-    stessa del ramo ordini); se quella fallisce, la chiamata REST diretta con le
-    STESSE credenziali, nella forma che /diagnostica-collegamenti ha verificato
-    rispondere 200. Restituisce (json, None) o (None, errore_payload). Il
-    dettaglio tecnico resta nel log e in _WC_ULTIMA_DIAGNOSTICA; al modello va
-    la frase."""
-    params = params or {}
+    """Una GET su WooCommerce, in tre passi, ognuno registrato con la sua 'via':
+    1) la libreria (get_wcapi(), la stessa del ramo ordini: basic auth);
+    2) OAuth1 con le chiavi WC_*; 3) OAuth1 con le chiavi WOO_*.
+    Restituisce (json, None) o (None, errore_payload). Il dettaglio tecnico
+    resta nel log e in _WC_ULTIMA_DIAGNOSTICA; al modello va la frase."""
+    params = _wc_cache_buster(params)
     _WC_ULTIMA_DIAGNOSTICA["tentativi"] = []
 
     def _registra(via, **info):
@@ -5821,45 +5859,42 @@ def _wc_get(endpoint: str, params: dict = None):
         print(f"[FONTE woocommerce-giacenza] {voce}")
 
     def _leggi(via, r):
+        cache = r.headers.get("x-litespeed-cache")
         if r.status_code != 200:
-            _registra(via, http=r.status_code, risposta=(r.text or "")[:300])
+            _registra(via, http=r.status_code, cache=cache, risposta=(r.text or "")[:300])
             return None
         try:
             data = r.json()
         except Exception as e:
-            _registra(via, http=200, eccezione=f"risposta non JSON: {type(e).__name__}")
+            _registra(via, http=200, cache=cache, eccezione=f"risposta non JSON: {type(e).__name__}")
             return None
-        _registra(via, http=200, esito="ok")
+        _registra(via, http=200, cache=cache, esito="ok")
         return data
 
     # 1) libreria woocommerce, come il ramo ordini
     try:
         r = get_wcapi().get(endpoint, params=params)
     except Exception as e:
-        _registra("libreria", eccezione=f"{type(e).__name__}: {str(e)[:200]}")
+        _registra("libreria (basic auth, WC_*)", eccezione=f"{type(e).__name__}: {str(e)[:200]}")
     else:
-        data = _leggi("libreria", r)
+        data = _leggi("libreria (basic auth, WC_*)", r)
         if data is not None:
             return data, None
 
-    # 2) REST diretta con le stesse credenziali
-    radice = _wc_radice_url()
-    if not (radice and WC_CONSUMER_KEY and WC_CONSUMER_SECRET):
-        _registra("rest-diretta", eccezione="variabili WC_* non valorizzate")
-        return None, _wc_errore()
-    try:
-        r = requests.get(
-            f"{radice}/wp-json/wc/v3/{endpoint}",
-            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-            params=params,
-            timeout=30,
-        )
-    except Exception as e:
-        _registra("rest-diretta", eccezione=f"{type(e).__name__}: {str(e)[:200]}")
-        return None, _wc_errore()
-    data = _leggi("rest-diretta", r)
-    if data is not None:
-        return data, None
+    # 2) e 3) OAuth1 con i due set
+    for nome_set, radice, key, secret in _wc_set_credenziali():
+        via = f"oauth1 ({nome_set})"
+        if not (radice and key and secret):
+            _registra(via, eccezione=f"variabili {nome_set} non valorizzate")
+            continue
+        try:
+            r = _wc_get_oauth(radice, key, secret, endpoint, params)
+        except Exception as e:
+            _registra(via, eccezione=f"{type(e).__name__}: {str(e)[:200]}")
+            continue
+        data = _leggi(via, r)
+        if data is not None:
+            return data, None
     return None, _wc_errore()
 
 
@@ -6482,37 +6517,44 @@ def wc_giacenza(query: str = None, sku: str = None, debug: int = 0):
 
 
 @app.get("/wc-sonda", dependencies=SOLO_ADMIN)
-def wc_sonda(request: Request, endpoint: str = "products", via: str = "rest"):
-    """Sonda grezza su WooCommerce per bisezionare un 401 che compare con certi
-    parametri e non con altri: inoltra alla REST tutti i parametri extra della
-    query string (search, per_page, sku, ...) e restituisce SOLO codice HTTP,
-    corpo troncato e la lista dei parametri inoltrati. Mai credenziali, mai
-    l'URL completo. via='rest' = requests con auth basic; via='libreria' =
-    get_wcapi(), la stessa del ramo ordini."""
+def wc_sonda(request: Request, endpoint: str = "products", via: str = "oauth",
+             set: str = "wc", cache_buster: int = 1):
+    """Sonda grezza su WooCommerce: inoltra alla REST tutti i parametri extra
+    della query string (search, per_page, sku, ...) e restituisce SOLO codice
+    HTTP, header di cache, corpo troncato e i parametri inoltrati. Mai
+    credenziali, mai l'URL completo. via='oauth' = firma OAuth1 (l'unica che
+    dietro il CDN arriva alla verifica della chiave), via='rest' = basic auth
+    con requests, via='libreria' = get_wcapi(). set='wc' o 'woo' sceglie il
+    set di chiavi. cache_buster=1 aggiunge un parametro unico: senza, il CDN
+    puo' rispondere 200 dalla cache anche a chi non ha credenziali."""
     extra = {
         k: v for k, v in request.query_params.items()
-        if k not in ("endpoint", "via")
+        if k not in ("endpoint", "via", "set", "cache_buster")
     }
+    if cache_buster:
+        extra = _wc_cache_buster(extra)
+    scelto = {"wc": 0, "woo": 1}.get(set, 0)
+    nome_set, radice, key, secret = _wc_set_credenziali()[scelto]
     try:
         if via == "libreria":
             r = get_wcapi().get(endpoint, params=extra or {})
-        else:
-            radice = _wc_radice_url()
+        elif via == "rest":
             r = requests.get(
                 f"{radice}/wp-json/wc/v3/{endpoint}",
-                auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-                params=extra or None,
-                timeout=30,
+                auth=(key, secret), params=extra or None, timeout=30,
             )
+        else:
+            r = _wc_get_oauth(radice, key, secret, endpoint, extra)
     except Exception as e:
         return {
-            "via": via, "endpoint": endpoint, "parametri": extra,
+            "via": via, "set": nome_set, "endpoint": endpoint, "parametri": extra,
             "eccezione": f"{type(e).__name__}: {str(e)[:200]}",
         }
     corpo = (r.text or "")
     return {
-        "via": via, "endpoint": endpoint, "parametri": extra,
+        "via": via, "set": nome_set, "endpoint": endpoint, "parametri": extra,
         "http": r.status_code,
+        "cache": r.headers.get("x-litespeed-cache"),
         "righe_json": len(r.json()) if r.status_code == 200 and corpo.startswith("[") else None,
         "x_wp_total": r.headers.get("X-WP-Total"),
         "corpo": corpo[:400],
@@ -6977,7 +7019,13 @@ def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
     """Una lettura minima su wp-json/wc/v3/products con un set di credenziali.
     Sta qui in un pezzo solo perche' i due set (WOO_* e WC_*) vanno provati
     NELLO STESSO MODO: se la prova fosse scritta due volte, la differenza fra i
-    due esiti potrebbe venire dal codice invece che dalle chiavi."""
+    due esiti potrebbe venire dal codice invece che dalle chiavi.
+    Due lezioni dell'8/9/2026, entrambe qui dentro: (1) senza un parametro
+    unico il CDN del sito risponde 200 dalla cache anche a chi non ha nessuna
+    credenziale, e la prova mente; (2) dietro quel CDN WordPress non vede la
+    richiesta come SSL, quindi la basic auth viene ignorata e solo la firma
+    OAuth1 arriva alla verifica della chiave. Si prova prima la basic (per
+    dire se un giorno tornasse a funzionare) e poi OAuth1, dichiarando 'via'."""
     mancanti = _diag_mancanti(list(zip(nomi, (base, key, secret))))
     if mancanti:
         return {
@@ -6989,10 +7037,6 @@ def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
     radice = str(base).strip().rstrip("/")
     if radice.endswith("/wp-json/wc/v3"):
         radice = radice[: -len("/wp-json/wc/v3")]
-    # La variabile puo' essere scritta senza schema ('www.kanokimonos.com'):
-    # cosi' com'e' la richiesta non parte nemmeno e l'esito direbbe "URL non
-    # valido", che non e' una risposta sul canale. Si aggiunge https:// per
-    # poter fare la prova, e lo si DICHIARA: il refuso resta visibile.
     schema_aggiunto = None
     if not radice.lower().startswith(("http://", "https://")):
         schema_aggiunto = (
@@ -7000,36 +7044,50 @@ def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
             "https://. Vale la pena correggerla all'origine."
         )
         radice = "https://" + radice
-    try:
-        r = requests.get(
-            f"{radice}/wp-json/wc/v3/products",
-            auth=(key, secret),
-            params={"per_page": 1},
-            timeout=30,
-        )
-    except Exception as e:
+
+    tentativi = []
+
+    def _prova(via, chiamata):
+        try:
+            r = chiamata()
+        except Exception as e:
+            tentativi.append({"via": via, "eccezione": f"{type(e).__name__}: {str(e)[:200]}"})
+            return None
+        voce = {"via": via, "http": r.status_code, "cache": r.headers.get("x-litespeed-cache")}
+        if r.status_code != 200:
+            voce["risposta"] = (r.text or "").strip().replace("\n", " ")[:_DIAG_MAX_TESTO]
+            tentativi.append(voce)
+            return None
+        try:
+            data = r.json()
+        except Exception:
+            voce["risposta"] = "HTTP 200 ma corpo non JSON"
+            tentativi.append(voce)
+            return None
+        tentativi.append(voce)
+        return r, data
+
+    esito = _prova("basic auth", lambda: requests.get(
+        f"{radice}/wp-json/wc/v3/products", auth=(key, secret),
+        params=_wc_cache_buster({"per_page": 1}), timeout=30,
+    ))
+    if esito is None:
+        esito = _prova("oauth1", lambda: _wc_get_oauth(
+            radice, key, secret, "products", _wc_cache_buster({"per_page": 1}),
+        ))
+    if esito is None:
+        ultimo = tentativi[-1] if tentativi else {}
         return {
-            "esito": f"errore: connessione fallita ({type(e).__name__}: {e})",
+            "esito": (
+                f"errore: wc/v3/products HTTP {ultimo.get('http')} - "
+                f"{ultimo.get('risposta') or ultimo.get('eccezione')}"
+            ),
             "nomi_usati": nomi,
-            "http": None,
+            "http": ultimo.get("http"),
+            "tentativi": tentativi,
             "nota_variabile": schema_aggiunto,
         }
-    if r.status_code != 200:
-        return {
-            "esito": _diag_errore("wc/v3/products", r),
-            "nomi_usati": nomi,
-            "http": r.status_code,
-            "nota_variabile": schema_aggiunto,
-        }
-    try:
-        data = r.json()
-    except Exception:
-        return {
-            "esito": f"errore: risposta non JSON (HTTP {r.status_code})",
-            "nomi_usati": nomi,
-            "http": r.status_code,
-            "nota_variabile": schema_aggiunto,
-        }
+    r, data = esito
     primo = data[0] if isinstance(data, list) and data else {}
     if not isinstance(primo, dict):
         primo = {}
@@ -7037,8 +7095,11 @@ def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
         "esito": "ok",
         "nomi_usati": nomi,
         "http": r.status_code,
+        "via": tentativi[-1]["via"],
+        "cache": r.headers.get("x-litespeed-cache"),
         "prodotto_letto": primo.get("name"),
         "prodotti_totali_dichiarati": r.headers.get("X-WP-Total"),
+        "tentativi": tentativi,
         "nota_variabile": schema_aggiunto,
     }
 
