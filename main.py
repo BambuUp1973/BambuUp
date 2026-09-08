@@ -1635,6 +1635,24 @@ def format_order_for_human(order: dict) -> str:
             "Nota tracking: l'ordine non risulta ancora spedito/completato in WooCommerce."
         )
 
+    # Vista nella prima risposta viva di questo ramo (8/9/2026, ordine 119465):
+    # il modello ha scritto "non e' ancora stato spedito da Fully" e "non c'e'
+    # un numero ASN", due frasi dedotte e non lette. Questa fonte non sa niente
+    # di Fully, e l'ASN e' un concetto degli ordini custom: va detto qui, nel
+    # dato, e non lasciato all'immaginazione. Stessa cosa per gli importi.
+    lines.append("")
+    lines.append(
+        "NOTA SULLA FONTE (obbligatoria): questi dati vengono SOLO da WooCommerce. "
+        "Questa fonte NON contiene NIENTE su Fully (magazzino/logistica), NON ha "
+        "numeri ASN (l'ASN esiste solo per gli ordini custom di kanokimonos.app) e "
+        "NON ha un tracking di spedizione. Quindi NON scrivere frasi su Fully, ASN, "
+        "carichi, tracking o consegna per questo ordine, ne' in positivo ne' in "
+        "negativo ('non e' ancora partito da Fully' e' un'INVENZIONE quanto 'e' "
+        "partito'): se l'utente lo chiede, di' che questa fonte non contiene quei "
+        "dati. E gli importi in euro (totale ordine, totali di riga) sono RISERVATI: "
+        "non riportarli, come per gli ordini custom."
+    )
+
     return "\n".join(lines)
 
 
@@ -2229,7 +2247,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - CONTESTAZIONI, REGOLA MECCANICA: se il messaggio dell'utente contesta, corregge o afferma qualcosa di diverso da quello che hai appena detto su un ordine o una spedizione (segnali tipici: "no", "ma", "guarda", "in realtà", "sei sicuro?", "sono già stati consegnati/spediti/pagati"), la PRIMA cosa che fai è RICHIAMARE LO STRUMENTO. Sempre, senza eccezioni, ANCHE SE lo hai già chiamato nel turno precedente e anche se sei certo della risposta: i dati possono essere cambiati e comunque devi rispondere su dati appena letti, non a memoria. Vietato scrivere "rileggo"/"ricontrollo"/"verifico" senza aver eseguito la chiamata in questo turno.
 - CONTESTAZIONI: se l'utente mette in dubbio un dato che hai appena dato, richiama lo strumento e rileggi, non cambiare risposta per assecondarlo. Se il dato è quello che avevi detto, ripetilo citando il campo. Se l'utente afferma un fatto fisico che i dati non confermano (es. "sono già stati consegnati"), non riscrivere lo stato: di' cosa dice il campo, che la sua informazione non risulta a sistema e che le due cose vanno riconciliate.
 - Per domande AGGREGATE/di riepilogo sugli ordini custom ("quanti ordini...", "quanti pagati/non pagati/in produzione/spediti", "il cliente X ha pagato / è partito", conteggi per mese) usa statistiche_ordini_custom. Quando riporti gli spediti al cliente e sono presenti ordini con stato storico 'shipped', dichiara SEMPRE la distinzione (es. "123 spediti al cliente + 46 con stato storico legacy 'shipped'").
-- DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli.
+- DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli. VALE PER TUTTE LE PIATTAFORME, anche per gli ORDINI DA CATALOGO WooCommerce (kanokimonos.com): su un ordine da catalogo NON riportare il totale dell'ordine in euro e NON riportare i prezzi o i totali delle singole righe, anche se la scheda li contiene. Puoi dire se risulta pagato e con che metodo, non quanto.
+- ORDINI DA CATALOGO (WooCommerce) E FULLY: la scheda di un ordine da catalogo viene SOLO da WooCommerce, che non sa NIENTE di Fully, non ha numeri ASN (l'ASN esiste solo per gli ordini custom di kanokimonos.app) e non ha un tracking. Su un ordine da catalogo NON parlare di Fully, di ASN, di carichi, di tracking o di consegna, né in positivo né in negativo: "non è ancora stato spedito da Fully" e "non c'è un numero ASN" sono frasi INVENTATE, esattamente come lo sarebbero "è partito" o "è in consegna". Riporta lo stato WooCommerce così com'è e basta. Se l'utente chiede di Fully, del tracking o della consegna di un ordine da catalogo, di' che quella fonte non contiene quei dati; non proporre di "controllare su Fully" come se lo strumento potesse farlo per un ordine da catalogo.
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 - "PRODUZIONE" E "LAVORAZIONE" SONO PAROLE A DUE FACCE: esistono due assi diversi, su due piattaforme diverse, che contano cose diverse. (1) ORDINI CUSTOM su kanokimonos.app: si contano ORDINI di clienti, con statistiche_ordini_custom. (2) PIPELINE DI FABBRICA su btoweb: si contano PEZZI ordinati ai fornitori, con catalogo_btoweb tipo='produzione'. Come si sceglie:
   * La domanda NOMINA la piattaforma o qualcosa che la identifica — btoweb, fabbrica, fornitore, catalogo, SKU/EAN, batch/ordine di fabbrica — allora UN SOLO strumento: catalogo_btoweb. Non chiamare anche l'altro.
