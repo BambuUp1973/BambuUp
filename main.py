@@ -1932,6 +1932,51 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "giacenza_woocommerce",
+        "description": (
+            "GIACENZA DEL SITO kanokimonos.com (WooCommerce): quanti pezzi di un prodotto "
+            "abbiamo A MAGAZZINO, divisi per taglia, più il totale. È il TERZO asse, "
+            "diverso dagli altri due: NON è la pipeline di produzione di btoweb "
+            "(ordinato / in produzione / spedito dal fornitore) e NON è lo stock di "
+            "Fully. Usalo per 'quante <prodotto> abbiamo?', 'quanti ne abbiamo in "
+            "magazzino / in stock / disponibili?', 'giacenza di <prodotto>', 'che taglie "
+            "ci sono ancora di <prodotto>?', 'è finito il <prodotto>?', 'quanti <prodotto> "
+            "sul sito?'. Cerca per NOME ('query', le parole del nome del prodotto così come "
+            "le dice l'utente, es. 'killer bunny female') oppure per SKU ('sku'). "
+            "REGOLE OBBLIGATORIE sulla risposta: (1) ogni numero va etichettato come "
+            "\"giacenza su woocommerce (kanokimonos.com)\", mai come stock Fully e mai "
+            "mescolato ai contatori di produzione di btoweb; se nella stessa risposta "
+            "compaiono entrambi, due blocchi separati, ognuno col suo nome. (2) Se "
+            "'trovato' è false il prodotto NON è stato trovato: NON dire 'zero', 'esaurito' "
+            "o 'non ne abbiamo' — 'non trovato' e 'giacenza zero' sono due cose diverse e "
+            "vanno dette con parole diverse. (3) Se c'è 'ambiguita' il nome pesca più "
+            "prodotti: elencali e chiedi quale, NON sceglierne uno. (4) Riporta le taglie "
+            "una per una come tornano dallo strumento e il totale calcolato dallo strumento, "
+            "senza sommare tu. (5) Se una taglia ha 'quantita' null leggi 'nota_riga': la "
+            "quantità non è tracciata, non è zero."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Parole del nome del prodotto, così come le ha scritte l'utente "
+                        "(es. 'killer bunny female', 'rashguard kids'). Ometti se cerchi "
+                        "per SKU."
+                    ),
+                },
+                "sku": {
+                    "type": "string",
+                    "description": (
+                        "SKU esatto del prodotto o della variante. Ha priorità su 'query'."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "ordini_per_produttore",
         "description": (
             "Ordini di FABBRICA (btoweb) di un PRODUTTORE/FORNITORE: cosa deve ancora "
@@ -2194,6 +2239,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
 - RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
+- GIACENZA DEL SITO (giacenza_woocommerce, solo STAFF): è il TERZO asse, oltre ai due della produzione. "Quante <prodotto> ABBIAMO?", "quanti ne abbiamo in magazzino / in stock / disponibili?", "giacenza di <prodotto>", "che taglie restano di <prodotto>?", "è finito?", "quanti sul sito?" chiedono la GIACENZA, cioè i pezzi a magazzino vendibili sul sito kanokimonos.com: si risponde con giacenza_woocommerce, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente. NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori, in produzione o spediti dal fornitore) e NON è lo stock di Fully. Ogni numero che viene da questo strumento va etichettato, sempre, come "giacenza su woocommerce (kanokimonos.com)"; se nella stessa risposta ci sono anche numeri di btoweb, vanno in un blocco separato con il loro nome ("pipeline di produzione btoweb") e non si sommano né si confrontano come se fossero la stessa cosa. E se lo strumento risponde 'trovato': false, il prodotto NON è stato trovato: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — di' che con quel nome non trovi il prodotto sul sito e prova un'altra forma del nome prima di chiudere.
 """
 
 
@@ -2239,6 +2285,7 @@ ROLE_TOOLS = {
         "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
         "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
         "ordini_per_produttore", "ordine_fabbrica_per_numero", "tracciamento_fully",
+        "giacenza_woocommerce",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
     "retail": {"rispondi_dal_manuale"},
@@ -5695,6 +5742,319 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
     return out
 
 
+# --- GIACENZA WOOCOMMERCE (kanokimonos.com) ----------------------------------
+# Il terzo asse. Fin qui il bot sapeva contare gli ORDINI custom (kanokimonos.app)
+# e i PEZZI della pipeline di fabbrica (btoweb), ma alla domanda "quante ne
+# abbiamo?" rispondeva "non ho accesso": la giacenza del sito non la leggeva
+# nessuno strumento. Questa e' una lettura in SOLA LETTURA di WooCommerce via
+# REST (get_wcapi(), le stesse credenziali del ramo ordini), prodotti e varianti.
+#
+# Tre cose che il payload tiene distinte perche' il modello tende a fonderle:
+# - "non trovato" e "giacenza zero" sono due risposte diverse ('trovato' false
+#   contro 'quantita' 0);
+# - "quantita' non tracciata" (manage_stock spento) non e' zero ('quantita' null
+#   con 'nota_riga');
+# - la giacenza del sito non e' lo stock Fully e non e' la pipeline btoweb: ogni
+#   payload porta l'etichetta obbligatoria e la dice per esteso.
+
+_WC_PER_PAGE = 100
+_WC_MAX_CANDIDATI = 12
+_WC_ETICHETTA = "giacenza su woocommerce (kanokimonos.com)"
+_WC_PIATTAFORMA = (
+    "woocommerce (kanokimonos.com): giacenza del SITO, cioe' i pezzi a magazzino "
+    "vendibili online. NON e' lo stock di Fully e NON e' la pipeline di "
+    "produzione di btoweb (ordinato / in produzione / spedito dal fornitore)."
+)
+_WC_NOTA_ETICHETTA = (
+    f"ETICHETTA OBBLIGATORIA: ogni numero di questo payload va presentato come "
+    f"\"{_WC_ETICHETTA}\". Mai come stock Fully, mai mescolato ai contatori di "
+    "produzione di btoweb: se nella risposta compaiono anche quelli, due blocchi "
+    "separati, ognuno con il suo nome."
+)
+_WC_STATO_IN_PAROLE = {
+    "instock": "disponibile",
+    "outofstock": "esaurito",
+    "onbackorder": "ordinabile su prenotazione (backorder)",
+}
+_WC_NOMI_ATTRIBUTO_TAGLIA = ("size", "taglia", "misura", "sizes")
+
+
+def _wc_norm(testo) -> str:
+    """Minuscolo e senza accenti: 'Rashguard Killer Bunny – Female' e
+    'killer bunny female' devono confrontarsi sulle stesse lettere."""
+    s = unicodedata.normalize("NFKD", str(testo or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s.lower()
+
+
+def _wc_get(endpoint: str, params: dict = None):
+    """Una GET su WooCommerce. Restituisce (json, None) o (None, errore_payload).
+    Il dettaglio tecnico (HTTP, testo) resta nel log; al modello va la frase."""
+    try:
+        r = get_wcapi().get(endpoint, params=params or {})
+    except Exception as e:
+        print(f"[FONTE woocommerce-giacenza] connessione fallita su {endpoint}: {e}")
+        return None, _wc_errore()
+    if r.status_code != 200:
+        print(f"[FONTE woocommerce-giacenza] HTTP {r.status_code} su {endpoint}: {r.text[:300]}")
+        return None, _wc_errore()
+    try:
+        return r.json(), None
+    except Exception as e:
+        print(f"[FONTE woocommerce-giacenza] risposta non JSON su {endpoint}: {e}")
+        return None, _wc_errore()
+
+
+def _wc_errore() -> dict:
+    return {
+        "error": (
+            "Non riesco a leggere la giacenza del sito (woocommerce, kanokimonos.com) "
+            "in questo momento: e' un problema tecnico della fonte, NON una giacenza "
+            "zero e NON un prodotto assente. Dillo cosi', senza numeri."
+        ),
+        "fonte": "woocommerce",
+    }
+
+
+def _wc_taglia(variante: dict) -> str:
+    """La taglia di una variante: l'attributo che si chiama size/taglia; se non
+    c'e', tutti gli attributi insieme (es. colore + taglia), cosi' due varianti
+    non collassano mai sulla stessa etichetta."""
+    attrs = [a for a in (variante.get("attributes") or []) if isinstance(a, dict)]
+    for a in attrs:
+        if _wc_norm(a.get("name")).strip() in _WC_NOMI_ATTRIBUTO_TAGLIA:
+            return str(a.get("option") or "").strip() or "taglia non indicata"
+    if attrs:
+        return " / ".join(
+            f"{a.get('name')}: {a.get('option')}" for a in attrs if a.get("option")
+        ) or "taglia non indicata"
+    return "taglia unica"
+
+
+def _wc_riga(etichetta: str, oggetto: dict, sku_padre: str = None,
+             giacenza_padre=None, gestione_padre=None) -> dict:
+    """Una riga di giacenza (una taglia). La quantita' e' un numero SOLO se
+    WooCommerce la traccia davvero; negli altri casi resta null e 'nota_riga'
+    dice perche', cosi' un 'non tracciato' non diventa mai uno zero."""
+    gestione = oggetto.get("manage_stock")
+    stato = oggetto.get("stock_status")
+    riga = {
+        "taglia": etichetta,
+        "sku": oggetto.get("sku") or sku_padre,
+        "stato": _WC_STATO_IN_PAROLE.get(stato, stato),
+        "quantita": None,
+    }
+    if gestione is True:
+        q = oggetto.get("stock_quantity")
+        riga["quantita"] = int(q) if isinstance(q, (int, float)) else None
+        if riga["quantita"] is None:
+            riga["nota_riga"] = (
+                "WooCommerce traccia la quantita' di questa taglia ma il valore non "
+                "e' valorizzato: NON e' zero, e' un dato mancante."
+            )
+    elif gestione == "parent":
+        riga["quantita"] = None
+        riga["nota_riga"] = (
+            "La quantita' NON e' tracciata per singola taglia: WooCommerce la gestisce "
+            "a livello di prodotto, condivisa fra tutte le taglie (vedi "
+            "'giacenza_condivisa_prodotto'). Non attribuire quel numero a questa taglia."
+        )
+    else:
+        riga["nota_riga"] = (
+            "La quantita' di questa taglia NON e' tracciata su WooCommerce: si sa solo "
+            f"lo stato ('{riga['stato']}'). NON e' zero: e' un numero che il sito non "
+            "tiene."
+        )
+    return riga
+
+
+def _wc_scheda(prodotto: dict, varianti: list) -> dict:
+    """La giacenza di UN prodotto, taglia per taglia, con il totale calcolato qui
+    (il modello non deve sommare) e la dichiarazione di quanto e' coperto."""
+    nome = prodotto.get("name")
+    sku_padre = prodotto.get("sku") or None
+    tipo = prodotto.get("type")
+    righe = []
+    if tipo == "variable" and varianti:
+        for v in sorted(varianti, key=lambda x: x.get("menu_order") or 0):
+            righe.append(_wc_riga(_wc_taglia(v), v, sku_padre=sku_padre))
+    else:
+        righe.append(_wc_riga("taglia unica", prodotto))
+
+    tracciate = [r for r in righe if isinstance(r.get("quantita"), int)]
+    non_tracciate = [r["taglia"] for r in righe if not isinstance(r.get("quantita"), int)]
+    totale = sum(r["quantita"] for r in tracciate)
+
+    out = {
+        "prodotto": nome,
+        "id_woocommerce": prodotto.get("id"),
+        "sku_prodotto": sku_padre,
+        "tipo_prodotto": tipo,
+        "stato_pubblicazione": prodotto.get("status"),
+        "stato_prodotto": _WC_STATO_IN_PAROLE.get(
+            prodotto.get("stock_status"), prodotto.get("stock_status")
+        ),
+        "taglie": righe,
+        "taglie_totali": len(righe),
+        "totale_pezzi": totale,
+        "totale_calcolato_su": (
+            f"{len(tracciate)} taglie su {len(righe)} con quantita' tracciata"
+        ),
+    }
+    if prodotto.get("status") and prodotto.get("status") != "publish":
+        out["nota_pubblicazione"] = (
+            f"Il prodotto NON e' pubblicato sul sito (stato '{prodotto.get('status')}'): "
+            "la giacenza esiste a sistema ma il capo non e' in vendita online. Dichiaralo."
+        )
+    if tipo == "variable" and any(v.get("manage_stock") == "parent" for v in varianti):
+        q = prodotto.get("stock_quantity")
+        out["giacenza_condivisa_prodotto"] = int(q) if isinstance(q, (int, float)) else None
+        out["nota_condivisa"] = (
+            "Per una o piu' taglie la quantita' e' gestita a livello di PRODOTTO, "
+            "condivisa fra le taglie: 'giacenza_condivisa_prodotto' e' quel numero e "
+            "NON va ripartito per taglia."
+        )
+    if non_tracciate:
+        out["nota_totale"] = (
+            f"Il totale {totale} copre SOLO le taglie con quantita' tracciata; per "
+            f"{', '.join(non_tracciate)} la quantita' non e' tracciata (vedi 'nota_riga') "
+            "e non entra nel totale. Dillo: il totale e' PARZIALE, non una giacenza "
+            "completa."
+        )
+    elif totale == 0:
+        out["nota_totale"] = (
+            "Il prodotto E' STATO TROVATO e la giacenza tracciata e' ZERO su tutte le "
+            "taglie: questo si' e' un 'esaurito'. E' diverso da 'non trovato'."
+        )
+    out["nota_etichetta"] = _WC_NOTA_ETICHETTA
+    return out
+
+
+def _wc_candidato(p: dict) -> dict:
+    return {
+        "prodotto": p.get("name"),
+        "id_woocommerce": p.get("id"),
+        "sku": p.get("sku") or None,
+        "tipo_prodotto": p.get("type"),
+        "stato_pubblicazione": p.get("status"),
+    }
+
+
+def tool_giacenza_woocommerce(query: str = None, sku: str = None) -> dict:
+    """Giacenza del sito kanokimonos.com (solo staff), per NOME o per SKU:
+    quantita' per taglia + totale, dalle varianti del prodotto. Sola lettura."""
+    q = (query or "").strip()
+    sku_clean = (sku or "").strip()
+    base = {
+        "tipo": "giacenza_woocommerce",
+        "piattaforma": _WC_PIATTAFORMA,
+        "etichetta_obbligatoria": _WC_ETICHETTA,
+        "cercato": {"query": q or None, "sku": sku_clean or None},
+    }
+    if not q and not sku_clean:
+        return {
+            **base, "trovato": False,
+            "nota": (
+                "Nessun nome di prodotto e nessuno SKU: per leggere la giacenza serve "
+                "almeno uno dei due. Se l'utente ha nominato un prodotto, richiama lo "
+                "strumento con quelle parole in 'query'."
+            ),
+        }
+
+    prodotto = None
+    variante_trovata = None
+    if sku_clean:
+        data, err = _wc_get("products", {"sku": sku_clean, "per_page": _WC_PER_PAGE})
+        if err:
+            return {**base, **err}
+        hits = [p for p in (data or []) if isinstance(p, dict)]
+        if not hits:
+            return {
+                **base, "trovato": False,
+                "nota": (
+                    f"NESSUN prodotto ne' variante su woocommerce (kanokimonos.com) con "
+                    f"SKU '{sku_clean}'. Questo NON e' 'giacenza zero': e' 'non trovato'. "
+                    "Dillo cosi'. Se l'utente ha anche detto il nome del prodotto, riprova "
+                    "per nome."
+                ),
+            }
+        hit = hits[0]
+        if hit.get("type") == "variation" and hit.get("parent_id"):
+            # Lo SKU era di una TAGLIA: si risale al prodotto per dare il quadro
+            # intero, segnalando quale taglia corrisponde allo SKU cercato.
+            variante_trovata = hit
+            prodotto, err = _wc_get(f"products/{hit['parent_id']}")
+            if err:
+                return {**base, **err}
+        else:
+            prodotto = hit
+    else:
+        data, err = _wc_get("products", {"search": q, "per_page": _WC_PER_PAGE})
+        if err:
+            return {**base, **err}
+        hits = [p for p in (data or []) if isinstance(p, dict)]
+        # La ricerca di WooCommerce guarda anche descrizione e testo: per non far
+        # passare per "Killer Bunny Female" un prodotto che la cita solo nella
+        # descrizione, si preferiscono i prodotti che hanno TUTTE le parole nel
+        # NOME. Se nessuno le ha tutte nel nome, si tengono i risultati del
+        # server e lo si dichiara.
+        parole = [t for t in _wc_norm(q).split() if t]
+        nel_nome = [
+            p for p in hits
+            if all(t in _wc_norm(p.get("name")) for t in parole)
+        ]
+        corrispondenza = "nome"
+        candidati = nel_nome
+        if not candidati and hits:
+            candidati = hits
+            corrispondenza = "testo/descrizione (nessun prodotto ha tutte le parole nel nome)"
+        if not candidati:
+            return {
+                **base, "trovato": False,
+                "nota": (
+                    f"NESSUN prodotto su woocommerce (kanokimonos.com) corrisponde a "
+                    f"'{q}'. Questo NON e' 'giacenza zero' e NON e' 'esaurito': e' 'non "
+                    "trovato', e va detto con queste parole. Prima di chiudere riprova "
+                    "con un'altra forma del nome (meno parole, l'inglese, il singolare)."
+                ),
+            }
+        if len(candidati) > 1:
+            return {
+                **base, "trovato": True, "ambiguita": True,
+                "prodotti_trovati": len(candidati),
+                "corrispondenza": corrispondenza,
+                "candidati": [_wc_candidato(p) for p in candidati[:_WC_MAX_CANDIDATI]],
+                "nota": (
+                    f"Il nome '{q}' pesca {len(candidati)} prodotti diversi. NON "
+                    "sceglierne uno: elencali e chiedi all'utente quale intende. Poi "
+                    "richiama lo strumento con il nome preciso o con lo SKU."
+                ),
+            }
+        prodotto = candidati[0]
+        base["corrispondenza"] = corrispondenza
+
+    varianti = []
+    if prodotto.get("type") == "variable":
+        data, err = _wc_get(
+            f"products/{prodotto.get('id')}/variations", {"per_page": _WC_PER_PAGE}
+        )
+        if err:
+            return {**base, **err}
+        varianti = [v for v in (data or []) if isinstance(v, dict)]
+
+    out = {**base, "trovato": True, "ambiguita": False, **_wc_scheda(prodotto, varianti)}
+    if variante_trovata is not None:
+        out["sku_cercato_corrisponde_a"] = {
+            "taglia": _wc_taglia(variante_trovata),
+            "sku": variante_trovata.get("sku"),
+            "nota": (
+                "Lo SKU cercato e' quello di UNA taglia: la scheda qui sopra mostra "
+                "comunque tutto il prodotto, taglia per taglia."
+            ),
+        }
+    return out
+
+
 def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE):
     role = _normalize_role(role)
     allowed = ROLE_TOOLS[role]
@@ -5726,6 +6086,10 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
         if name == "tracciamento_fully":
             return tool_tracciamento_fully(
                 tool_input.get("numero"), tool_input.get("cliente")
+            )
+        if name == "giacenza_woocommerce":
+            return tool_giacenza_woocommerce(
+                tool_input.get("query"), tool_input.get("sku")
             )
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(
@@ -6027,7 +6391,19 @@ def custom_order_view(order_number: str):
 
     except Exception as e:
         return {"error": str(e)}
-        
+
+
+@app.get("/wc-giacenza", dependencies=SOLO_ADMIN)
+def wc_giacenza(query: str = None, sku: str = None):
+    """Sonda deterministica sulla giacenza WooCommerce: chiama la STESSA
+    tool_giacenza_woocommerce del bot, senza passare dal modello. Serve a
+    vedere il payload esatto che il modello riceve, e a verificare un deploy
+    senza spendere una chiamata al modello."""
+    try:
+        return tool_giacenza_woocommerce(query, sku)
+    except Exception as e:
+        return {"error": str(e)}
+
 # --- REIMPORT DEL MANUALE: non è più una rotta HTTP ---------------------------
 # Prima era GET /import-knowledge, raggiungibile da chiunque senza credenziali,
 # e faceva DELETE + INSERT sui chunk del manuale nel DB di produzione: una
