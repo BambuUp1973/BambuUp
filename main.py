@@ -5787,22 +5787,80 @@ def _wc_norm(testo) -> str:
     return s.lower()
 
 
+# Memoria dell'ultimo tentativo di lettura: SOLO per la sonda amministrativa
+# /wc-giacenza?debug=1. Contiene stati HTTP, nomi di eccezione, corpo troncato
+# delle risposte d'errore: mai credenziali, mai URL completi.
+_WC_ULTIMA_DIAGNOSTICA = {"tentativi": []}
+
+
+def _wc_radice_url() -> str:
+    """La radice del sito dalle stesse variabili di get_wcapi(), normalizzata
+    come nella diagnosi dei collegamenti: senza il suffisso wp-json/wc/v3 e con
+    lo schema https:// se manca."""
+    radice = str(WC_API_URL or "").strip().rstrip("/")
+    if radice.endswith("/wp-json/wc/v3"):
+        radice = radice[: -len("/wp-json/wc/v3")]
+    if radice and not radice.lower().startswith(("http://", "https://")):
+        radice = "https://" + radice
+    return radice
+
+
 def _wc_get(endpoint: str, params: dict = None):
-    """Una GET su WooCommerce. Restituisce (json, None) o (None, errore_payload).
-    Il dettaglio tecnico (HTTP, testo) resta nel log; al modello va la frase."""
+    """Una GET su WooCommerce, in due passi. Prima la libreria (get_wcapi(), la
+    stessa del ramo ordini); se quella fallisce, la chiamata REST diretta con le
+    STESSE credenziali, nella forma che /diagnostica-collegamenti ha verificato
+    rispondere 200. Restituisce (json, None) o (None, errore_payload). Il
+    dettaglio tecnico resta nel log e in _WC_ULTIMA_DIAGNOSTICA; al modello va
+    la frase."""
+    params = params or {}
+    _WC_ULTIMA_DIAGNOSTICA["tentativi"] = []
+
+    def _registra(via, **info):
+        voce = {"via": via, "endpoint": endpoint, **info}
+        _WC_ULTIMA_DIAGNOSTICA["tentativi"].append(voce)
+        print(f"[FONTE woocommerce-giacenza] {voce}")
+
+    def _leggi(via, r):
+        if r.status_code != 200:
+            _registra(via, http=r.status_code, risposta=(r.text or "")[:300])
+            return None
+        try:
+            data = r.json()
+        except Exception as e:
+            _registra(via, http=200, eccezione=f"risposta non JSON: {type(e).__name__}")
+            return None
+        _registra(via, http=200, esito="ok")
+        return data
+
+    # 1) libreria woocommerce, come il ramo ordini
     try:
-        r = get_wcapi().get(endpoint, params=params or {})
+        r = get_wcapi().get(endpoint, params=params)
     except Exception as e:
-        print(f"[FONTE woocommerce-giacenza] connessione fallita su {endpoint}: {e}")
-        return None, _wc_errore()
-    if r.status_code != 200:
-        print(f"[FONTE woocommerce-giacenza] HTTP {r.status_code} su {endpoint}: {r.text[:300]}")
+        _registra("libreria", eccezione=f"{type(e).__name__}: {str(e)[:200]}")
+    else:
+        data = _leggi("libreria", r)
+        if data is not None:
+            return data, None
+
+    # 2) REST diretta con le stesse credenziali
+    radice = _wc_radice_url()
+    if not (radice and WC_CONSUMER_KEY and WC_CONSUMER_SECRET):
+        _registra("rest-diretta", eccezione="variabili WC_* non valorizzate")
         return None, _wc_errore()
     try:
-        return r.json(), None
+        r = requests.get(
+            f"{radice}/wp-json/wc/v3/{endpoint}",
+            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+            params=params,
+            timeout=30,
+        )
     except Exception as e:
-        print(f"[FONTE woocommerce-giacenza] risposta non JSON su {endpoint}: {e}")
+        _registra("rest-diretta", eccezione=f"{type(e).__name__}: {str(e)[:200]}")
         return None, _wc_errore()
+    data = _leggi("rest-diretta", r)
+    if data is not None:
+        return data, None
+    return None, _wc_errore()
 
 
 def _wc_errore() -> dict:
@@ -6394,13 +6452,31 @@ def custom_order_view(order_number: str):
 
 
 @app.get("/wc-giacenza", dependencies=SOLO_ADMIN)
-def wc_giacenza(query: str = None, sku: str = None):
+def wc_giacenza(query: str = None, sku: str = None, debug: int = 0):
     """Sonda deterministica sulla giacenza WooCommerce: chiama la STESSA
     tool_giacenza_woocommerce del bot, senza passare dal modello. Serve a
     vedere il payload esatto che il modello riceve, e a verificare un deploy
-    senza spendere una chiamata al modello."""
+    senza spendere una chiamata al modello. Con debug=1 aggiunge i tentativi
+    di lettura (via, HTTP, eccezione) e i fatti sull'URL base: mai la chiave."""
     try:
-        return tool_giacenza_woocommerce(query, sku)
+        out = tool_giacenza_woocommerce(query, sku)
+        if debug:
+            base = str(WC_API_URL or "")
+            out["diagnostica"] = {
+                "tentativi": _WC_ULTIMA_DIAGNOSTICA["tentativi"],
+                "url_base": {
+                    "presente": bool(base),
+                    "schema": (
+                        "https" if base.lower().startswith("https://")
+                        else "http" if base.lower().startswith("http://")
+                        else "assente"
+                    ),
+                    "finisce_con_wp_json_wc_v3": base.rstrip("/").endswith("/wp-json/wc/v3"),
+                    "finisce_con_barra": base.endswith("/"),
+                    "lunghezza": len(base),
+                },
+            }
+        return out
     except Exception as e:
         return {"error": str(e)}
 
