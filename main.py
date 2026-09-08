@@ -6372,26 +6372,26 @@ def _diag_fully_dato(data) -> dict:
     return {"forma": str(type(data)), "valore": str(data)[:_DIAG_MAX_TESTO]}
 
 
-def _diag_fully() -> dict:
-    """Base api.fully.si (staging: staging-api.fully.si), Bearer statico,
-    shop_id 721. FULLY_ENV sceglie l'ambiente; senza, si prova la produzione."""
+def _diag_fully_ambienti() -> list:
+    """Gli ambienti da provare, in ordine. FULLY_ENV, se c'e', decide da solo;
+    senza FULLY_ENV si prova la produzione e POI lo staging, ma solo se il suo
+    token esiste: due token configurati e nessuna indicazione su quale sia
+    quello buono e' esattamente il caso che una diagnosi deve sciogliere."""
+    prod = ("produzione", "https://api.fully.si", "FULLY_API_TOKEN")
+    stag = ("staging", "https://staging-api.fully.si", "FULLY_STAGING_TOKEN")
     ambiente = (os.getenv("FULLY_ENV") or "").strip().lower()
-    staging = ambiente in ("staging", "stage", "test")
-    nome_var = "FULLY_STAGING_TOKEN" if staging else "FULLY_API_TOKEN"
-    token = os.getenv(nome_var)
-    base = "https://staging-api.fully.si" if staging else "https://api.fully.si"
+    if ambiente in ("staging", "stage", "test"):
+        return [stag]
+    if ambiente:
+        return [prod]
+    return [prod, stag]
 
-    mancanti = _diag_mancanti([(nome_var, token)])
-    if mancanti:
-        return {
-            "esito": "chiave mancante",
-            "variabili_non_valorizzate": mancanti,
-            "ambiente_scelto": "staging" if staging else "produzione",
-            "come_e_stato_scelto": (
-                "da FULLY_ENV" if ambiente else "FULLY_ENV assente: produzione per default"
-            ),
-        }
 
+def _diag_fully_prova(base: str, token: str) -> tuple:
+    """Prova i percorsi candidati su una base. Restituisce (esito_ok, tentativi):
+    esito_ok e' None se nessuno ha risposto 200. Il corpo delle risposte diverse
+    da 200 viene riportato troncato: e' li' che l'API dice cosa non le va bene,
+    e senza quello un 401 e un 405 restano muti."""
     tentativi = []
     for schema in _FULLY_DIAG_PERCORSI:
         percorso = schema.format(shop=_FULLY_DIAG_SHOP_ID)
@@ -6410,39 +6410,76 @@ def _diag_fully() -> dict:
                 "esito": f"connessione fallita ({type(e).__name__})",
             })
             continue
-        tentativi.append({"percorso": percorso, "http": r.status_code})
+        voce = {"percorso": percorso, "http": r.status_code}
+        if r.status_code != 200:
+            corpo = (r.text or "").strip().replace("\n", " ")
+            voce["risposta"] = (
+                corpo[:_DIAG_MAX_TESTO] + "..." if len(corpo) > _DIAG_MAX_TESTO else corpo
+            ) or "(corpo vuoto)"
+            voce["metodi_ammessi"] = r.headers.get("Allow")
+        tentativi.append(voce)
         if r.status_code == 200:
             try:
                 data = r.json()
             except Exception:
-                return {
-                    "esito": f"errore: HTTP 200 ma risposta non JSON su {percorso}",
-                    "tentativi": tentativi,
-                }
+                voce["risposta"] = "HTTP 200 ma corpo non JSON"
+                continue
+            return {
+                "percorso_che_risponde": percorso,
+                "dato_letto": _diag_fully_dato(data),
+            }, tentativi
+    return None, tentativi
+
+
+def _diag_fully() -> dict:
+    """Base api.fully.si (staging: staging-api.fully.si), Bearer statico,
+    shop_id 721, sola lettura."""
+    per_ambiente = {}
+    mancanti = []
+    for nome_amb, base, nome_var in _diag_fully_ambienti():
+        token = os.getenv(nome_var)
+        if not token:
+            mancanti.append(nome_var)
+            per_ambiente[nome_amb] = {
+                "esito": "chiave mancante",
+                "variabile_non_valorizzata": nome_var,
+                "base": base,
+            }
+            continue
+        ok, tentativi = _diag_fully_prova(base, token)
+        if ok:
             return {
                 "esito": "ok",
-                "ambiente": "staging" if staging else "produzione",
+                "ambiente": nome_amb,
                 "base": base,
-                "percorso_che_risponde": percorso,
+                "variabile_usata": nome_var,
                 "shop_id": _FULLY_DIAG_SHOP_ID,
-                "dato_letto": _diag_fully_dato(data),
+                **ok,
                 "tentativi": tentativi,
             }
+        per_ambiente[nome_amb] = {
+            "esito": "errore: nessun percorso ha risposto 200",
+            "base": base,
+            "variabile_usata": nome_var,
+            "tentativi": tentativi,
+        }
 
-    ultimo = tentativi[-1] if tentativi else {}
+    if len(mancanti) == len(per_ambiente):
+        return {"esito": "chiave mancante", "variabili_non_valorizzate": mancanti}
+
     return {
         "esito": (
-            f"errore: nessun percorso ha risposto 200 su {base} (ultimo tentativo: "
-            f"{ultimo.get('percorso')} -> HTTP {ultimo.get('http') or ultimo.get('esito')})"
+            "errore: nessun percorso ha risposto 200 in nessuno degli ambienti "
+            f"provati ({', '.join(per_ambiente)})"
         ),
-        "ambiente": "staging" if staging else "produzione",
         "nota": (
             "I percorsi sono CANDIDATI: di api.fully.si non c'e' documentazione "
-            "pubblica. Il codice HTTP di ognuno sta in 'tentativi': un 401/403 dice "
-            "che il percorso esiste ma il token non basta, un 404 che il percorso "
-            "e' sbagliato."
+            "pubblica. Il codice HTTP e il corpo di ognuno stanno in 'tentativi': "
+            "un 401/403 dice che il percorso esiste ma il token non basta, un 405 "
+            "che il percorso esiste ma non in GET (guarda 'metodi_ammessi'), un 404 "
+            "che il percorso e' sbagliato."
         ),
-        "tentativi": tentativi,
+        "ambienti": per_ambiente,
     }
 
 
@@ -6470,9 +6507,20 @@ def _diag_woocommerce() -> dict:
             ],
         }
 
-    radice = str(base).rstrip("/")
+    radice = str(base).strip().rstrip("/")
     if radice.endswith("/wp-json/wc/v3"):
         radice = radice[: -len("/wp-json/wc/v3")]
+    # La variabile puo' essere scritta senza schema ('www.kanokimonos.com'):
+    # cosi' com'e' la richiesta non parte nemmeno e l'esito direbbe "URL non
+    # valido", che non e' una risposta sul canale. Si aggiunge https:// per
+    # poter fare la prova, e lo si DICHIARA: il refuso resta visibile.
+    schema_aggiunto = None
+    if not radice.lower().startswith(("http://", "https://")):
+        schema_aggiunto = (
+            f"{nomi[0]} e' scritta senza schema: per la prova e' stato anteposto "
+            "https://. Vale la pena correggerla all'origine."
+        )
+        radice = "https://" + radice
     try:
         r = requests.get(
             f"{radice}/wp-json/wc/v3/products",
@@ -6484,15 +6532,21 @@ def _diag_woocommerce() -> dict:
         return {
             "esito": f"errore: connessione fallita ({type(e).__name__}: {e})",
             "nomi_usati": nomi,
+            "nota_variabile": schema_aggiunto,
         }
     if r.status_code != 200:
-        return {"esito": _diag_errore("wc/v3/products", r), "nomi_usati": nomi}
+        return {
+            "esito": _diag_errore("wc/v3/products", r),
+            "nomi_usati": nomi,
+            "nota_variabile": schema_aggiunto,
+        }
     try:
         data = r.json()
     except Exception:
         return {
             "esito": f"errore: risposta non JSON (HTTP {r.status_code})",
             "nomi_usati": nomi,
+            "nota_variabile": schema_aggiunto,
         }
     primo = data[0] if isinstance(data, list) and data else {}
     if not isinstance(primo, dict):
@@ -6502,6 +6556,7 @@ def _diag_woocommerce() -> dict:
         "nomi_usati": nomi,
         "prodotto_letto": primo.get("name"),
         "prodotti_totali_dichiarati": r.headers.get("X-WP-Total"),
+        "nota_variabile": schema_aggiunto,
     }
 
 
