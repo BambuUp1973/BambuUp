@@ -6948,6 +6948,22 @@ _FULLY_DIAG_PERCORSI = [
 # (dentro c'e' il nome del permesso da chiedere a Fully) e troncarlo a 300
 # caratteri rischia di tagliarlo a meta'.
 _FULLY_MAX_TESTO = 800
+# Tetto alle righe che /fully-sonda restituisce per intero: e' una sonda di
+# lettura, non un'esportazione del magazzino.
+_FULLY_MAX_RIGHE = 200
+
+
+def _fully_lista(data):
+    """Il nome e il contenuto della lista dentro la busta di una risposta Fully.
+    L'API non usa un nome fisso ('data'): ogni endpoint chiama la sua lista come
+    se' ('products', 'replenishments', 'orders', 'invoices'), accanto a
+    total_count e filtered_count. (nome, lista) oppure (None, None)."""
+    if not isinstance(data, dict):
+        return None, None
+    for k, v in data.items():
+        if isinstance(v, list):
+            return k, v
+    return None, None
 
 
 def _diag_fully_dato(data) -> dict:
@@ -6963,13 +6979,17 @@ def _diag_fully_dato(data) -> dict:
             ),
         }
     if isinstance(data, dict):
-        # Le liste dell'API stanno dentro una busta {"success": true, "data": [...]}:
-        # se c'e', il dato vero e' quello, non la busta.
-        interno = data.get("data")
-        if isinstance(interno, list):
-            dentro = _diag_fully_dato(interno)
-            dentro["chiavi_busta"] = list(data)[:8]
-            return dentro
+        # La busta delle liste NON e' {"data": [...]}: e'
+        # {"total_count": N, "filtered_count": M, "<nome>": [...]}, dove <nome>
+        # cambia con l'endpoint (products, replenishments, orders, invoices).
+        # Quindi la lista si trova per forma, non per nome.
+        nome, dentro = _fully_lista(data)
+        if nome:
+            voce = _diag_fully_dato(dentro)
+            voce["lista"] = nome
+            voce["total_count"] = data.get("total_count")
+            voce["filtered_count"] = data.get("filtered_count")
+            return voce
         return {"forma": "oggetto", "chiavi": list(data)[:12]}
     return {"forma": str(type(data)), "valore": str(data)[:_FULLY_MAX_TESTO]}
 
@@ -7130,9 +7150,19 @@ def fully_sonda(request: Request, percorso: str = "/api/v2-jwt/product.product",
             data.get("error") if isinstance(data, dict) else data
         )[:_FULLY_MAX_TESTO]
         return fuori
-    righe = data.get("data") if isinstance(data, dict) else data
-    fuori["righe"] = len(righe) if isinstance(righe, list) else None
-    fuori["corpo"] = json.dumps(data, ensure_ascii=False)[:6000]
+    nome, righe = _fully_lista(data)
+    if righe is None:
+        fuori["risposta"] = data
+        return fuori
+    # Le righe escono come JSON vero, non come stringa troncata: una sonda che
+    # taglia il corpo a meta' di un prodotto non serve a leggere i campi grezzi.
+    fuori["lista"] = nome
+    fuori["total_count"] = data.get("total_count")
+    fuori["filtered_count"] = data.get("filtered_count")
+    fuori["righe"] = len(righe)
+    fuori["dati"] = righe[:_FULLY_MAX_RIGHE]
+    if len(righe) > _FULLY_MAX_RIGHE:
+        fuori["nota"] = f"mostrate le prime {_FULLY_MAX_RIGHE} righe di {len(righe)}"
     return fuori
 
 
