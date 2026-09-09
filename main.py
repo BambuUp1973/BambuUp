@@ -6914,71 +6914,85 @@ def _diag_shopify() -> dict:
     }
 
 
-# Di api.fully.si non esiste documentazione pubblica: il percorso esatto della
-# lettura minima non e' noto in anticipo. Si prova una lista di candidati, tutti
-# in GET (nessuna scrittura), e si riporta il codice HTTP di OGNUNO: cosi' la
-# risposta e' utile anche quando nessuno risponde 200.
-_FULLY_DIAG_SHOP_ID = 721
-_FULLY_DIAG_PERCORSI = [
-    "/api/v2-jwt/shops/{shop}",
-    "/api/v2-jwt/shop/{shop}",
-    "/api/v2-jwt/shops/{shop}/products?limit=1",
-    "/api/v2-jwt/products?shop_id={shop}&limit=1",
-    "/api/v2-jwt/orders?shop_id={shop}&limit=1",
-    "/api/v2-jwt/stocks?shop_id={shop}&limit=1",
-    "/api/v2-jwt",
+# --- FULLY: il contratto vero, dalla documentazione ufficiale (v2.0.0-beta) ---
+# Fino al 9/9/2026 qui c'erano percorsi INVENTATI da noi (shops/721, products,
+# orders, stocks): rispondevano 403 o 405 e ci hanno fatto credere a un problema
+# di permessi. Questi invece vengono dalla documentazione che Fully ci ha
+# mandato. Regole del contratto:
+#   - Autenticazione: header  Authorization: Bearer <token>.  Un token per
+#     ambiente, nessun endpoint di login, NESSUNO shop_id nel percorso.
+#   - Ambienti separati per dati e per token: api.fully.si (FULLY_API_TOKEN) e
+#     staging-api.fully.si (FULLY_STAGING_TOKEN).
+#   - Liste: limit (default 250, max 1000), offset, sort_by.
+#   - Filtri: ?campo=valore, ?campo[ilike]=valore, ?campo[gte]=..., ?campo[in]=a,b
+#   - Errori: {"success": false, "error": "..."} - il nome del permesso mancante
+#     sta li' dentro, quindi il corpo dell'errore va riportato per esteso.
+#   - Un token puo' essere legato a certi IP: un 401 su un percorso GIUSTO puo'
+#     voler dire che l'IP di Render non e' autorizzato, non che il token e' finto.
+# SOLO GET, sempre: questa API sa creare prodotti, carichi e fatture nel
+# magazzino vero. Nessuna scrittura viene mai emessa da qui.
+_FULLY_PREFISSO = "/api/v2-jwt/"
+_FULLY_AMBIENTI = [
+    ("produzione", "https://api.fully.si", "FULLY_API_TOKEN"),
+    ("staging", "https://staging-api.fully.si", "FULLY_STAGING_TOKEN"),
 ]
+_FULLY_DIAG_PERCORSI = [
+    "/api/v2-jwt/product.product?limit=1",
+    "/api/v2-jwt/stock.picking/replenishments?limit=1",
+    "/api/v2-jwt/stock.picking/orders?limit=1",
+    "/api/v2-jwt/stock.picking/orders/status_count",
+    "/api/v2-jwt/stock.picking/returns?limit=1",
+    "/api/v2-jwt/fully.billing/invoices?limit=1",
+]
+# Piu' largo di _DIAG_MAX_TESTO: il messaggio d'errore e' il dato che serve
+# (dentro c'e' il nome del permesso da chiedere a Fully) e troncarlo a 300
+# caratteri rischia di tagliarlo a meta'.
+_FULLY_MAX_TESTO = 800
 
 
 def _diag_fully_dato(data) -> dict:
-    """Un dato vero dalla risposta, qualunque forma abbia: lo schema non e' noto,
-    quindi si dichiara quello che si vede senza inventarne il significato."""
+    """Un dato vero dalla risposta, qualunque forma abbia: si dichiara quello che
+    si vede, senza inventarne il significato."""
     if isinstance(data, list):
         primo = data[0] if data else None
         return {
             "forma": "lista",
             "elementi": len(data),
             "primo_elemento": (
-                {k: primo[k] for k in list(primo)[:6]} if isinstance(primo, dict) else primo
+                {k: primo[k] for k in list(primo)[:8]} if isinstance(primo, dict) else primo
             ),
         }
     if isinstance(data, dict):
+        # Le liste dell'API stanno dentro una busta {"success": true, "data": [...]}:
+        # se c'e', il dato vero e' quello, non la busta.
+        interno = data.get("data")
+        if isinstance(interno, list):
+            dentro = _diag_fully_dato(interno)
+            dentro["chiavi_busta"] = list(data)[:8]
+            return dentro
         return {"forma": "oggetto", "chiavi": list(data)[:12]}
-    return {"forma": str(type(data)), "valore": str(data)[:_DIAG_MAX_TESTO]}
+    return {"forma": str(type(data)), "valore": str(data)[:_FULLY_MAX_TESTO]}
 
 
-def _diag_fully_ambienti() -> list:
-    """Gli ambienti da provare, in ordine. FULLY_ENV, se c'e', decide da solo;
-    senza FULLY_ENV si prova la produzione e POI lo staging, ma solo se il suo
-    token esiste: due token configurati e nessuna indicazione su quale sia
-    quello buono e' esattamente il caso che una diagnosi deve sciogliere."""
-    prod = ("produzione", "https://api.fully.si", "FULLY_API_TOKEN")
-    stag = ("staging", "https://staging-api.fully.si", "FULLY_STAGING_TOKEN")
-    ambiente = (os.getenv("FULLY_ENV") or "").strip().lower()
-    if ambiente in ("staging", "stage", "test"):
-        return [stag]
-    if ambiente:
-        return [prod]
-    return [prod, stag]
+def _fully_get(base: str, percorso: str, token: str):
+    """L'UNICA chiamata a Fully che questo file sa fare: una GET. Nessun altro
+    metodo esiste qui, e non deve esistere."""
+    return requests.get(
+        base + percorso,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=30,
+    )
 
 
-def _diag_fully_prova(base: str, token: str) -> tuple:
-    """Prova i percorsi candidati su una base. Restituisce (esito_ok, tentativi):
-    esito_ok e' None se nessuno ha risposto 200. Il corpo delle risposte diverse
-    da 200 viene riportato troncato: e' li' che l'API dice cosa non le va bene,
-    e senza quello un 401 e un 405 restano muti."""
+def _diag_fully_prova(base: str, token: str) -> list:
+    """Prova TUTTI i percorsi documentati e restituisce un esito per ognuno: non
+    si ferma al primo 200. Con un token a permessi parziali il primo percorso che
+    risponde direbbe 'collegamento ok' e nasconderebbe i cinque che non rispondono,
+    che sono esattamente quelli su cui bisogna chiedere il permesso a Fully."""
     tentativi = []
-    for schema in _FULLY_DIAG_PERCORSI:
-        percorso = schema.format(shop=_FULLY_DIAG_SHOP_ID)
+    for percorso in _FULLY_DIAG_PERCORSI:
         try:
-            r = requests.get(
-                base + percorso,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/json",
-                },
-                timeout=30,
-            )
+            r = _fully_get(base, percorso, token)
         except Exception as e:
             tentativi.append({
                 "percorso": percorso,
@@ -6986,32 +7000,30 @@ def _diag_fully_prova(base: str, token: str) -> tuple:
             })
             continue
         voce = {"percorso": percorso, "http": r.status_code}
-        if r.status_code != 200:
-            corpo = (r.text or "").strip().replace("\n", " ")
-            voce["risposta"] = (
-                corpo[:_DIAG_MAX_TESTO] + "..." if len(corpo) > _DIAG_MAX_TESTO else corpo
-            ) or "(corpo vuoto)"
-            voce["metodi_ammessi"] = r.headers.get("Allow")
-        tentativi.append(voce)
+        corpo = (r.text or "").strip().replace("\n", " ")
         if r.status_code == 200:
             try:
-                data = r.json()
+                voce["dato_letto"] = _diag_fully_dato(r.json())
             except Exception:
-                voce["risposta"] = "HTTP 200 ma corpo non JSON"
-                continue
-            return {
-                "percorso_che_risponde": percorso,
-                "dato_letto": _diag_fully_dato(data),
-            }, tentativi
-    return None, tentativi
+                voce["errore"] = "HTTP 200 ma corpo non JSON: " + corpo[:_FULLY_MAX_TESTO]
+        else:
+            # Il campo "error" della busta d'errore documentata, quando c'e';
+            # altrimenti il corpo grezzo, che per un 404 e' una pagina HTML.
+            try:
+                voce["errore"] = str(r.json().get("error"))[:_FULLY_MAX_TESTO]
+            except Exception:
+                voce["errore"] = (corpo[:_FULLY_MAX_TESTO] or "(corpo vuoto)")
+            voce["metodi_ammessi"] = r.headers.get("Allow")
+        tentativi.append(voce)
+    return tentativi
 
 
 def _diag_fully() -> dict:
-    """Base api.fully.si (staging: staging-api.fully.si), Bearer statico,
-    shop_id 721, sola lettura."""
+    """Percorsi documentati, tutti in GET, su ENTRAMBI gli ambienti: token e dati
+    sono separati, quindi un ambiente che risponde non dice niente sull'altro."""
     per_ambiente = {}
     mancanti = []
-    for nome_amb, base, nome_var in _diag_fully_ambienti():
+    for nome_amb, base, nome_var in _FULLY_AMBIENTI:
         token = os.getenv(nome_var)
         if not token:
             mancanti.append(nome_var)
@@ -7021,41 +7033,107 @@ def _diag_fully() -> dict:
                 "base": base,
             }
             continue
-        ok, tentativi = _diag_fully_prova(base, token)
-        if ok:
-            return {
-                "esito": "ok",
-                "ambiente": nome_amb,
-                "base": base,
-                "variabile_usata": nome_var,
-                "shop_id": _FULLY_DIAG_SHOP_ID,
-                **ok,
-                "tentativi": tentativi,
-            }
-        per_ambiente[nome_amb] = {
-            "esito": "errore: nessun percorso ha risposto 200",
+        tentativi = _diag_fully_prova(base, token)
+        risposti = [t for t in tentativi if t.get("http") == 200]
+        voce = {
             "base": base,
             "variabile_usata": nome_var,
+            "percorsi_che_rispondono": [t["percorso"] for t in risposti],
             "tentativi": tentativi,
         }
+        if risposti:
+            voce["esito"] = (
+                "ok" if len(risposti) == len(tentativi)
+                else f"parziale: {len(risposti)} percorsi su {len(tentativi)}"
+            )
+        else:
+            voce["esito"] = "errore: nessuno dei percorsi documentati ha risposto 200"
+        if any(t.get("http") == 401 for t in tentativi):
+            voce["ipotesi"] = (
+                "C'e' almeno un 401 su percorsi che la documentazione da' per buoni: "
+                "oltre al token sbagliato, l'altra spiegazione possibile e' che il "
+                "token sia legato a certi IP e quello di Render non sia fra quelli. "
+                "Da verificare con Fully, non da qui."
+            )
+        per_ambiente[nome_amb] = voce
 
-    if len(mancanti) == len(per_ambiente):
+    if mancanti and len(mancanti) == len(per_ambiente):
         return {"esito": "chiave mancante", "variabili_non_valorizzate": mancanti}
 
+    ok = [n for n, v in per_ambiente.items() if str(v.get("esito", "")).startswith("ok")]
+    parziali = [n for n, v in per_ambiente.items()
+                if str(v.get("esito", "")).startswith("parziale")]
+    if ok:
+        esito = f"ok ({', '.join(ok)})"
+    elif parziali:
+        esito = f"parziale ({', '.join(parziali)})"
+    else:
+        esito = (
+            "errore: nessun percorso documentato ha risposto 200 in nessuno degli "
+            f"ambienti provati ({', '.join(per_ambiente)})"
+        )
     return {
-        "esito": (
-            "errore: nessun percorso ha risposto 200 in nessuno degli ambienti "
-            f"provati ({', '.join(per_ambiente)})"
-        ),
+        "esito": esito,
         "nota": (
-            "I percorsi sono CANDIDATI: di api.fully.si non c'e' documentazione "
-            "pubblica. Il codice HTTP e il corpo di ognuno stanno in 'tentativi': "
-            "un 401/403 dice che il percorso esiste ma il token non basta, un 405 "
-            "che il percorso esiste ma non in GET (guarda 'metodi_ammessi'), un 404 "
-            "che il percorso e' sbagliato."
+            "Percorsi presi dalla documentazione ufficiale Fully v2.0.0-beta, tutti "
+            "in GET. Per ognuno c'e' il codice HTTP e, se non e' 200, il messaggio "
+            "d'errore per esteso: un 403 nomina il permesso mancante (e' quello da "
+            "chiedere a Fully), un 401 puo' essere anche un IP non autorizzato, un "
+            "404 vuol dire che il percorso non esiste su quell'ambiente."
         ),
         "ambienti": per_ambiente,
     }
+
+
+@app.get("/fully-sonda", dependencies=SOLO_ADMIN)
+def fully_sonda(request: Request, percorso: str = "/api/v2-jwt/product.product",
+                ambiente: str = "produzione"):
+    """Sonda grezza su Fully, SOLO GET. Inoltra tutti i parametri extra della
+    query string (limit, offset, sort_by, i filtri campo[ilike]=...) al percorso
+    indicato e restituisce codice HTTP, errore e corpo troncato. Mai il token,
+    mai l'URL completo.
+    Il percorso deve cominciare per /api/v2-jwt/ e la chiamata e' sempre e solo
+    una GET: questa API sa creare prodotti, carichi e fatture nel magazzino vero,
+    e da qui non deve poter partire nessuna scrittura."""
+    if not percorso.startswith(_FULLY_PREFISSO):
+        return {"errore": f"il percorso deve cominciare per {_FULLY_PREFISSO}",
+                "percorso_chiesto": percorso}
+    voluto = ambiente.strip().lower()[:4]
+    scelti = [a for a in _FULLY_AMBIENTI if a[0].startswith(voluto)]
+    if not scelti:
+        return {"errore": "ambiente sconosciuto",
+                "ambienti_possibili": [a[0] for a in _FULLY_AMBIENTI]}
+    nome_amb, base, nome_var = scelti[0]
+    token = os.getenv(nome_var)
+    if not token:
+        return {"errore": "chiave mancante", "variabile_non_valorizzata": nome_var}
+    from urllib.parse import urlencode
+    extra = {k: v for k, v in request.query_params.items()
+             if k not in ("percorso", "ambiente")}
+    if extra:
+        percorso = percorso + ("&" if "?" in percorso else "?") + urlencode(extra)
+    try:
+        r = _fully_get(base, percorso, token)
+    except Exception as e:
+        return {"ambiente": nome_amb, "percorso": percorso,
+                "eccezione": f"{type(e).__name__}: {str(e)[:200]}"}
+    corpo = (r.text or "")
+    fuori = {"ambiente": nome_amb, "percorso": percorso, "http": r.status_code,
+             "metodi_ammessi": r.headers.get("Allow")}
+    try:
+        data = r.json()
+    except Exception:
+        fuori["corpo"] = corpo[:_FULLY_MAX_TESTO]
+        return fuori
+    if r.status_code != 200:
+        fuori["errore"] = str(
+            data.get("error") if isinstance(data, dict) else data
+        )[:_FULLY_MAX_TESTO]
+        return fuori
+    righe = data.get("data") if isinstance(data, dict) else data
+    fuori["righe"] = len(righe) if isinstance(righe, list) else None
+    fuori["corpo"] = json.dumps(data, ensure_ascii=False)[:6000]
+    return fuori
 
 
 def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
