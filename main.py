@@ -139,6 +139,10 @@ FONTI_FRASE = {
         "Non riesco a leggere gli ordini di fabbrica (btoweb) in questo momento: "
         "è un problema tecnico della fonte."
     ),
+    "fully": (
+        "Non riesco a leggere la giacenza su Fully in questo momento: è un problema "
+        "tecnico della fonte, NON una giacenza zero e NON un prodotto assente."
+    ),
     "listino": (
         "Non riesco a leggere il listino prezzi in questo momento: è un problema "
         "tecnico della fonte, non un prezzo assente."
@@ -1956,26 +1960,27 @@ CHAT_TOOLS = [
     {
         "name": "giacenza_woocommerce",
         "description": (
-            "GIACENZA DEL SITO kanokimonos.com (WooCommerce): quanti pezzi di un prodotto "
-            "abbiamo A MAGAZZINO, divisi per taglia, più il totale. È il TERZO asse, "
-            "diverso dagli altri due: NON è la pipeline di produzione di btoweb "
-            "(ordinato / in produzione / spedito dal fornitore) e NON è lo stock di "
-            "Fully. Usalo per 'quante <prodotto> abbiamo?', 'quanti ne abbiamo in "
-            "magazzino / in stock / disponibili?', 'giacenza di <prodotto>', 'che taglie "
-            "ci sono ancora di <prodotto>?', 'è finito il <prodotto>?', 'quanti <prodotto> "
-            "sul sito?'. Cerca per NOME ('query', le parole del nome del prodotto così come "
-            "le dice l'utente, es. 'killer bunny female') oppure per SKU ('sku'). "
+            "GIACENZA DEL SITO kanokimonos.com (WooCommerce), per taglia e totale. "
+            "NON è la giacenza di riferimento: quella è SOLO giacenza_fully. Usa "
+            "questo strumento SOLTANTO se l'utente chiede ESPLICITAMENTE cosa dice il "
+            "SITO / woocommerce / kanokimonos.com ('quante ne vede il sito?', 'cosa "
+            "dice woocommerce?', 'giacenza sul sito', 'quanti sul sito?'). Per 'quante "
+            "<prodotto> abbiamo?', 'quanti pezzi', 'che taglie restano', 'è finito?', "
+            "'giacenza', 'disponibilità' NON chiamarlo: si usa giacenza_fully. "
+            "Cerca per NOME ('query') oppure per SKU ('sku'). "
             "REGOLE OBBLIGATORIE sulla risposta: (1) ogni numero va etichettato come "
-            "\"giacenza su woocommerce (kanokimonos.com)\", mai come stock Fully e mai "
-            "mescolato ai contatori di produzione di btoweb; se nella stessa risposta "
-            "compaiono entrambi, due blocchi separati, ognuno col suo nome. (2) Se "
-            "'trovato' è false il prodotto NON è stato trovato: NON dire 'zero', 'esaurito' "
-            "o 'non ne abbiamo' — 'non trovato' e 'giacenza zero' sono due cose diverse e "
-            "vanno dette con parole diverse. (3) Se c'è 'ambiguita' il nome pesca più "
-            "prodotti: elencali e chiedi quale, NON sceglierne uno. (4) Riporta le taglie "
-            "una per una come tornano dallo strumento e il totale calcolato dallo strumento, "
-            "senza sommare tu. (5) Se una taglia ha 'quantita' null leggi 'nota_riga': la "
-            "quantità non è tracciata, non è zero."
+            "\"giacenza su woocommerce (kanokimonos.com)\" e va SEMPRE accompagnato "
+            "dalla dichiarazione che quel numero dovrebbe essere sincronizzato con "
+            "Fully ma può essere disallineato, e che il dato buono è quello di Fully. "
+            "(2) Non sommarlo, non confrontarlo come se correggesse Fully e non "
+            "fonderlo con la giacenza Fully in un numero solo: se compaiono entrambi, "
+            "due blocchi separati, ognuno col suo nome. (3) Se 'trovato' è false il "
+            "prodotto NON è stato trovato: NON dire 'zero', 'esaurito' o 'non ne "
+            "abbiamo' — 'non trovato' e 'giacenza zero' sono due cose diverse. (4) Se "
+            "c'è 'ambiguita' elenca i candidati e chiedi quale. (5) Riporta le taglie "
+            "come tornano dallo strumento e il totale calcolato dallo strumento, "
+            "senza sommare tu. (6) Una taglia con 'quantita' null non è zero: leggi "
+            "'nota_riga'."
         ),
         "input_schema": {
             "type": "object",
@@ -1992,6 +1997,58 @@ CHAT_TOOLS = [
                     "type": "string",
                     "description": (
                         "SKU esatto del prodotto o della variante. Ha priorità su 'query'."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "giacenza_fully",
+        "description": (
+            "GIACENZA DI MAGAZZINO da FULLY (api.fully.si, produzione): la giacenza di "
+            "RIFERIMENTO, l'unica sicuramente giusta (decisione di Bambu del "
+            "10/09/2026). È lo strumento per 'quante <prodotto> abbiamo?', 'quanti "
+            "pezzi', 'che taglie restano di <prodotto>?', 'è finito il <prodotto>?', "
+            "'giacenza di <prodotto>', 'disponibilità di <prodotto>', 'quanti ne "
+            "abbiamo in magazzino / in stock'. SEMPRE questo, mai giacenza_woocommerce "
+            "(che serve solo a chi chiede esplicitamente cosa dice il sito). Cerca per "
+            "NOME ('query', le parole del nome come le dice l'utente, es. 'rashguard "
+            "killer bunny female') o per EAN/SKU ('sku', 13 cifre). Torna una riga per "
+            "taglia: Fully chiama tutte le taglie con lo stesso nome, la taglia è "
+            "risolta dall'EAN sull'anagrafica btoweb ('taglia' + 'taglia_stato'). "
+            "REGOLE OBBLIGATORIE sulla risposta: (1) per ogni riga riporta i QUATTRO "
+            "numeri DISTINTI con il loro nome — 'in magazzino' (in_magazzino), "
+            "'libere' (libere), 'in arrivo' (in_arrivo), 'in uscita' (in_uscita) — e "
+            "MAI sommati fra loro: 'in magazzino' e 'libere' sono numeri diversi, la "
+            "differenza è merce già impegnata da ordini, non presentarli come lo "
+            "stesso numero. (2) I totali sono in 'totali_calcolati_dallo_strumento', "
+            "uno per campo: usa quelli, non sommare tu. (3) Se 'taglia' è null la "
+            "taglia NON è risolta: riporta comunque la riga con il suo EAN e scrivi "
+            "'taglia non risolta'; non indovinarla e non omettere la riga. (4) Se "
+            "'trovato' è false il prodotto NON è stato trovato in Fully: NON dire "
+            "'zero', 'esaurito' o 'non ne abbiamo' — 'non trovato' e 'giacenza zero' "
+            "sono due cose diverse e vanno dette con parole diverse; riprova con "
+            "un'altra forma del nome prima di chiudere. (5) Etichetta ogni numero come "
+            "'giacenza Fully'. Non è la pipeline di produzione btoweb e non è il sito: "
+            "non mescolare, non sommare, non confrontare."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Parole del nome del prodotto, così come le ha scritte "
+                        "l'utente (es. 'rashguard killer bunny female', 'towel killer "
+                        "bunny'). Ometti se cerchi per EAN/SKU."
+                    ),
+                },
+                "sku": {
+                    "type": "string",
+                    "description": (
+                        "EAN/SKU esatto (13 cifre, es. '6154056316364'). Ha priorità su "
+                        "'query'. Ometti se non stai cercando un EAN."
                     ),
                 },
             },
@@ -2262,7 +2319,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
 - RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
-- GIACENZA DEL SITO (giacenza_woocommerce, solo STAFF): è il TERZO asse, oltre ai due della produzione. "Quante <prodotto> ABBIAMO?", "quanti ne abbiamo in magazzino / in stock / disponibili?", "giacenza di <prodotto>", "che taglie restano di <prodotto>?", "è finito?", "quanti sul sito?" chiedono la GIACENZA, cioè i pezzi a magazzino vendibili sul sito kanokimonos.com: si risponde con giacenza_woocommerce, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente. NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori, in produzione o spediti dal fornitore) e NON è lo stock di Fully. Ogni numero che viene da questo strumento va etichettato, sempre, come "giacenza su woocommerce (kanokimonos.com)"; se nella stessa risposta ci sono anche numeri di btoweb, vanno in un blocco separato con il loro nome ("pipeline di produzione btoweb") e non si sommano né si confrontano come se fossero la stessa cosa. E se lo strumento risponde 'trovato': false, il prodotto NON è stato trovato: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — di' che con quel nome non trovi il prodotto sul sito e prova un'altra forma del nome prima di chiudere.
+- GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). Decisione di Bambu del 10/09/2026: la giacenza di riferimento è SOLO quella di Fully, perché è l'unica sicuramente giusta; le giacenze del sito dovrebbero essere sincronizzate con Fully ma spesso non lo sono. Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori) e NON è il sito.
+- GIACENZA DEL SITO (giacenza_woocommerce, solo STAFF): si usa SOLO se l'utente chiede ESPLICITAMENTE cosa dice il SITO / woocommerce / kanokimonos.com ("quante ne vede il sito?", "cosa dice woocommerce?", "giacenza sul sito", "quanti sul sito?"). Per una domanda generica sulla giacenza NON chiamarlo: si usa giacenza_fully. Quando lo usi, dichiara SEMPRE che quel numero dovrebbe essere sincronizzato con Fully ma può essere disallineato, e che il dato buono è quello di Fully. Le due fonti NON si sommano, NON si confrontano come se una correggesse l'altra e NON si fondono mai in un numero solo: se nella stessa risposta compaiono entrambe, due blocchi separati, ognuno con il suo nome ("giacenza Fully" / "giacenza su woocommerce (kanokimonos.com)"). Se risponde 'trovato': false il prodotto non è stato trovato sul sito: non dire zero né esaurito.
 """
 
 
@@ -2308,7 +2366,7 @@ ROLE_TOOLS = {
         "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
         "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
         "ordini_per_produttore", "ordine_fabbrica_per_numero", "tracciamento_fully",
-        "giacenza_woocommerce",
+        "giacenza_woocommerce", "giacenza_fully",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
     "retail": {"rispondi_dal_manuale"},
@@ -6227,6 +6285,10 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             return tool_giacenza_woocommerce(
                 tool_input.get("query"), tool_input.get("sku")
             )
+        if name == "giacenza_fully":
+            return tool_giacenza_fully(
+                tool_input.get("query"), tool_input.get("sku")
+            )
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(
                 tool_input.get("argomento"), user_message, role
@@ -7164,6 +7226,492 @@ def fully_sonda(request: Request, percorso: str = "/api/v2-jwt/product.product",
     if len(righe) > _FULLY_MAX_RIGHE:
         fuori["nota"] = f"mostrate le prime {_FULLY_MAX_RIGHE} righe di {len(righe)}"
     return fuori
+
+
+# --- GIACENZA FULLY (api.fully.si, SOLO produzione, SOLO GET) ----------------
+# Decisione di Bambu del 10/09/2026: la giacenza di riferimento e' SOLO quella
+# di Fully, perche' e' l'unica sicuramente giusta. Le giacenze del sito
+# dovrebbero essere sincronizzate con Fully ma spesso non lo sono; finche'
+# Fully non risolve, si riduce il rischio affidandosi al solo dato Fully.
+# Quindi "quante ne abbiamo" si risponde da qui, e il sito (giacenza_woocommerce)
+# resta solo per chi chiede esplicitamente cosa dice il sito.
+# Tre regole fisse di questo blocco:
+# - si legge SOLO la produzione (api.fully.si, FULLY_API_TOKEN): lo staging non
+#   e' allineato (verificato 9/9/2026) e i suoi numeri non sono i nostri;
+# - SOLO GET, tramite _fully_get, come tutto il resto del blocco Fully;
+# - Fully chiama TUTTE le taglie con lo stesso nome: la taglia sta nell'EAN
+#   (default_code) e si risolve incrociando l'EAN con l'anagrafica btoweb. Se
+#   l'EAN non e' in anagrafica la taglia resta "non risolta": si mostra l'EAN
+#   e non si indovina.
+_FULLY_PRODUZIONE = _FULLY_AMBIENTI[0]
+assert _FULLY_PRODUZIONE[0] == "produzione"
+_FULLY_ETICHETTA = "giacenza Fully (magazzino Fully, produzione)"
+_FULLY_GIACENZA_LIMIT = 1000          # massimo ammesso dall'API
+_FULLY_GIACENZA_MAX_RIGHE = 2000
+_FULLY_GIACENZA_MAX_GRUPPI = 15
+_FULLY_GIACENZA_MAX_RIGHE_GRUPPO = 40
+_FULLY_NOTA_CAMPI = (
+    "QUATTRO numeri per riga, distinti e MAI da sommare fra loro: 'in_magazzino' "
+    "(qty_available: pezzi fisicamente a magazzino Fully), 'libere' (free_qty: "
+    "pezzi non ancora impegnati da nessun ordine, cioe' quelli davvero "
+    "vendibili), 'in_arrivo' (incoming_qty: pezzi attesi da carichi non ancora "
+    "ricevuti), 'in_uscita' (outgoing_qty: pezzi gia' assegnati a spedizioni in "
+    "partenza). 'in_magazzino' e 'libere' sono numeri DIVERSI: la differenza e' "
+    "merce gia' impegnata da ordini. Riportali entrambi con il loro nome, non "
+    "presentarli come se fossero lo stesso numero e non sceglierne uno solo "
+    "chiamandolo 'giacenza'."
+)
+_FULLY_NOTA_TAGLIE = (
+    "Fully chiama tutte le taglie con lo stesso nome: la taglia NON e' nel nome, "
+    "e' nell'EAN. 'taglia' e' risolta incrociando l'EAN con l'anagrafica btoweb "
+    "('taglia_stato': 'risolta'). Se 'taglia' e' null leggi 'taglia_stato': "
+    "'ean_non_in_anagrafica' = quell'EAN non esiste in anagrafica btoweb, "
+    "'in_anagrafica_senza_taglia' = l'EAN c'e' ma la taglia non e' valorizzata, "
+    "'anagrafica_non_consultabile' = btoweb non ha risposto. In tutti e tre i "
+    "casi riporta la riga con il suo EAN e scrivi 'taglia non risolta': NON "
+    "indovinare la taglia e NON omettere la riga."
+)
+_FULLY_NOTA_FONTE = (
+    "Questi numeri vengono SOLO da Fully (api.fully.si, produzione), che e' la "
+    "giacenza di riferimento: l'unica sicuramente giusta. Il sito kanokimonos.com "
+    "NON e' stato consultato e non va citato qui. Etichetta ogni numero come "
+    "'giacenza Fully'. Non e' la pipeline di produzione btoweb."
+)
+# Ordine di presentazione delle taglie: alfabetiche note, poi numeriche/kids,
+# poi le non risolte. Serve solo a ordinare, non a decidere niente.
+_FULLY_TAGLIE_ORDINE = [
+    "3XS", "XXXS", "XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL",
+    "4XL", "5XL",
+]
+
+# Anagrafica btoweb intera, indicizzata per EAN/SKU e per nome prodotto, letta
+# al massimo ogni _BTO_ANAGRAFICA_TTL secondi: risolvere 40 taglie con 40
+# chiamate 'sku=' sarebbe lento e inutile, l'anagrafica sono ~1850 righe.
+_BTO_ANAGRAFICA_TTL = 900
+_BTO_ANAGRAFICA_CACHE = {"letta_il": 0.0, "per_ean": None, "per_nome": None}
+
+
+def _bto_anagrafica_indici():
+    """(per_ean, per_nome, errore). Con errore le mappe sono quelle vecchie in
+    cache se ci sono, altrimenti vuote: chi chiama deve dire che le taglie non
+    si possono risolvere ORA, non che gli EAN non esistono."""
+    c = _BTO_ANAGRAFICA_CACHE
+    ora = _diag_ora()
+    if c["per_ean"] is not None and ora - c["letta_il"] < _BTO_ANAGRAFICA_TTL:
+        return c["per_ean"], c["per_nome"], None
+    rows, res = _bto_get_paged({"resource": "products"})
+    if rows is None:
+        errore = res.get("error") or "anagrafica btoweb non consultabile"
+        if c["per_ean"] is not None:
+            return c["per_ean"], c["per_nome"], None
+        return {}, {}, errore
+    per_ean, per_nome = {}, {}
+    for r in rows:
+        for k in ("ean", "sku"):
+            v = str(r.get(k) or "").strip()
+            if v and v not in per_ean:
+                per_ean[v] = r
+        nome = _wc_norm(r.get("product_name")).strip()
+        if nome:
+            per_nome.setdefault(nome, []).append(r)
+    c.update(letta_il=ora, per_ean=per_ean, per_nome=per_nome)
+    return per_ean, per_nome, None
+
+
+def _fully_num(v):
+    """27.0 -> 27; i decimali veri restano decimali; None resta None."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except Exception:
+        return v
+    return int(f) if f.is_integer() else f
+
+
+def _fully_chiave_taglia(t):
+    if not t:
+        return (2, 0, "")
+    u = str(t).strip().upper()
+    if u in _FULLY_TAGLIE_ORDINE:
+        return (0, _FULLY_TAGLIE_ORDINE.index(u), u)
+    m = re.match(r"^[A-Z]*(\d+)", u)
+    if m:
+        return (1, int(m.group(1)), u)
+    return (1, 999, u)
+
+
+def _fully_prodotti(filtri: dict):
+    """Tutte le righe di product.product che rispondono ai filtri, dalla SOLA
+    produzione, paginando finche' filtered_count non e' coperto.
+    (righe, None) oppure (None, frase_di_errore_per_il_modello)."""
+    nome_amb, base, nome_var = _FULLY_PRODUZIONE
+    token = os.getenv(nome_var)
+    if not token:
+        return None, errore_canale("fully", f"{nome_var} non configurata")
+    from urllib.parse import urlencode
+    righe = []
+    offset = 0
+    while len(righe) < _FULLY_GIACENZA_MAX_RIGHE:
+        q = dict(filtri)
+        q["limit"] = _FULLY_GIACENZA_LIMIT
+        q["offset"] = offset
+        percorso = "/api/v2-jwt/product.product?" + urlencode(q)
+        try:
+            r = _fully_get(base, percorso, token)
+        except Exception as e:
+            return None, errore_canale(
+                "fully", f"connessione fallita: {type(e).__name__}: {str(e)[:200]}"
+            )
+        if r.status_code != 200:
+            return None, errore_canale(
+                "fully", f"HTTP {r.status_code}: {(r.text or '')[:_FULLY_MAX_TESTO]}"
+            )
+        try:
+            data = r.json()
+        except Exception:
+            return None, errore_canale("fully", "HTTP 200 ma corpo non JSON")
+        nome, lista = _fully_lista(data)
+        if lista is None:
+            chiavi = list(data)[:8] if isinstance(data, dict) else type(data).__name__
+            return None, errore_canale("fully", f"busta senza lista: {chiavi}")
+        pagina = [p for p in lista if isinstance(p, dict)]
+        righe.extend(pagina)
+        atteso = data.get("filtered_count") if isinstance(data, dict) else None
+        if not pagina or len(pagina) < _FULLY_GIACENZA_LIMIT:
+            break
+        if isinstance(atteso, int) and len(righe) >= atteso:
+            break
+        offset += _FULLY_GIACENZA_LIMIT
+    return righe, None
+
+
+def _fully_riga_giacenza(p: dict, per_ean: dict, errore_anagrafica) -> dict:
+    """Una riga di Fully (= una taglia) con la taglia risolta dall'EAN, o
+    dichiarata non risolta, e i quattro numeri con il loro nome."""
+    ean = str(p.get("default_code") or "").strip()
+    barcode = str(p.get("barcode") or "").strip()
+    riga = {
+        "ean": ean or None,
+        "taglia": None,
+        "taglia_stato": None,
+    }
+    if barcode and barcode != ean:
+        riga["barcode"] = barcode
+    anag = None
+    if errore_anagrafica:
+        riga["taglia_stato"] = "anagrafica_non_consultabile"
+    else:
+        anag = per_ean.get(ean) or (per_ean.get(barcode) if barcode else None)
+        if anag is None:
+            riga["taglia_stato"] = "ean_non_in_anagrafica"
+        elif anag.get("size"):
+            riga["taglia"] = str(anag.get("size")).strip()
+            riga["taglia_stato"] = "risolta"
+        else:
+            riga["taglia_stato"] = "in_anagrafica_senza_taglia"
+    if anag is not None:
+        riga["_nome_anagrafica"] = anag.get("product_name")
+        if anag.get("colour"):
+            riga["colore_in_anagrafica"] = anag.get("colour")
+    riga["in_magazzino"] = _fully_num(p.get("qty_available"))
+    riga["libere"] = _fully_num(p.get("free_qty"))
+    riga["in_arrivo"] = _fully_num(p.get("incoming_qty"))
+    riga["in_uscita"] = _fully_num(p.get("outgoing_qty"))
+    if p.get("active") is False:
+        riga["attivo_in_fully"] = False
+    return riga
+
+
+def _fully_gruppi_giacenza(righe_fully: list, righe_viste: list, per_ean: dict,
+                           per_nome: dict, errore_anagrafica, cerca_ean) -> list:
+    """Righe Fully raggruppate PER PRODOTTO DELL'ANAGRAFICA btoweb quando l'EAN
+    si risolve (Fully chiama lo stesso prodotto in piu' modi: 'fightshort
+    killer bunny' e 'BJJ / MMA FIGHTSHORTS ... KILLER BUNNY - XL' sono lo stesso
+    articolo per l'anagrafica), altrimenti per nome base Fully. Poi ogni gruppo
+    viene COMPLETATO: le taglie che l'anagrafica conosce e che non sono fra le
+    righe si cercano in Fully per EAN (cerca_ean, una GET '[in]' per gruppo):
+    trovate, entrano nel gruppo (Fully le chiama con un altro nome, anche
+    sbagliato: 'KILLER BANNIE'); non trovate, restano dichiarate 'senza riga in
+    Fully', che NON e' giacenza zero. I totali sono per campo e calcolati qui."""
+    def chiave_e_titolo(p, riga):
+        nome_fully = str(p.get("name") or "").strip()
+        nome_anag = riga.get("_nome_anagrafica")
+        if nome_anag:
+            return "anag:" + _wc_norm(nome_anag).strip(), nome_anag
+        base_nome = _bto_base_name(nome_fully) or "(senza nome)"
+        return "fully:" + _wc_norm(base_nome).strip(), base_nome
+
+    gruppi = {}
+    ordine = []
+
+    def aggiungi(p, come=None):
+        riga = _fully_riga_giacenza(p, per_ean, errore_anagrafica)
+        chiave, titolo = chiave_e_titolo(p, riga)
+        if chiave not in gruppi:
+            gruppi[chiave] = {"prodotto": titolo, "nomi_in_fully": [], "righe": [],
+                              "ean": set()}
+            ordine.append(chiave)
+        g = gruppi[chiave]
+        nome_fully = str(p.get("name") or "").strip()
+        if nome_fully and nome_fully not in g["nomi_in_fully"]:
+            g["nomi_in_fully"].append(nome_fully)
+        if riga["ean"]:
+            g["ean"].add(riga["ean"])
+        if riga.get("barcode"):
+            g["ean"].add(riga["barcode"])
+        riga.pop("_nome_anagrafica", None)
+        if come:
+            riga["trovata_come"] = come
+            riga["nome_in_fully"] = nome_fully
+        g["righe"].append(riga)
+        return chiave
+
+    for p in righe_fully:
+        aggiungi(p)
+
+    # Righe scaricate ma scartate dal filtro sul nome, che l'anagrafica assegna
+    # a un prodotto gia' nel gruppo: rientrano ('LEGGINGS KILLER BUNNY - XXL'
+    # per la query 'leggings female killer bunny').
+    gia = {id(p) for p in righe_fully}
+    chiavi_anag = {k for k in gruppi if k.startswith("anag:")}
+    if chiavi_anag and not errore_anagrafica:
+        for p in righe_viste:
+            if id(p) in gia:
+                continue
+            ean = str(p.get("default_code") or "").strip()
+            anag = per_ean.get(ean)
+            if anag and ("anag:" + _wc_norm(anag.get("product_name")).strip()) in chiavi_anag:
+                aggiungi(p, come="EAN dell'anagrafica, nome Fully diverso dalla query")
+
+    out = []
+    for chiave in ordine:
+        g = gruppi[chiave]
+        mancanti = []
+        if chiave.startswith("anag:") and not errore_anagrafica:
+            righe_anag = per_nome.get(chiave[len("anag:"):], [])
+            candidati = {}
+            for a in righe_anag:
+                codici = {str(a.get(k) or "").strip() for k in ("ean", "sku")} - {""}
+                if a.get("size") and not (codici & g["ean"]):
+                    for c in codici:
+                        candidati[c] = a
+            if candidati:
+                for p in cerca_ean(sorted(candidati)):
+                    ean = str(p.get("default_code") or "").strip()
+                    if ean in candidati and ean not in g["ean"]:
+                        a = candidati[ean]
+                        aggiungi(p, come="EAN dell'anagrafica, nome Fully diverso")
+                        for c in {str(a.get(k) or "").strip() for k in ("ean", "sku")}:
+                            candidati.pop(c, None)
+                visti = set()
+                for c, a in candidati.items():
+                    if id(a) in visti:
+                        continue
+                    visti.add(id(a))
+                    mancanti.append({"taglia": str(a["size"]).strip(),
+                                     "ean": a.get("ean") or a.get("sku")})
+        righe = sorted(g["righe"], key=lambda r: _fully_chiave_taglia(r["taglia"]))
+        totali = {}
+        for c in ("in_magazzino", "libere", "in_arrivo", "in_uscita"):
+            vals = [r[c] for r in righe if isinstance(r[c], (int, float))]
+            totali[c] = _fully_num(sum(vals)) if vals else None
+        non_risolte = sum(1 for r in righe if r["taglia_stato"] != "risolta")
+        voce = {
+            "prodotto": g["prodotto"],
+            "nomi_in_fully": g["nomi_in_fully"][:6],
+            "righe_fully": len(righe),
+            "taglie_non_risolte": non_risolte,
+            "righe": righe[:_FULLY_GIACENZA_MAX_RIGHE_GRUPPO],
+            "totali_calcolati_dallo_strumento": totali,
+        }
+        if len(righe) > _FULLY_GIACENZA_MAX_RIGHE_GRUPPO:
+            voce["nota_righe"] = (
+                f"mostrate {_FULLY_GIACENZA_MAX_RIGHE_GRUPPO} righe su {len(righe)}; "
+                "i totali coprono TUTTE le righe."
+            )
+        if isinstance(totali["in_magazzino"], (int, float)) and \
+                isinstance(totali["libere"], (int, float)):
+            voce["impegnate_da_ordini"] = _fully_num(
+                totali["in_magazzino"] - totali["libere"]
+            )
+        if len(g["nomi_in_fully"]) > 1:
+            voce["nota_nomi"] = (
+                "Fully chiama questo prodotto con piu' nomi diversi (vedi "
+                "'nomi_in_fully'): le righe sono state riunite perche' i loro EAN "
+                "appartengono allo stesso prodotto nell'anagrafica btoweb."
+            )
+        if mancanti:
+            mancanti.sort(key=lambda m: _fully_chiave_taglia(m["taglia"]))
+            voce["taglie_in_anagrafica_senza_riga_in_fully"] = mancanti
+            voce["nota_taglie_senza_riga"] = (
+                "Queste taglie esistono nell'anagrafica btoweb di "
+                f"'{g['prodotto']}' ma Fully NON ha nessuna riga con quell'EAN "
+                "(verificato cercando l'EAN in Fully): NON e' giacenza zero, e' "
+                "'nessuna riga in Fully'. Se le citi, dillo con queste parole."
+            )
+        out.append(voce)
+    return out
+
+
+def tool_giacenza_fully(query: str = None, sku: str = None) -> dict:
+    """Giacenza di magazzino da Fully (solo staff, SOLO produzione, SOLO GET):
+    per NOME (name[ilike]) o per EAN/SKU (default_code), una riga per taglia
+    con la taglia risolta dall'anagrafica btoweb e i quattro numeri di Fully
+    distinti (in magazzino, libere, in arrivo, in uscita) piu' i totali per
+    campo."""
+    q = (query or "").strip()
+    sku_clean = (sku or "").strip()
+    base = {
+        "tipo": "giacenza_fully",
+        "fonte": "Fully (api.fully.si, produzione)",
+        "etichetta_obbligatoria": _FULLY_ETICHETTA,
+        "cercato": {"query": q or None, "sku": sku_clean or None},
+    }
+    if not q and not sku_clean:
+        return {
+            **base, "trovato": False,
+            "nota": (
+                "Nessun nome di prodotto e nessun EAN/SKU: per leggere la giacenza "
+                "serve almeno uno dei due. Se l'utente ha nominato un prodotto, "
+                "richiama lo strumento con quelle parole in 'query'."
+            ),
+        }
+
+    righe_viste = []
+    corrispondenza = None
+    if sku_clean:
+        righe, err = _fully_prodotti({"default_code": sku_clean})
+        if err:
+            return {**base, "error": err, "fonte": "fully"}
+        if not righe:
+            righe, err = _fully_prodotti({"barcode": sku_clean})
+            if err:
+                return {**base, "error": err, "fonte": "fully"}
+        if not righe:
+            nota = (
+                f"NESSUNA riga in Fully (produzione) con EAN/SKU '{sku_clean}', ne' "
+                "come default_code ne' come barcode. Questo NON e' 'giacenza zero': "
+                "e' 'non trovato', e va detto con queste parole. Se l'utente ha "
+                "anche detto il nome del prodotto, riprova per nome."
+            )
+            if _BTO_NUMERO_BATCH_RE.match(sku_clean):
+                nota += (
+                    f" ATTENZIONE: '{sku_clean}' ha la forma di un numero di ORDINE "
+                    "DI FABBRICA (batch), non di un EAN: richiama "
+                    "ordine_fabbrica_per_numero con questo numero."
+                )
+            return {**base, "trovato": False, "nota": nota}
+        corrispondenza = "ean"
+    else:
+        # Il filtro server-side e' un solo ilike: Fully non sa l'AND di piu'
+        # parole in qualunque ordine ('rashguard killer bunny female' NON e'
+        # sottostringa di 'RASHGUARD FEMALE KILLER BUNNY'). Quindi: al server
+        # la parola piu' lunga, e qui l'AND di tutte le parole sul nome.
+        parole = [t for t in _wc_norm(q).split() if t]
+        perno = max(parole, key=len) if parole else q
+        righe_viste, err = _fully_prodotti({"name[ilike]": perno})
+        if err:
+            return {**base, "error": err, "fonte": "fully"}
+        righe = [p for p in righe_viste
+                 if all(t in _wc_norm(p.get("name")) for t in parole)]
+        corrispondenza = "nome (tutte le parole)"
+        if not righe:
+            # Ripiego sulle radici, come per btoweb: 'kimoni' deve trovare
+            # 'Kimono'. Al server va la radice della parola piu' lunga.
+            radice = _radice(perno) if len(perno) >= 3 else perno
+            if radice and radice != perno:
+                righe_viste, err = _fully_prodotti({"name[ilike]": radice})
+                if err:
+                    return {**base, "error": err, "fonte": "fully"}
+            righe = [p for p in righe_viste if _bto_match_radice(p.get("name"), parole)]
+            corrispondenza = "radici delle parole (ricerca allargata)" if righe else None
+        if not righe:
+            return {
+                **base, "trovato": False,
+                "nota": (
+                    f"NESSUN prodotto in Fully (produzione) ha nel nome tutte le parole "
+                    f"di '{q}', ne' alla lettera ne' per radice. Questo NON e' 'giacenza "
+                    "zero' e NON e' 'esaurito': e' 'non trovato', e va detto con queste "
+                    "parole. Prima di chiudere riprova con un'altra forma del nome (meno "
+                    "parole, l'inglese, il singolare); se l'utente ha dato un EAN, "
+                    "riprova con 'sku'."
+                ),
+            }
+
+    per_ean, per_nome, errore_anagrafica = _bto_anagrafica_indici()
+
+    # Il completamento per EAN e' una GET per gruppo: su una query larga
+    # ('kimoni' pesca decine di prodotti) si limita ai gruppi dettagliati.
+    budget = {"resto": _FULLY_GIACENZA_MAX_GRUPPI}
+
+    def cerca_ean(codici: list) -> list:
+        if budget["resto"] <= 0 or not codici:
+            return []
+        budget["resto"] -= 1
+        trovati, err = _fully_prodotti({"default_code[in]": ",".join(codici[:200])})
+        if err:
+            return []
+        return trovati
+
+    gruppi = _fully_gruppi_giacenza(righe, righe_viste, per_ean, per_nome,
+                                    errore_anagrafica, cerca_ean)
+    out = {
+        **base,
+        "trovato": True,
+        "corrispondenza": corrispondenza,
+        "righe_fully": sum(g["righe_fully"] for g in gruppi),
+        "prodotti_trovati": len(gruppi),
+        "prodotti": gruppi[:_FULLY_GIACENZA_MAX_GRUPPI],
+        "nota_campi": _FULLY_NOTA_CAMPI,
+        "nota_taglie": _FULLY_NOTA_TAGLIE,
+        "nota_fonte": _FULLY_NOTA_FONTE,
+    }
+    if sku_clean and gruppi:
+        out["sku_cercato_corrisponde_a"] = next(
+            ({"taglia": r["taglia"], "ean": r["ean"]}
+             for g in gruppi for r in g["righe"]
+             if r["ean"] == sku_clean or r.get("barcode") == sku_clean),
+            None,
+        )
+        out["nota_sku"] = (
+            "L'EAN cercato e' quello di UNA taglia: il gruppo mostra comunque tutto "
+            "il prodotto, taglia per taglia, completato dall'anagrafica btoweb."
+        )
+    if len(gruppi) > _FULLY_GIACENZA_MAX_GRUPPI:
+        out["altri_prodotti_non_dettagliati"] = [
+            g["prodotto"] for g in gruppi[_FULLY_GIACENZA_MAX_GRUPPI:]
+        ]
+        out["nota_prodotti"] = (
+            f"Il nome '{q}' pesca {len(gruppi)} prodotti diversi: ne sono dettagliati "
+            f"{_FULLY_GIACENZA_MAX_GRUPPI}. Gli altri sono elencati per nome: se "
+            "l'utente ne vuole uno, richiama lo strumento con il nome preciso."
+        )
+    if len(gruppi) > 1:
+        out["nota_piu_prodotti"] = (
+            f"'{q or sku_clean}' corrisponde a {len(gruppi)} prodotti diversi in "
+            "Fully: presentali UNO PER UNO, ognuno con le sue taglie e i suoi totali. "
+            "NON sommare i totali di prodotti diversi in un numero unico."
+        )
+    if errore_anagrafica:
+        out["avvertenza_anagrafica"] = (
+            "L'anagrafica btoweb non e' consultabile ora, quindi NESSUNA taglia e' "
+            "stata risolta: le righe sono identificate dal solo EAN. I numeri di "
+            "Fully restano validi."
+        )
+    return out
+
+
+@app.get("/fully-giacenza", dependencies=SOLO_ADMIN)
+def fully_giacenza(query: str = None, sku: str = None):
+    """Sonda deterministica sulla giacenza Fully: chiama la STESSA
+    tool_giacenza_fully del bot, senza passare dal modello. Serve a vedere il
+    payload esatto che il modello riceve e a verificare un deploy senza
+    spendere una chiamata al modello. SOLO GET verso Fully, SOLO produzione."""
+    try:
+        return tool_giacenza_fully(query, sku)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
 
 
 def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
