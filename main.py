@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, Depends, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
@@ -11,7 +12,9 @@ import difflib
 import hashlib
 import unicodedata
 from datetime import datetime, timezone
-from collections import Counter
+from collections import Counter, deque
+import threading
+import time
 import psycopg2
 import requests
 import anthropic
@@ -23,6 +26,44 @@ from docx import Document
 # parametri. Nessuno li usa e sono una mappa servita a chiunque.
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- CORS: elenco di siti autorizzati, letto da ALLOWED_ORIGINS ---------------
+# Il widget sul nuovo sito chiama /chat dal browser: senza CORS il browser
+# blocca la chiamata. L'elenco dei domini ammessi sta nella variabile
+# d'ambiente ALLOWED_ORIGINS (separati da virgola). Mai "*": con un header
+# personalizzato (x-bot-client-key) sarebbe un'apertura a qualunque pagina.
+# Se la variabile manca NON si apre a tutti: si resta chiusi (nessuna origine
+# browser) e si logga. Il mini-sito staff non ne risente: chiama /chat dal suo
+# bot-proxy lato server, che non manda nessuna Origin.
+def _origini_ammesse() -> list:
+    grezzo = os.getenv("ALLOWED_ORIGINS")
+    if not grezzo or not grezzo.strip():
+        print("[CORS] ALLOWED_ORIGINS assente: nessuna origine browser ammessa "
+              "(il mini-sito staff passa dal suo bot-proxy e non ne ha bisogno). "
+              "Per il widget del sito va valorizzata su Render.")
+        return []
+    lista = []
+    for o in grezzo.split(","):
+        o = o.strip().rstrip("/")
+        if not o:
+            continue
+        if o == "*":
+            print("[CORS] '*' ignorato: con le credenziali non si apre a tutti.")
+            continue
+        lista.append(o)
+    print(f"[CORS] origini ammesse: {len(lista)}")
+    return lista
+
+
+ALLOWED_ORIGINS = _origini_ammesse()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "x-bot-client-key"],
+    max_age=600,
+)
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -49,6 +90,7 @@ BOT_CLIENT_KEYS = [
     ("staff", os.getenv("BOT_CLIENT_KEY_MINISITO")),
     ("staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI")),
     ("retail", os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY")),
+    ("retail", os.getenv("BOT_CLIENT_KEY_DIAGNOSI_RETAIL")),
 ]
 
 
@@ -86,6 +128,15 @@ def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             );
         """)
+        # Dal 15/09/2026 ogni messaggio porta il PROFILO con cui e' stato
+        # scritto (staff/b2b/retail): serve alla conservazione a 90 giorni dei
+        # soli clienti. E i token del modello per ogni risposta, per misurare
+        # il costo dal traffico vero invece di stimarlo. Nessun indirizzo IP
+        # viene mai scritto qui.
+        cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS profilo TEXT;")
+        cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_in INTEGER;")
+        cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_out INTEGER;")
+        cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_cache_in INTEGER;")
         conn.commit()
         cur.close()
         conn.close()
@@ -6405,7 +6456,26 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
         }
 
 
-def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -> str:
+def _accumula_uso(uso, response):
+    """Somma i token di una risposta del modello nel dizionario 'uso' (se c'e').
+    Un turno /chat puo' fare piu' chiamate (una per strumento): il costo del
+    messaggio e' la somma."""
+    if uso is None:
+        return
+    u = getattr(response, "usage", None)
+    if u is None:
+        return
+    uso["chiamate"] = uso.get("chiamate", 0) + 1
+    uso["token_in"] = uso.get("token_in", 0) + (getattr(u, "input_tokens", 0) or 0)
+    uso["token_out"] = uso.get("token_out", 0) + (getattr(u, "output_tokens", 0) or 0)
+    uso["token_cache_in"] = uso.get("token_cache_in", 0) + (
+        (getattr(u, "cache_read_input_tokens", 0) or 0)
+        + (getattr(u, "cache_creation_input_tokens", 0) or 0)
+    )
+
+
+def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
+                    uso: dict = None) -> str:
     """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
     if not ANTHROPIC_API_KEY:
         return "Errore: ANTHROPIC_API_KEY non configurata."
@@ -6431,6 +6501,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
                 messages=messages,
             )
 
+            _accumula_uso(uso, response)
             if response.stop_reason != "tool_use":
                 text_parts = [b.text for b in response.content if b.type == "text"]
                 return "\n".join(text_parts).strip() or "Non ho una risposta per questo."
@@ -6468,6 +6539,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
             ),
             messages=messages,
         )
+        _accumula_uso(uso, final)
         text_parts = [b.text for b in final.content if b.type == "text"]
         return "\n".join(text_parts).strip() or "Non sono riuscito a completare la richiesta."
 
@@ -6553,6 +6625,354 @@ def rifiuta_chiave_client():
     raise HTTPException(status_code=401, detail="Accesso non autorizzato.")
 
 
+# --- LIMITE DI CHIAMATE PER I PROFILI NON-STAFF (in memoria, per IP) ---------
+# La chiave del widget vivra' nel JavaScript pubblico del sito: chiunque la
+# legge. Quindi per le chiavi NON staff c'e' un limite per indirizzo IP
+# (15 messaggi ogni 5 minuti, 60 all'ora) e un TETTO GIORNALIERO complessivo
+# su tutto il traffico non-staff (TETTO_GIORNALIERO_CLIENTI, variabile
+# d'ambiente, si cambia senza toccare il codice). Il blocco avviene PRIMA di
+# scrivere sul DB e PRIMA di chiamare Anthropic: una richiesta rifiutata non
+# costa niente. Lo staff (minisito, diagnosi) non e' limitato.
+# L'indirizzo IP vive SOLO in questa memoria: non va nel DB e nei log compare
+# solo come impronta (sha256 troncata).
+# TRAPPOLA RENDER: l'IP vero del cliente sta in X-Forwarded-For, non nella
+# connessione (che e' il proxy di Render). Si prende il PRIMO indirizzo della
+# catena, come richiesto; verificato con /ip-visto.
+_LIMITE_5MIN = 15
+_LIMITE_ORA = 60
+_LIMITE_TETTO_DEFAULT = 300
+_LIMITE_LOCK = threading.Lock()
+_LIMITE_PER_IP = {}                      # impronta ip -> deque di timestamp
+_LIMITE_GIORNO = {"giorno": None, "conteggio": 0}
+_LIMITE_MESSAGGIO = (
+    "Hai inviato troppe richieste in poco tempo. Riprova fra qualche minuto, "
+    "oppure scrivi a info@kanokimonos.com."
+)
+_LIMITE_MESSAGGIO_TETTO = (
+    "Il servizio ha raggiunto il numero massimo di messaggi per oggi. Riprova "
+    "domani, oppure scrivi a info@kanokimonos.com."
+)
+
+
+def tetto_giornaliero_clienti() -> int:
+    try:
+        return int(os.getenv("TETTO_GIORNALIERO_CLIENTI", _LIMITE_TETTO_DEFAULT))
+    except ValueError:
+        return _LIMITE_TETTO_DEFAULT
+
+
+def ip_del_chiamante(request: Request) -> str:
+    """Il PRIMO indirizzo di X-Forwarded-For; senza header, l'IP della
+    connessione."""
+    xff = request.headers.get("x-forwarded-for") or ""
+    primo = xff.split(",")[0].strip() if xff else ""
+    if primo:
+        return primo
+    return request.client.host if request.client else "sconosciuto"
+
+
+def _impronta_ip(ip: str) -> str:
+    return hashlib.sha256(ip.encode("utf-8")).hexdigest()[:12]
+
+
+def controlla_limite_clienti(ip: str):
+    """None se la richiesta passa (e viene contata), altrimenti il messaggio
+    gentile da restituire. Le richieste rifiutate NON vengono contate."""
+    ora = time.time()
+    giorno = time.strftime("%Y-%m-%d", time.gmtime(ora))
+    k = _impronta_ip(ip)
+    with _LIMITE_LOCK:
+        if _LIMITE_GIORNO["giorno"] != giorno:
+            _LIMITE_GIORNO["giorno"] = giorno
+            _LIMITE_GIORNO["conteggio"] = 0
+        if _LIMITE_GIORNO["conteggio"] >= tetto_giornaliero_clienti():
+            return _LIMITE_MESSAGGIO_TETTO
+        dq = _LIMITE_PER_IP.setdefault(k, deque())
+        while dq and ora - dq[0] > 3600:
+            dq.popleft()
+        if len(dq) >= _LIMITE_ORA:
+            return _LIMITE_MESSAGGIO
+        if sum(1 for t in dq if ora - t <= 300) >= _LIMITE_5MIN:
+            return _LIMITE_MESSAGGIO
+        dq.append(ora)
+        _LIMITE_GIORNO["conteggio"] += 1
+        if len(_LIMITE_PER_IP) > 5000:
+            for kk in [kk for kk, d in _LIMITE_PER_IP.items() if not d]:
+                _LIMITE_PER_IP.pop(kk, None)
+    return None
+
+
+def stato_limite_clienti() -> dict:
+    with _LIMITE_LOCK:
+        return {
+            "giorno": _LIMITE_GIORNO["giorno"],
+            "messaggi_clienti_oggi": _LIMITE_GIORNO["conteggio"],
+            "tetto_giornaliero": tetto_giornaliero_clienti(),
+            "ip_in_memoria": len(_LIMITE_PER_IP),
+            "limiti_per_ip": {"5_minuti": _LIMITE_5MIN, "1_ora": _LIMITE_ORA},
+        }
+
+
+@app.get("/ip-visto", dependencies=SOLO_ADMIN)
+def ip_visto(request: Request):
+    """Sonda admin: quale IP userebbe il limitatore per QUESTA richiesta e la
+    catena X-Forwarded-For grezza come arriva dietro il proxy di Render. Non
+    salva niente."""
+    return {
+        "x_forwarded_for": request.headers.get("x-forwarded-for"),
+        "ip_connessione": request.client.host if request.client else None,
+        "ip_usato_dal_limitatore": ip_del_chiamante(request),
+        "limite": stato_limite_clienti(),
+    }
+
+
+# --- CONSERVAZIONE 90 GIORNI, SOLO CLIENTI ------------------------------------
+# Decisione di Bambu del 15/09/2026: le conversazioni dei CLIENTI (profili
+# retail e b2b) si tengono 90 giorni e poi si cancellano. Quelle dello STAFF
+# restano: registri di lavoro interni per le revisioni settimanali.
+# Il giro periodico gira A VUOTO (conta e basta) finche' la variabile
+# d'ambiente CONSERVAZIONE_CLIENTI_ESEGUI non vale "1": si attiva solo dopo
+# l'OK di Bambu sui numeri. Le righe senza profilo (scritte prima della
+# marcatura del 15/09/2026) non si toccano mai: sono contate a parte.
+CONSERVAZIONE_CLIENTI_GIORNI = 90
+PROFILI_CLIENTI = ("retail", "b2b")
+
+
+def pulizia_conversazioni_clienti(esegui: bool = False) -> dict:
+    """Conta (e, solo se esegui=True E la variabile lo consente, cancella) le
+    conversazioni dei clienti piu' vecchie di 90 giorni. Una conversazione e'
+    vecchia quando il suo ULTIMO messaggio e' piu' vecchio del limite: non si
+    spezza mai una conversazione a meta'."""
+    consentito = os.getenv("CONSERVAZIONE_CLIENTI_ESEGUI") == "1"
+    out = {
+        "giorni_conservazione": CONSERVAZIONE_CLIENTI_GIORNI,
+        "profili_cancellabili": list(PROFILI_CLIENTI),
+        "cancellazione_attiva": consentito,
+        "modalita": "ESEGUITA" if (esegui and consentito) else "A VUOTO (solo conteggio)",
+    }
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            WITH vecchie AS (
+                SELECT chat_id, COALESCE(profilo, '(non marcato)') AS profilo
+                FROM messages
+                GROUP BY chat_id, COALESCE(profilo, '(non marcato)')
+                HAVING MAX(created_at) < NOW() - (%s * INTERVAL '1 day')
+            )
+            SELECT v.profilo, COUNT(DISTINCT v.chat_id), COUNT(m.id)
+            FROM vecchie v
+            JOIN messages m ON m.chat_id = v.chat_id
+                 AND COALESCE(m.profilo, '(non marcato)') = v.profilo
+            GROUP BY v.profilo ORDER BY v.profilo
+            """,
+            (CONSERVAZIONE_CLIENTI_GIORNI,),
+        )
+        per_profilo = {}
+        for profilo, conv, msg in cur.fetchall():
+            per_profilo[profilo] = {
+                "conversazioni": conv, "messaggi": msg,
+                "verrebbero_cancellate": profilo in PROFILI_CLIENTI,
+            }
+        out["piu_vecchie_di_90_giorni_per_profilo"] = per_profilo
+        # Le righe non marcate, per sorgente: aiuta a capire cosa sono.
+        cur.execute(
+            """
+            SELECT COALESCE(source, '(senza source)'), COUNT(DISTINCT chat_id), COUNT(*)
+            FROM messages WHERE profilo IS NULL
+            GROUP BY 1 ORDER BY 3 DESC
+            """
+        )
+        out["non_marcate_per_source"] = [
+            {"source": s, "conversazioni": c, "messaggi": m} for s, c, m in cur.fetchall()
+        ]
+        cur.execute(
+            """
+            SELECT COALESCE(profilo, '(non marcato)'), COUNT(DISTINCT chat_id), COUNT(*)
+            FROM messages GROUP BY 1 ORDER BY 1
+            """
+        )
+        out["totale_in_archivio_per_profilo"] = [
+            {"profilo": p, "conversazioni": c, "messaggi": m} for p, c, m in cur.fetchall()
+        ]
+        da_cancellare = {
+            "conversazioni": sum(v["conversazioni"] for p, v in per_profilo.items() if p in PROFILI_CLIENTI),
+            "messaggi": sum(v["messaggi"] for p, v in per_profilo.items() if p in PROFILI_CLIENTI),
+        }
+        out["da_cancellare"] = da_cancellare
+        if esegui and consentito and da_cancellare["messaggi"]:
+            cur.execute(
+                """
+                DELETE FROM messages
+                WHERE profilo = ANY(%s)
+                  AND chat_id IN (
+                      SELECT chat_id FROM messages
+                      WHERE profilo = ANY(%s)
+                      GROUP BY chat_id
+                      HAVING MAX(created_at) < NOW() - (%s * INTERVAL '1 day')
+                  )
+                """,
+                (list(PROFILI_CLIENTI), list(PROFILI_CLIENTI), CONSERVAZIONE_CLIENTI_GIORNI),
+            )
+            out["cancellati_messaggi"] = cur.rowcount
+            conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+    print(f"[PULIZIA] {json.dumps(out, ensure_ascii=False, default=str)[:1500]}")
+    return out
+
+
+def _giro_pulizia_periodico():
+    """Un giro al giorno, il primo un minuto dopo l'avvio. Cancella solo se
+    CONSERVAZIONE_CLIENTI_ESEGUI=1, altrimenti conta e logga."""
+    time.sleep(60)
+    while True:
+        try:
+            pulizia_conversazioni_clienti(esegui=True)
+        except Exception as e:
+            print(f"[PULIZIA] eccezione nel giro periodico: {e}")
+        time.sleep(24 * 3600)
+
+
+if DATABASE_URL:
+    threading.Thread(target=_giro_pulizia_periodico, daemon=True,
+                     name="pulizia-conversazioni").start()
+
+
+@app.get("/pulizia-conversazioni", dependencies=SOLO_ADMIN)
+def pulizia_conversazioni_endpoint():
+    """SEMPRE a vuoto: conta quante conversazioni e messaggi dei clienti
+    verrebbero cancellati, divisi per profilo. Non cancella mai da qui."""
+    return pulizia_conversazioni_clienti(esegui=False)
+
+
+# --- QUANTO COSTA UN MESSAGGIO ------------------------------------------------
+# Prezzi di listino del modello in uso (claude-haiku-4-5): 1 USD per milione
+# di token in ingresso, 5 USD per milione in uscita (listino Anthropic,
+# verificato il 15/09/2026). Cambio USD->EUR da CAMBIO_USD_EUR (default 0.92,
+# dichiarato come ipotesi). Nessuna cache di prompt e' attiva.
+_PREZZO_USD_PER_MILIONE = {"in": 1.0, "out": 5.0, "cache_in": 0.1}
+
+
+def _cambio_usd_eur() -> float:
+    try:
+        return float(os.getenv("CAMBIO_USD_EUR", "0.92"))
+    except ValueError:
+        return 0.92
+
+
+def _euro(token_in, token_out, token_cache_in=0) -> float:
+    usd = (
+        (token_in or 0) * _PREZZO_USD_PER_MILIONE["in"]
+        + (token_out or 0) * _PREZZO_USD_PER_MILIONE["out"]
+        + (token_cache_in or 0) * _PREZZO_USD_PER_MILIONE["cache_in"]
+    ) / 1_000_000
+    return round(usd * _cambio_usd_eur(), 6)
+
+
+_COSTO_FISSO_CACHE = {}
+
+
+def _token_fissi_per_profilo(profilo: str):
+    """Token del prompt di sistema + strumenti del profilo, contati con
+    count_tokens (gratuito): e' la parte che ogni messaggio paga sempre."""
+    if profilo in _COSTO_FISSO_CACHE:
+        return _COSTO_FISSO_CACHE[profilo]
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        n = client.messages.count_tokens(
+            model=ANTHROPIC_MODEL,
+            system=_compose_system(profilo),
+            tools=[t for t in CHAT_TOOLS if t["name"] in ROLE_TOOLS[profilo]],
+            messages=[{"role": "user", "content": "ciao"}],
+        ).input_tokens
+    except Exception as e:
+        n = f"non contati: {type(e).__name__}"
+    _COSTO_FISSO_CACHE[profilo] = n
+    return n
+
+
+@app.get("/costi", dependencies=SOLO_ADMIN)
+def costi():
+    """Costo medio di un messaggio del bot. Due strati: (1) MISURA vera sui
+    messaggi che hanno i token registrati (dal 15/09/2026); (2) STIMA
+    dichiarata sul traffico storico senza token, dalla lunghezza dei testi
+    (4 caratteri per token) piu' la parte fissa del prompt contata con
+    count_tokens."""
+    out = {
+        "modello": ANTHROPIC_MODEL,
+        "prezzi_usd_per_milione_token": _PREZZO_USD_PER_MILIONE,
+        "cambio_usd_eur_ipotesi": _cambio_usd_eur(),
+        "token_fissi_prompt_e_strumenti": {p: _token_fissi_per_profilo(p) for p in ROLE_TOOLS},
+    }
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COALESCE(profilo, '(non marcato)'), COUNT(*),
+                   AVG(token_in), AVG(token_out), AVG(COALESCE(token_cache_in, 0)),
+                   MAX(token_in), MAX(token_out)
+            FROM messages WHERE role = 'assistant' AND token_in IS NOT NULL
+            GROUP BY 1 ORDER BY 1
+            """
+        )
+        misurati = []
+        for p, n, tin, tout, tcache, mxin, mxout in cur.fetchall():
+            misurati.append({
+                "profilo": p, "messaggi_misurati": n,
+                "token_in_medi": round(float(tin)), "token_out_medi": round(float(tout)),
+                "token_cache_medi": round(float(tcache)),
+                "token_in_max": mxin, "token_out_max": mxout,
+                "costo_medio_eur": _euro(float(tin), float(tout), float(tcache)),
+            })
+        out["misura_vera_sui_messaggi_con_token_registrati"] = misurati or (
+            "nessun messaggio con token registrati ancora"
+        )
+        cur.execute(
+            """
+            SELECT role, COUNT(*), AVG(LENGTH(content)), COUNT(DISTINCT chat_id)
+            FROM messages WHERE token_in IS NULL GROUP BY role
+            """
+        )
+        storico = {r: {"messaggi": n, "caratteri_medi": round(float(c or 0)), "conversazioni": k}
+                   for r, n, c, k in cur.fetchall()}
+        cur.close()
+        conn.close()
+        fissi = _token_fissi_per_profilo("staff")
+        if isinstance(fissi, int) and storico.get("assistant"):
+            car_u = storico.get("user", {}).get("caratteri_medi", 0)
+            car_a = storico["assistant"]["caratteri_medi"]
+            # per messaggio: prompt fisso + domanda + fino a 8 messaggi di
+            # storia + risposta; gli strumenti (risultati JSON) NON sono nel DB
+            # e non si possono stimare da qui: la stima e' un MINIMO.
+            stima_in = fissi + car_u // 4 + 4 * (car_u + car_a) // 4
+            stima_out = car_a // 4
+            out["stima_sul_traffico_storico_senza_token"] = {
+                "nota": (
+                    "STIMA, non misura: 4 caratteri per token; include prompt "
+                    "fisso, domanda, storia (fino a 8 messaggi) e risposta; NON "
+                    "include i risultati degli strumenti (non registrati) ne' le "
+                    "chiamate multiple per turno, quindi e' un MINIMO."
+                ),
+                "messaggi_storici": storico["assistant"]["messaggi"],
+                "conversazioni_storiche": storico["assistant"]["conversazioni"],
+                "caratteri_medi_domanda": car_u,
+                "caratteri_medi_risposta": car_a,
+                "token_in_stimati_minimo": stima_in,
+                "token_out_stimati": stima_out,
+                "costo_minimo_stimato_eur": _euro(stima_in, stima_out),
+            }
+        else:
+            out["stima_sul_traffico_storico_senza_token"] = storico
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+    return out
+
+
 @app.get("/")
 def home():
     return {"status": "BambuUp Bot running"}
@@ -6597,7 +7017,8 @@ def webchat():
 
 
 @app.post("/chat")
-def chat(request: ChatRequest, x_bot_client_key: str = Header(default=None)):
+def chat(request: ChatRequest, http_request: Request,
+         x_bot_client_key: str = Header(default=None)):
     # FASE 3 delle chiavi client: il ruolo lo decide SOLO il server dalla
     # chiave; il 'role' del body non fa più fede in nessun caso. Chi non manda
     # la chiave, o ne manda una sconosciuta, viene rifiutato — ma prima si
@@ -6608,16 +7029,29 @@ def chat(request: ChatRequest, x_bot_client_key: str = Header(default=None)):
     if ruolo_da_chiave is None:
         rifiuta_chiave_client()
     role = ruolo_da_chiave
+    # Limite per i profili NON staff, PRIMA del DB e PRIMA di Anthropic: una
+    # richiesta rifiutata non costa niente. L'IP non viene salvato.
+    if role not in ROLES_INTERNI:
+        ip = ip_del_chiamante(http_request)
+        blocco = controlla_limite_clienti(ip)
+        if blocco:
+            print(f"[LIMITE] rifiutata profilo={role} ip_impronta={_impronta_ip(ip)} "
+                  f"stato={stato_limite_clienti()}")
+            return JSONResponse(
+                status_code=429,
+                content={"detail": blocco, "reply": blocco, "status": "limite"},
+                headers={"Retry-After": "300"},
+            )
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
         cur.execute(
             """
-            INSERT INTO messages (source, sender, chat_id, role, content)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO messages (source, sender, chat_id, role, content, profilo)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (request.source, request.sender, request.chat_id, "user", request.message),
+            (request.source, request.sender, request.chat_id, "user", request.message, role),
         )
 
         conn.commit()
@@ -6627,17 +7061,20 @@ def chat(request: ChatRequest, x_bot_client_key: str = Header(default=None)):
         # Routing via tool use: Haiku decide quale strumento chiamare e con
         # quali parametri (sostituisce la vecchia cascata di regex).
         # role seleziona modalità utente: deciso sopra, solo dalla chiave.
-        bot_reply = chat_with_tools(request.chat_id, request.message, role)
+        uso = {}
+        bot_reply = chat_with_tools(request.chat_id, request.message, role, uso)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
 
         cur.execute(
             """
-            INSERT INTO messages (source, sender, chat_id, role, content)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO messages (source, sender, chat_id, role, content, profilo,
+                                  token_in, token_out, token_cache_in)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (request.source, "BambuUp", request.chat_id, "assistant", bot_reply),
+            (request.source, "BambuUp", request.chat_id, "assistant", bot_reply, role,
+             uso.get("token_in"), uso.get("token_out"), uso.get("token_cache_in")),
         )
 
         conn.commit()
