@@ -6425,7 +6425,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
         for _ in range(4):  # cap iterazioni tool
             response = client.messages.create(
                 model=ANTHROPIC_MODEL,
-                max_tokens=1024,
+                max_tokens=2048,
                 system=system,
                 tools=active_tools,
                 messages=messages,
@@ -6459,7 +6459,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
         # che ha, senza annunciare ricerche.
         final = client.messages.create(
             model=ANTHROPIC_MODEL,
-            max_tokens=1024,
+            max_tokens=2048,
             system=system + (
                 "\n\nLE CHIAMATE AGLI STRUMENTI PER QUESTO TURNO SONO FINITE: rispondi "
                 "ORA all'utente con i dati che hai già ricevuto. NON annunciare altre "
@@ -6560,7 +6560,10 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # "build" e' il commit che Render sta servendo (RENDER_GIT_COMMIT): e' il
+    # discriminatore deterministico di ogni deploy, anche di quelli che non
+    # cambiano nessun endpoint (prompt, max_tokens).
+    return {"status": "ok", "build": os.getenv("RENDER_GIT_COMMIT")}
 
 
 @app.post("/feedback")
