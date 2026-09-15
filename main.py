@@ -6661,9 +6661,24 @@ def tetto_giornaliero_clienti() -> int:
         return _LIMITE_TETTO_DEFAULT
 
 
+# Misurato su Render il 15/09/2026: la catena X-Forwarded-For viene ACCODATA,
+# non sovrascritta. Chi manda "X-Forwarded-For: 203.0.113.5" fa arrivare
+# "203.0.113.5, <ip vero>, <Cloudflare>, <Render>": il PRIMO indirizzo lo
+# sceglie il client, e un limite fondato solo su quello si aggira cambiandolo
+# a ogni chiamata. Cloudflare (davanti a Render) imposta pero' header che il
+# client non puo' falsificare: si preferiscono quelli, e il primo indirizzo di
+# X-Forwarded-For resta la riserva quando mancano.
+_IP_HEADER_FIDATI = ("true-client-ip", "cf-connecting-ip", "x-real-ip")
+
+
 def ip_del_chiamante(request: Request) -> str:
-    """Il PRIMO indirizzo di X-Forwarded-For; senza header, l'IP della
-    connessione."""
+    """L'IP del cliente: prima gli header impostati dal proxy fidato
+    (true-client-ip, cf-connecting-ip, x-real-ip), poi il PRIMO indirizzo di
+    X-Forwarded-For, infine l'IP della connessione."""
+    for h in _IP_HEADER_FIDATI:
+        v = (request.headers.get(h) or "").strip()
+        if v:
+            return v.split(",")[0].strip()
     xff = request.headers.get("x-forwarded-for") or ""
     primo = xff.split(",")[0].strip() if xff else ""
     if primo:
@@ -6720,6 +6735,7 @@ def ip_visto(request: Request):
     salva niente."""
     return {
         "x_forwarded_for": request.headers.get("x-forwarded-for"),
+        "header_fidati": {h: request.headers.get(h) for h in _IP_HEADER_FIDATI},
         "ip_connessione": request.client.host if request.client else None,
         "ip_usato_dal_limitatore": ip_del_chiamante(request),
         "limite": stato_limite_clienti(),
