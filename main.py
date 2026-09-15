@@ -1291,6 +1291,7 @@ STILE E TONO
 - Qualche emoji occasionale va bene (😊 👍🏻) ma con parsimonia.
 - Non usare mai "Gentile", "Cordiali saluti" o formule da email con il team.
 - Non iniziare mai con "Certo!", "Ottima domanda!" — vai subito alla risposta.
+- IL TUO RAGIONAMENTO INTERNO NON ESCE MAI. All'utente arriva SOLO il risultato. Non scrivere MAI quali strumenti stai per chiamare, con quali parametri o ID, né come intendi cercare ("qui devo usare gli ID", "cerco direttamente per ID", "provo con un'altra query", "chiamo X con Y"). Se ti serve un'altra chiamata la FAI, senza annunciarla, e poi rispondi. Un messaggio che contiene un piano di ricerca e nessuna risposta è un errore grave: è già arrivato a schermo a un collega.
 - Se c'è un errore dillo chiaramente ma senza aggressività.
 
 STRUTTURA OPERATIVA
@@ -2044,7 +2045,24 @@ CHAT_TOOLS = [
             "sono due cose diverse e vanno dette con parole diverse; riprova con "
             "un'altra forma del nome prima di chiudere. (5) Etichetta ogni numero come "
             "'giacenza Fully'. Non è la pipeline di produzione btoweb e non è il sito: "
-            "non mescolare, non sommare, non confrontare."
+            "non mescolare, non sommare, non confrontare.\n"
+            "RICERCA PER TAGLIA SU TUTTI I MODELLI ('taglia' + 'query' = tipo di "
+            "prodotto): per 'quali kimoni sono in stock in A3L?', 'che modelli di "
+            "rashguard ci sono in XXL?', 'cosa abbiamo in M3?' chiama SUBITO con "
+            "query=tipo e taglia=taglia. NON chiedere 'quale modello?': l'utente li "
+            "vuole TUTTI, e lo strumento riconosce il tipo dalle sezioni "
+            "dell'anagrafica (un 'BJJ Gi STEALTH' è un kimono anche se il nome non lo "
+            "dice). Torna 'caso' con QUATTRO esiti da dire con parole diverse: "
+            "'disponibile' (elenca TUTTI i 'disponibili' con le libere di ognuno), "
+            "'taglia_non_disponibile_in_nessun_modello' (la taglia esiste ma zero "
+            "libere ovunque), 'taglia_inesistente_per_questo_prodotto' (nessun modello "
+            "ha quella taglia in anagrafica: di' quali taglie esistono), "
+            "'nessun_prodotto_con_quel_nome'. Riporta SEMPRE 'modelli_controllati', "
+            "'modelli_disponibili' e 'modelli_mostrati' e, se 'elenco_completo' è "
+            "false, di' che l'elenco è troncato: un elenco parziale presentato come "
+            "completo è VIETATO. 'righe_fully_fuori_anagrafica' sono righe con la "
+            "taglia letta dal nome Fully e non risolta: dichiarale a parte, non "
+            "ometterle. 'in stock' qui vuol dire libere > 0."
         ),
         "input_schema": {
             "type": "object",
@@ -2062,6 +2080,18 @@ CHAT_TOOLS = [
                     "description": (
                         "EAN/SKU esatto (13 cifre, es. '6154056316364'). Ha priorità su "
                         "'query'. Ometti se non stai cercando un EAN."
+                    ),
+                },
+                "taglia": {
+                    "type": "string",
+                    "description": (
+                        "TAGLIA, quando l'utente chiede quali modelli di un TIPO di "
+                        "prodotto sono disponibili in una taglia ('quali kimoni sono "
+                        "in stock in A3L?', 'tutti i modelli di rashguard in XXL'): "
+                        "scrivila come l'ha detta l'utente ('A3L', 'XXL', 'M3') e "
+                        "metti in 'query' SOLO il tipo di prodotto ('kimono', "
+                        "'rashguard', 'fightshort', 'rashguard female'). Ometti se "
+                        "l'utente non ha nominato una taglia."
                     ),
                 },
             },
@@ -2344,6 +2374,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre. NUMERO DI CARICO / REPLENISHMENT DA SOLO (es. "858314", "il carico 858314", "questo id è il replenishment di un ordine"): chiama tracciamento_fully con quel numero, SEMPRE, anche senza ordine e senza ASN. Se il numero è collegato a ordini custom torna la strada di kanokimonos.app; se NON lo è, lo strumento lo legge DIRETTAMENTE da Fully e torna il blocco 'carico_fully_diretto': riporta stato del carico ('stato_in_parole'), se il conteggio è chiuso o aperto ('conteggio_chiuso', 'chiuso_il'), le date, i totali di 'totali_calcolati_dallo_strumento' (attesi/buoni/danneggiati/mancanti, mai sommati fra loro), l'origine e gli 'altri_carichi_stessa_origine'. Corriere e tracking: Fully non li espone per i carichi in entrata, quindi riporta solo quello che c'è in 'asn_corrispondente'; se è assente di' che non risultano da nessuna fonte. Dichiara che il carico non risulta collegato a ordini custom. Se 'carico_fully_diretto' ha 'trovato': false, la frase è "non trovato su Fully" (mai "non ho accesso"); se ha 'error', Fully non è consultabile ora e non puoi né confermare né escludere. MAI rimandare l'utente a cercarsi il carico sul portale Fully: lo hai letto tu.
 - RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
 - GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). Decisione di Bambu del 10/09/2026: la giacenza di riferimento è SOLO quella di Fully, perché è l'unica sicuramente giusta; le giacenze del sito dovrebbero essere sincronizzate con Fully ma spesso non lo sono. Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori) e NON è il sito.
+  TIPO DI PRODOTTO + TAGLIA ("quali kimoni sono in stock in taglia A3L?", "tutti i modelli di rashguard disponibili in XXL", "cosa c'è in M3?"): chiama SUBITO giacenza_fully con 'query' = il tipo di prodotto e 'taglia' = la taglia. È VIETATO chiedere "quale modello?": l'utente vuole TUTTI i modelli e lo strumento li trova da solo. Chiedere è lecito solo se manca il TIPO di prodotto. Nella risposta: (1) dichiara quanti modelli hai controllato, quanti hanno pezzi liberi e quanti ne mostri ('modelli_controllati', 'modelli_disponibili', 'modelli_mostrati'), e se 'elenco_completo' è false di' che l'elenco è troncato: presentare un elenco parziale come completo è l'errore da non ripetere; (2) elenca TUTTI i 'disponibili' con le libere di ognuno ("in stock" = libere > 0); (3) usa parole DIVERSE per i quattro 'caso': "quella taglia non è disponibile in nessun modello" (esiste ma zero libere), "quella taglia non esiste per questo prodotto" (e di' quali esistono), "non ho trovato nessun prodotto con quel nome", oppure l'elenco; (4) se ci sono 'righe_fully_fuori_anagrafica', dichiarale a parte come righe con taglia letta dal nome Fully e non risolta, senza ometterle e senza fonderle con i modelli.
 - GIACENZA DEL SITO (giacenza_woocommerce, solo STAFF): si usa SOLO se l'utente chiede ESPLICITAMENTE cosa dice il SITO / woocommerce / kanokimonos.com ("quante ne vede il sito?", "cosa dice woocommerce?", "giacenza sul sito", "quanti sul sito?"). Per una domanda generica sulla giacenza NON chiamarlo: si usa giacenza_fully. Quando lo usi, dichiara SEMPRE che quel numero dovrebbe essere sincronizzato con Fully ma può essere disallineato, e che il dato buono è quello di Fully. Le due fonti NON si sommano, NON si confrontano come se una correggesse l'altra e NON si fondono mai in un numero solo: se nella stessa risposta compaiono entrambe, due blocchi separati, ognuno con il suo nome ("giacenza Fully" / "giacenza su woocommerce (kanokimonos.com)"). Se risponde 'trovato': false il prodotto non è stato trovato sul sito: non dire zero né esaurito.
 """
 
@@ -6353,7 +6384,7 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         if name == "giacenza_fully":
             return tool_giacenza_fully(
-                tool_input.get("query"), tool_input.get("sku")
+                tool_input.get("query"), tool_input.get("sku"), tool_input.get("taglia")
             )
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(
@@ -6420,11 +6451,21 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE) -
                 })
             messages.append({"role": "user", "content": tool_results})
 
-        # Superato il cap: ultima chiamata senza tool per forzare una risposta testuale
+        # Superato il cap: ultima chiamata senza tool per forzare una risposta
+        # testuale. Senza strumenti il modello tende a scrivere il piano della
+        # chiamata che avrebbe voluto fare ("cerco direttamente per ID ..."):
+        # quel piano e' arrivato a schermo a un collega il 09/09/2026. Qui gli
+        # si dice che le chiamate sono finite e che deve rispondere con i dati
+        # che ha, senza annunciare ricerche.
         final = client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=1024,
-            system=system,
+            system=system + (
+                "\n\nLE CHIAMATE AGLI STRUMENTI PER QUESTO TURNO SONO FINITE: rispondi "
+                "ORA all'utente con i dati che hai già ricevuto. NON annunciare altre "
+                "ricerche, NON scrivere piani di chiamata, nomi di strumenti, parametri "
+                "o ID. Se un dato manca, di' in una riga che non l'hai trovato."
+            ),
             messages=messages,
         )
         text_parts = [b.text for b in final.content if b.type == "text"]
@@ -7354,7 +7395,14 @@ _FULLY_TAGLIE_ORDINE = [
 # al massimo ogni _BTO_ANAGRAFICA_TTL secondi: risolvere 40 taglie con 40
 # chiamate 'sku=' sarebbe lento e inutile, l'anagrafica sono ~1850 righe.
 _BTO_ANAGRAFICA_TTL = 900
-_BTO_ANAGRAFICA_CACHE = {"letta_il": 0.0, "per_ean": None, "per_nome": None}
+_BTO_ANAGRAFICA_CACHE = {"letta_il": 0.0, "per_ean": None, "per_nome": None,
+                         "sezioni": None}
+# Le righe di intestazione dell'anagrafica (">>> KIMONO  (318 SKU) <<<") hanno
+# sku/ean/size vuoti e PARTIZIONANO la lista: tutto cio' che segue fino alla
+# prossima intestazione appartiene a quel TIPO di prodotto (verificato il
+# 15/09/2026: 21 sezioni, conteggi coerenti). E' l'unico posto in cui un
+# "BJJ Gi STEALTH Black" e' dichiarato un kimono: il nome non lo dice.
+_BTO_INTESTAZIONE_RE = re.compile(r"^\s*>>>\s*(.+?)\s*(\(\d+\s*SKU\))?\s*<<<\s*$")
 
 
 def _bto_anagrafica_indici():
@@ -7372,7 +7420,16 @@ def _bto_anagrafica_indici():
             return c["per_ean"], c["per_nome"], None
         return {}, {}, errore
     per_ean, per_nome = {}, {}
+    sezioni = []
+    corrente = None
     for r in rows:
+        m = _BTO_INTESTAZIONE_RE.match(str(r.get("product_name") or ""))
+        if m:
+            corrente = {"nome": m.group(1).strip(), "righe": []}
+            sezioni.append(corrente)
+            continue
+        if corrente is not None:
+            corrente["righe"].append(r)
         for k in ("ean", "sku"):
             v = str(r.get(k) or "").strip()
             if v and v not in per_ean:
@@ -7380,8 +7437,16 @@ def _bto_anagrafica_indici():
         nome = _wc_norm(r.get("product_name")).strip()
         if nome:
             per_nome.setdefault(nome, []).append(r)
-    c.update(letta_il=ora, per_ean=per_ean, per_nome=per_nome)
+    c.update(letta_il=ora, per_ean=per_ean, per_nome=per_nome, sezioni=sezioni)
     return per_ean, per_nome, None
+
+
+def _bto_anagrafica_sezioni() -> list:
+    """Le sezioni (tipo di prodotto -> righe) dell'anagrafica, dalla stessa
+    cache di _bto_anagrafica_indici. Lista vuota se l'anagrafica non e'
+    consultabile: chi chiama lo sa gia' dall'errore di _bto_anagrafica_indici."""
+    _bto_anagrafica_indici()
+    return _BTO_ANAGRAFICA_CACHE.get("sezioni") or []
 
 
 def _fully_num(v):
@@ -7620,7 +7685,363 @@ def _fully_gruppi_giacenza(righe_fully: list, righe_viste: list, per_ean: dict,
     return out
 
 
-def tool_giacenza_fully(query: str = None, sku: str = None) -> dict:
+# --- GIACENZA PER TAGLIA SU TUTTI I MODELLI ---------------------------------
+# Il 09 e il 10/09/2026 a "quali kimoni sono in stock in taglia A3L" il bot ha
+# chiesto tre volte "quale modello?" e poi ha risposto per tre modelli soli
+# presentandoli come l'elenco completo. La domanda vera e': dato un TIPO di
+# prodotto e una TAGLIA, quali modelli hanno pezzi liberi in quella taglia.
+# Cercare per NOME non basta: nell'anagrafica i kimoni si chiamano "BJJ Gi
+# STEALTH Black", "Light Competition Gi Kaze", senza la parola kimono, e su
+# Fully la parola "kimono" pesca solo i tre nomi generici. Il tipo si legge
+# dalle SEZIONI dell'anagrafica btoweb (">>> KIMONO <<<", ">>> RASHGUARD <<<",
+# ...), la taglia dall'anagrafica via EAN, i pezzi liberi da Fully per EAN.
+# "In stock" = free_qty > 0 (le libere), non i pezzi a magazzino.
+_FULLY_TAGLIA_MAX_MODELLI = 40
+# Parole dell'utente -> parola usata dalle sezioni dell'anagrafica.
+_FULLY_TAGLIA_SINONIMI = {
+    "gi": "kimono", "kimoni": "kimono", "kimonos": "kimono", "judogi": "kimono",
+    "short": "fightshort", "shorts": "fightshort", "fightshorts": "fightshort",
+    "pantaloncino": "fightshort", "pantaloncini": "fightshort",
+    "felpa": "hoodie", "felpe": "hoodie", "hoodies": "hoodie",
+    "cintura": "belt", "cinture": "belt", "belts": "belt",
+    "maglietta": "t-shirt", "magliette": "t-shirt", "tshirt": "t-shirt",
+    "tshirts": "t-shirt", "t-shirts": "t-shirt",
+    "zaino": "backpack", "zaini": "backpack", "backpacks": "backpack",
+    "asciugamano": "towel", "asciugamani": "towel", "towels": "towel",
+    "bambino": "kids", "bambini": "kids", "bimbo": "kids", "bimbi": "kids",
+    "kid": "kids", "junior": "kids", "ragazzi": "kids",
+    "donna": "female", "donne": "female", "femminile": "female",
+    "femminili": "female", "woman": "female", "women": "female",
+    "rash": "rashguard", "rashguards": "rashguard", "legging": "leggings",
+}
+_FULLY_TAGLIA_XRUN_RE = re.compile(r"^(Y)?(X{2,})(L|S)$")
+
+
+def _fully_norm_taglia(t) -> str:
+    """Forma canonica di una taglia per il confronto: maiuscola, senza spazi
+    ne' trattini, 'XXL' e '2XL' uguali, 'Y XL' e 'YXL' uguali."""
+    s = re.sub(r"[\s\-_.]+", "", str(t or "").upper())
+    m = _FULLY_TAGLIA_XRUN_RE.match(s)
+    if m:
+        s = f"{m.group(1) or ''}{len(m.group(2))}X{m.group(3)}"
+    return s
+
+
+def _fully_taglia_dal_nome(nome: str):
+    """La taglia scritta in coda a un nome Fully ('Kimonos 380 gsm - White A3L',
+    'RASHGUARD ... - XL', '... Y XL'), in forma canonica; None se in coda non
+    c'e' un token che somigli a una taglia."""
+    tok = re.split(r"[\s\-]+", str(nome or "").strip())
+    tok = [t for t in tok if t]
+    if not tok:
+        return None
+    for cand in ([tok[-1]], tok[-2:]):
+        s = _fully_norm_taglia(" ".join(cand))
+        if re.fullmatch(r"(Y?\d?X{0,3}[LSM]|\d?X[LS]|A\d[LS]?|M\d{1,3}|F\d[L]?|Y\d?X?[LSM]|\d{2,3}|\d{2}CM)", s):
+            return s
+    return None
+
+
+def _fully_taglia_token(q: str) -> list:
+    """Parole della query, minuscole, con i sinonimi applicati. Tiene anche le
+    parole corte ('gi'), che _tokenizza scarta."""
+    out = []
+    for t in _wc_norm(q).replace("_", " ").replace("/", " ").split():
+        t = t.strip(".,;:!?()\"'")
+        if len(t) < 2:
+            continue
+        out.append(_FULLY_TAGLIA_SINONIMI.get(t, t))
+    return out
+
+
+def _fully_taglia_stessa_parola(a: str, b: str) -> bool:
+    ra, rb = _radice(a), _radice(b)
+    return ra == rb or (len(ra) >= 4 and rb.startswith(ra)) or (len(rb) >= 4 and ra.startswith(rb))
+
+
+def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
+    """Modelli di un TIPO di prodotto con pezzi LIBERI in una TAGLIA. Tre
+    passi: (1) i modelli candidati, dalle sezioni dell'anagrafica (tipo) e dai
+    nomi (anagrafica e Fully); (2) gli EAN di quella taglia, dall'anagrafica;
+    (3) le libere di quegli EAN, da Fully. Tre esiti con parole diverse:
+    nessun prodotto con quel nome / la taglia non esiste per quel prodotto /
+    la taglia non e' libera in nessun modello. Le righe Fully fuori anagrafica
+    con quella taglia nel nome si contano A PARTE, mai in silenzio."""
+    tag = _fully_norm_taglia(taglia)
+    token = [t for t in _fully_taglia_token(q) if _fully_norm_taglia(t) != tag]
+    out = {
+        **base,
+        "tipo": "giacenza_fully_per_taglia",
+        "cercato": {"query": q, "taglia": taglia, "taglia_normalizzata": tag},
+        "definizione_in_stock": "pezzi LIBERI su Fully (free_qty) > 0, non i pezzi a magazzino",
+    }
+    if not tag:
+        out.update(trovato=False, caso="taglia_vuota",
+                   nota="La taglia e' vuota: richiama lo strumento con la taglia scritta dall'utente.")
+        return out
+    if not token:
+        out.update(trovato=False, caso="tipo_prodotto_mancante",
+                   nota=("Manca il TIPO di prodotto (kimono, rashguard, fightshort...): "
+                         "senza non si puo' cercare per taglia. Chiedilo, e' l'unica "
+                         "cosa che e' lecito chiedere; il MODELLO invece NON si chiede."))
+        return out
+
+    per_ean, per_nome, errore_anagrafica = _bto_anagrafica_indici()
+    if errore_anagrafica:
+        return {**out, "error": errore_canale("btoweb", f"per taglia: {errore_anagrafica}"),
+                "fonte": "btoweb",
+                "nota": ("Senza l'anagrafica btoweb le taglie non si risolvono e la "
+                         "ricerca per taglia NON e' possibile ora: dillo cosi', non "
+                         "dire che non ci sono modelli.")}
+    sezioni = _bto_anagrafica_sezioni()
+
+    # (1a) sezioni: ogni parola della query che combacia con una parola del
+    # nome della sezione e' "consumata" (il tipo); le parole residue devono
+    # stare nel nome del modello ('kimoni stealth' -> sezione KIMONO + nome
+    # con 'stealth'). Almeno una parola deve essere consumata.
+    candidati = {}      # nome normalizzato -> {"nome", "righe": [anagrafica], "sezioni": set}
+    sezioni_riconosciute = []
+
+    def aggiungi(r, sezione=None):
+        nome = str(r.get("product_name") or "").strip()
+        k = _wc_norm(nome).strip()
+        if not k:
+            return
+        v = candidati.setdefault(k, {"nome": nome, "righe": [], "sezioni": set(), "_ids": set()})
+        if id(r) not in v["_ids"]:
+            v["_ids"].add(id(r))
+            v["righe"].append(r)
+        if sezione:
+            v["sezioni"].add(sezione)
+
+    for s in sezioni:
+        parole_sez = [p for p in _wc_norm(s["nome"]).split() if p]
+        consumate = [t for t in token if any(_fully_taglia_stessa_parola(t, p) for p in parole_sez)]
+        if not consumate:
+            continue
+        residue = [t for t in token if t not in consumate]
+        prese = 0
+        for r in s["righe"]:
+            if residue and not _bto_match_radice(r.get("product_name"), residue):
+                continue
+            aggiungi(r, s["nome"])
+            prese += 1
+        if prese:
+            sezioni_riconosciute.append(s["nome"])
+    # (1b) nomi dell'anagrafica con TUTTE le parole (copre 'SPECIAL EDITION' e
+    # i modelli chiamati col nome e basta).
+    for s in sezioni:
+        for r in s["righe"]:
+            if _bto_match_radice(r.get("product_name"), token):
+                aggiungi(r, s["nome"])
+    # (1c) Fully per nome: le righe risolte dall'anagrafica entrano fra i
+    # candidati; quelle NON risolte si contano a parte, per taglia nel nome.
+    perno = max(token, key=len)
+    perno_fully = _radice(perno) if len(perno) >= 5 else perno
+    righe_fully_nome, err = _fully_prodotti({"name[ilike]": perno_fully})
+    if err:
+        righe_fully_nome = None
+        out["avvertenza_fully_per_nome"] = (
+            "La ricerca per NOME su Fully non ha risposto: i modelli vengono dalla "
+            "sola anagrafica btoweb e le righe Fully fuori anagrafica non sono "
+            "state contate."
+        )
+    fuori_anagrafica_taglia = []
+    fuori_anagrafica_ignota = 0
+    for p in righe_fully_nome or []:
+        ean = str(p.get("default_code") or "").strip()
+        anag = per_ean.get(ean) or per_ean.get(str(p.get("barcode") or "").strip())
+        if anag is not None:
+            if _bto_match_radice(anag.get("product_name"), token) or \
+                    _bto_match_radice(p.get("name"), token):
+                aggiungi(anag)
+            continue
+        if not _bto_match_radice(p.get("name"), token):
+            continue
+        t_nome = _fully_taglia_dal_nome(p.get("name"))
+        if t_nome is None:
+            fuori_anagrafica_ignota += 1
+        elif t_nome == tag:
+            fuori_anagrafica_taglia.append({
+                "nome_in_fully": p.get("name"), "ean": ean or None,
+                "taglia_letta_dal_nome_fully": t_nome,
+                "libere": _fully_num(p.get("free_qty")),
+                "in_magazzino": _fully_num(p.get("qty_available")),
+            })
+
+    out["tipo_prodotto_riconosciuto"] = sezioni_riconosciute
+    if not candidati and not fuori_anagrafica_taglia and not fuori_anagrafica_ignota:
+        out.update(
+            trovato=False, caso="nessun_prodotto_con_quel_nome",
+            caso_in_parole=(
+                f"NESSUN prodotto corrisponde a '{q}': ne' come tipo di prodotto "
+                "(sezioni dell'anagrafica btoweb) ne' per nome, ne' in anagrafica ne' "
+                "in Fully. Di' 'non ho trovato nessun prodotto con quel nome': NON "
+                "dire che la taglia non c'e'. Riprova con un'altra forma del nome "
+                "prima di chiudere."
+            ),
+            tipi_di_prodotto_esistenti=[s["nome"] for s in sezioni],
+        )
+        return out
+
+    # (2) EAN della taglia chiesta, per modello; taglie esistenti in anagrafica.
+    taglie_esistenti = set()
+    modelli_con_taglia = {}     # nome norm -> [righe anagrafica di quella taglia]
+    modelli_senza_taglia = []
+    for k, v in candidati.items():
+        righe_t = []
+        for r in v["righe"]:
+            tr = _fully_norm_taglia(r.get("size"))
+            if tr:
+                taglie_esistenti.add(str(r.get("size")).strip())
+            if tr and tr == tag:
+                righe_t.append(r)
+        if righe_t:
+            modelli_con_taglia[k] = righe_t
+        else:
+            modelli_senza_taglia.append(v["nome"])
+    out.update(
+        modelli_controllati=len(candidati),
+        modelli_con_questa_taglia_in_anagrafica=len(modelli_con_taglia),
+        modelli_senza_questa_taglia_in_anagrafica=len(modelli_senza_taglia),
+        taglie_esistenti_per_questi_modelli=sorted(taglie_esistenti, key=_fully_chiave_taglia),
+    )
+    if not modelli_con_taglia and not fuori_anagrafica_taglia:
+        out.update(
+            trovato=True, caso="taglia_inesistente_per_questo_prodotto",
+            caso_in_parole=(
+                f"Ho controllato {len(candidati)} modelli di '{q}' e NESSUNO ha la "
+                f"taglia '{taglia}' in anagrafica: quella taglia NON ESISTE per questo "
+                "tipo di prodotto. Le taglie che esistono sono in "
+                "'taglie_esistenti_per_questi_modelli'. NON dire 'non disponibile' o "
+                "'esaurita': non esiste proprio."
+            ),
+        )
+        if fuori_anagrafica_ignota:
+            out["righe_fully_fuori_anagrafica_taglia_ignota"] = fuori_anagrafica_ignota
+        return out
+
+    # (3) libere da Fully, per EAN, a lotti.
+    codici = {}
+    for k, righe_t in modelli_con_taglia.items():
+        for r in righe_t:
+            for c in {str(r.get(x) or "").strip() for x in ("ean", "sku")} - {""}:
+                codici[c] = (k, r)
+    trovate = {}
+    lista = sorted(codici)
+    for i in range(0, len(lista), 200):
+        lotto = lista[i:i + 200]
+        righe, err = _fully_prodotti({"default_code[in]": ",".join(lotto)})
+        if err:
+            return {**out, "error": err, "fonte": "fully"}
+        for p in righe:
+            trovate[str(p.get("default_code") or "").strip()] = p
+    restanti = [c for c in lista if c not in trovate]
+    for i in range(0, len(restanti), 200):
+        righe, err = _fully_prodotti({"barcode[in]": ",".join(restanti[i:i + 200])})
+        if err:
+            break
+        for p in righe:
+            trovate[str(p.get("barcode") or "").strip()] = p
+
+    disponibili, esauriti, senza_riga = [], [], []
+    for k, righe_t in modelli_con_taglia.items():
+        nome = candidati[k]["nome"]
+        voci = []
+        for r in righe_t:
+            p = None
+            for c in {str(r.get(x) or "").strip() for x in ("ean", "sku")} - {""}:
+                if c in trovate:
+                    p = trovate[c]
+                    break
+            if p is None:
+                continue
+            voci.append({
+                "modello": nome,
+                "colore": r.get("colour"),
+                "taglia": str(r.get("size")).strip(),
+                "ean": str(p.get("default_code") or "").strip() or None,
+                "libere": _fully_num(p.get("free_qty")),
+                "in_magazzino": _fully_num(p.get("qty_available")),
+                "in_arrivo": _fully_num(p.get("incoming_qty")),
+                "in_uscita": _fully_num(p.get("outgoing_qty")),
+                "nome_in_fully": p.get("name"),
+            })
+        if not voci:
+            senza_riga.append(nome)
+            continue
+        for v in voci:
+            if isinstance(v["libere"], (int, float)) and v["libere"] > 0:
+                disponibili.append(v)
+            else:
+                esauriti.append({"modello": nome, "ean": v["ean"], "libere": v["libere"],
+                                 "in_magazzino": v["in_magazzino"], "in_arrivo": v["in_arrivo"]})
+    disponibili.sort(key=lambda v: (-(v["libere"] or 0), v["modello"]))
+    n_disp = len({v["modello"] for v in disponibili})
+    mostrati = disponibili[:_FULLY_TAGLIA_MAX_MODELLI]
+    out.update(
+        trovato=True,
+        modelli_disponibili=n_disp,
+        modelli_esauriti_zero_libere=len({e["modello"] for e in esauriti}),
+        modelli_senza_riga_in_fully=len(senza_riga),
+        disponibili=mostrati,
+        modelli_mostrati=len({v["modello"] for v in mostrati}),
+        elenco_completo=len(mostrati) == len(disponibili),
+        esauriti_zero_libere=esauriti[:_FULLY_TAGLIA_MAX_MODELLI],
+        senza_riga_in_fully=senza_riga[:_FULLY_TAGLIA_MAX_MODELLI],
+        nota_senza_riga=(
+            "'senza_riga_in_fully' = la taglia esiste in anagrafica ma Fully NON ha "
+            "nessuna riga con quell'EAN: NON e' giacenza zero, e' 'nessuna riga in "
+            "Fully', e va detto con queste parole."
+        ),
+        nota_completezza=(
+            f"Hai controllato {len(candidati)} modelli; {len(modelli_con_taglia)} "
+            f"hanno la taglia '{taglia}' in anagrafica; {n_disp} hanno pezzi liberi; "
+            f"ne mostri {len({v['modello'] for v in mostrati})}. DICHIARA questi "
+            "numeri nella risposta. "
+            + ("L'elenco dei disponibili e' COMPLETO." if len(mostrati) == len(disponibili)
+               else f"L'elenco e' TRONCATO: mancano {len(disponibili) - len(mostrati)} "
+                    "righe disponibili, dillo esplicitamente.")
+        ),
+    )
+    if fuori_anagrafica_taglia or fuori_anagrafica_ignota:
+        out["righe_fully_fuori_anagrafica"] = {
+            "con_questa_taglia_nel_nome": fuori_anagrafica_taglia[:_FULLY_TAGLIA_MAX_MODELLI],
+            "quante_con_questa_taglia_nel_nome": len(fuori_anagrafica_taglia),
+            "taglia_ignota": fuori_anagrafica_ignota,
+            "nota": (
+                "Righe Fully che corrispondono al nome ma il cui EAN NON e' "
+                "nell'anagrafica btoweb: la taglia NON e' risolta, e' solo LETTA dal "
+                "nome Fully. Contale A PARTE e dichiarale come tali, non fonderle "
+                "con i modelli sopra e non ometterle."
+            ),
+        }
+    if not disponibili:
+        out.update(
+            caso="taglia_non_disponibile_in_nessun_modello",
+            caso_in_parole=(
+                f"La taglia '{taglia}' esiste per {len(modelli_con_taglia)} modelli di "
+                f"'{q}' ma NESSUNO ha pezzi liberi su Fully adesso "
+                f"({len({e['modello'] for e in esauriti})} con zero libere, "
+                f"{len(senza_riga)} senza riga in Fully). Di' 'non disponibile in "
+                "nessun modello', che e' diverso da 'la taglia non esiste' e da 'non "
+                "ho trovato il prodotto'."
+            ),
+        )
+    else:
+        out.update(
+            caso="disponibile",
+            caso_in_parole=(
+                f"{n_disp} modelli di '{q}' hanno pezzi LIBERI in taglia '{taglia}' "
+                "su Fully: elencali TUTTI con le libere di ognuno, poi dichiara quanti "
+                "modelli hai controllato e quanti sono esauriti o senza riga."
+            ),
+        )
+    return out
+
+
+def tool_giacenza_fully(query: str = None, sku: str = None,
+                        taglia: str = None) -> dict:
     """Giacenza di magazzino da Fully (solo staff, SOLO produzione, SOLO GET):
     per NOME (name[ilike]) o per EAN/SKU (default_code), una riga per taglia
     con la taglia risolta dall'anagrafica btoweb e i quattro numeri di Fully
@@ -7628,12 +8049,18 @@ def tool_giacenza_fully(query: str = None, sku: str = None) -> dict:
     campo."""
     q = (query or "").strip()
     sku_clean = (sku or "").strip()
+    taglia_clean = (taglia or "").strip()
     base = {
         "tipo": "giacenza_fully",
         "fonte": "Fully (api.fully.si, produzione)",
         "etichetta_obbligatoria": _FULLY_ETICHETTA,
         "cercato": {"query": q or None, "sku": sku_clean or None},
     }
+    if taglia_clean and not sku_clean:
+        # Tipo di prodotto + taglia: quali modelli hanno pezzi liberi in quella
+        # taglia. Strada a parte: qui l'elenco deve essere COMPLETO sui modelli,
+        # non limitato ai primi gruppi dettagliati.
+        return _fully_giacenza_per_taglia(q, taglia_clean, base)
     if not q and not sku_clean:
         return {
             **base, "trovato": False,
@@ -8056,13 +8483,13 @@ def fully_carico(numero: str):
 
 
 @app.get("/fully-giacenza", dependencies=SOLO_ADMIN)
-def fully_giacenza(query: str = None, sku: str = None):
+def fully_giacenza(query: str = None, sku: str = None, taglia: str = None):
     """Sonda deterministica sulla giacenza Fully: chiama la STESSA
     tool_giacenza_fully del bot, senza passare dal modello. Serve a vedere il
     payload esatto che il modello riceve e a verificare un deploy senza
     spendere una chiamata al modello. SOLO GET verso Fully, SOLO produzione."""
     try:
-        return tool_giacenza_fully(query, sku)
+        return tool_giacenza_fully(query, sku, taglia)
     except Exception as e:
         return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
 
