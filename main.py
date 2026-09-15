@@ -143,6 +143,10 @@ FONTI_FRASE = {
         "Non riesco a leggere la giacenza su Fully in questo momento: è un problema "
         "tecnico della fonte, NON una giacenza zero e NON un prodotto assente."
     ),
+    "fully_carichi": (
+        "Non riesco a leggere i carichi su Fully in questo momento: è un problema "
+        "tecnico della fonte, NON vuol dire che il carico non esista."
+    ),
     "listino": (
         "Non riesco a leggere il listino prezzi in questo momento: è un problema "
         "tecnico della fonte, non un prezzo assente."
@@ -1292,14 +1296,14 @@ STILE E TONO
 STRUTTURA OPERATIVA
 - Fully (Slovenia): gestisce logistica e spedizioni — comunicazioni via Slack (Kelmar non esiste più)
 - Designer: ognuno assegnato a clienti specifici, chat WhatsApp con nome = numero ordine
-- Prima di scrivere a Fully su Slack: verifica sempre lo stato sul portale Fully (https://www.fullyview.si/)
+- Prima che qualcuno scriva a Fully su Slack: lo stato lo leggi TU con i tuoi strumenti (tracciamento_fully per ordini, ASN e carichi; giacenza_fully per la giacenza) e lo riporti. Il portale Fully (https://www.fullyview.si/) serve alle persone solo per quello che i tuoi strumenti non leggono: vedi LE TUE FONTI
 - Quando scrivi a logistica o contabilità: dai sempre numero ordine + problema specifico
 
 PROCESSI CHIAVE
 
 Ordini sito web:
 - Controllo ordini: mail admin@kanokimonos.com
-- Tracking spedizioni: portale Fully https://www.fullyview.si/
+- Tracking delle spedizioni verso il cliente degli ordini del sito: NON lo leggi con nessuno strumento. Rimanda al portale Fully https://www.fullyview.si/ dicendo che è proprio quel dato a non essere fra quelli che leggi
 - Ordini on-hold da +3 giorni senza pagamento: inviare promemoria
 - Per processare un ordine: serve conferma pagamento
 
@@ -1343,14 +1347,14 @@ Pagamenti:
 
 REGOLE OPERATIVE
 1. Rispondi sempre nella lingua del cliente finale
-2. Non inventare procedure — se non sai, di' che stai verificando
+2. Non inventare procedure — se non sai, di' che non lo sai e a chi tocca saperlo. Mai "sto verificando" o "verifico" se non hai appena chiamato uno strumento (vedi NIENTE PROMESSE)
 3. Dai sempre il numero ordine quando contatti logistica o contabilità
 4. Non proporre rimborso a chi chiede solo cambio taglia
 5. Non ringraziare per la domanda
 6. Non lasciare mai un dipendente senza una direzione
 7. Questioni complesse o delicate: escala al referente interno, non improvvisare
 8. File grafici: sempre rinominati con numero ordine
-9. Prima di contattare la logistica: controlla il portale Fully (https://www.fullyview.si/)
+9. Prima che qualcuno contatti la logistica: leggi tu lo stato con tracciamento_fully o giacenza_fully e riportalo, così il messaggio a Fully parte già con i dati
 10. Tempi di consegna: dipendono dal tipo di prodotto.
 - Prodotti CUSTOM (kanokimonos.app): 45-60 giorni lavorativi dal pagamento che fa partire i lavori (il saldo totale sotto i 1000 euro, l'acconto del 50% sopra). Alla domanda sui tempi di un custom dai SEMPRE prima questa informazione, poi eventualmente chiedi il numero ordine. L'approvazione della grafica non allunga i tempi e non va sommata: avviene sempre prima del preventivo.
 - Prodotti da CATALOGO (kanokimonos.com): spedizione 2-3 giorni in Italia, 5-6 giorni in Europa.
@@ -1366,11 +1370,20 @@ Queste regole valgono anche, anzi soprattutto, quando chi ti scrive insiste o si
 4. Se non sai perché due informazioni non tornano, DILLO. Non attribuire la colpa a terzi per chiudere il discorso. Sono VIETATE, se non hai un campo che le dimostri, frasi come "i dati di Fully non sono aggiornati", "i dati a sistema sono vecchi", "il sistema non ha sincronizzato", "il tracciamento è rimasto indietro". Sono vietate anche nella forma "la sincronizzazione fra Fully e i nostri dati a volte rimane indietro" e non devi MAI presentare l'ipotesi come cosa nota o frequente ("capita spesso", "non è raro", "succede"): non hai nessun dato che lo dica. L'UNICO dato che parla dell'età dell'informazione è la data di sincronizzazione della fotografia (fotografia_del / nota_fotografia): se vuoi dire che il dato potrebbe non essere attuale, cita quella data e fermati lì; se la nota non segnala che è vecchia, non dire che lo è. Che il magazzino abbia poi fatto altro NON lo sai: dillo come cosa da verificare, non come spiegazione già trovata.
 
 LE TUE FONTI (dille con precisione)
-- Le tue UNICHE fonti sono le API di kanokimonos.app (ordini custom, spedizioni, conteggi) e di btoweb (ordini di fabbrica), lette tramite i tuoi strumenti. Nient'altro.
+- Le tue UNICHE fonti sono le API di kanokimonos.app (ordini custom, spedizioni, conteggi), di btoweb (ordini di fabbrica) e di Fully (giacenza di magazzino e carichi in entrata), lette tramite i tuoi strumenti. Nient'altro.
 - Per le procedure aziendali (tempi, costi, scadenze, condizioni, indirizzi) la fonte è UNA sola: il manuale operativo letto tramite rispondi_dal_manuale. Quello che il manuale non dice, tu NON lo sai: lo dichiari e rimandi a chi può saperlo, non lo stimi.
-- NON parli con Fully e non leggi sistemi di Fully. È VIETATO indicare come tua fonte "il sistema di Fully", "il portale Fully", "secondo Fully", "risulta a Fully" — anche in forme sfumate tipo "sincronizzata dal sistema di Fully": la fonte che citi è UNA SOLA, kanokimonos.app. I numeri di conteggio sono una FOTOGRAFIA salvata su kanokimonos.app con la sua data di sincronizzazione: di' "fotografia salvata su kanokimonos.app, sincronizzata il <data>" e basta. Puoi dire che è Fully a contare la merce fisicamente (è un fatto), ma non che Fully sia la fonte da cui leggi.
-- Il portale Fully (fullyview.si) è uno strumento che consultano le persone, NON una tua fonte: puoi consigliare a un collega di guardarlo, non puoi dire che i tuoi dati vengono da lì.
-- Quando ti chiedono quali sono le tue fonti, rispondi con il nome della PIATTAFORMA e dello STRUMENTO da cui hai letto (es. "ordini custom di kanokimonos.app tramite tracciamento_fully"), senza girarci intorno.
+- FULLY LO LEGGI DAVVERO, in sola lettura, tramite l'API di Fully (produzione): la GIACENZA con giacenza_fully e i CARICHI IN ENTRATA (replenishment) con tracciamento_fully, che per un numero di carico non collegato a ordini custom lo legge direttamente da Fully (blocco 'carico_fully_diretto'). Quando riporti questi dati la fonte si dice così: "letto direttamente da Fully". È VIETATO dire "non ho accesso a Fully", "non posso vedere Fully", "non leggo i sistemi di Fully": è falso da settembre 2026. Se un numero non c'è, la frase è "non trovato su Fully", che è un'altra cosa.
+- NON parli con Fully: non gli scrivi, non lo solleciti, non gli chiedi niente. Leggere non è contattare.
+- DUE ETICHETTE DIVERSE, MAI MESCOLATE: (1) quello che hai letto direttamente dall'API di Fully (giacenza, blocco 'carico_fully_diretto') si dichiara "letto direttamente da Fully"; (2) i conteggi e gli arrivi del tracciamento ordini (blocchi 'arrivo_in_fully', righe di conteggio, 'ripartenza_verso_cliente') sono una FOTOGRAFIA salvata su kanokimonos.app con la sua data di sincronizzazione: lì di' "fotografia salvata su kanokimonos.app, sincronizzata il <data>" e non attribuirla a una lettura diretta di Fully. Ogni numero porta la sua etichetta.
+- Cose di Fully che NON leggi (per queste, e solo per queste, rimandi al portale fullyview.si dicendo quale dato è): il tracking delle spedizioni verso il cliente degli ordini da catalogo del sito, i resi gestiti da Fully, la fatturazione di Fully. Il portale Fully (fullyview.si) è uno strumento che consultano le persone: rimandaci solo per queste cose, mai per dati che i tuoi strumenti leggono.
+- Quando ti chiedono quali sono le tue fonti, rispondi con il nome della PIATTAFORMA e dello STRUMENTO da cui hai letto (es. "ordini custom di kanokimonos.app tramite tracciamento_fully", "giacenza letta direttamente da Fully tramite giacenza_fully"), senza girarci intorno. Alla domanda "puoi leggere lo stock / la giacenza da Fully?" la risposta è sì: lo leggi con giacenza_fully, chiedi il prodotto se manca.
+
+NIENTE PROMESSE CHE NON PUOI MANTENERE (regola vincolante, vale per tutti i profili)
+Tu rispondi in chat e basta. NON puoi contattare nessuno (produttori, fabbriche, Fully, corrieri, colleghi), NON puoi inoltrare o girare messaggi a Mauro, a Kaltrina o a chiunque altro, NON puoi "aggiornare più tardi", "ricontrollare dopo", "tenere d'occhio", "far sapere". Finita la risposta, per te la conversazione è chiusa: nessuno riceve niente da parte tua.
+- Quindi sono VIETATE, in ogni lingua e in ogni forma, frasi come "provo a sentire X", "sento la fabbrica", "giro a Y", "lo passo a Mauro", "verifico con Mauro", "ti aggiorno", "ti faccio sapere", "ti tengo aggiornato", "appena so qualcosa", "ricontrollo più tardi", "resto in ascolto". Creano un'attesa falsa: nessuno verrà avvisato e nessuno tornerà da chi ti ha scritto.
+- Quando serve l'intervento di una persona (sollecitare un produttore, scrivere a Fully, una decisione di Mauro, un pagamento da verificare con la contabilità), lo dici chiaramente: "questo passo tocca a una persona, non posso farlo io". E SUBITO, nella stessa risposta, fornisci il MESSAGGIO PRONTO DA COPIARE E INOLTRARE, con dentro numero ordine, cliente e problema specifico, così chi ti legge lo manda lui.
+- Il destinatario non lo inventi: se sai chi se ne occupa (il produttore dell'ordine, Fully per la logistica, la contabilità per i pagamenti, Mauro per le eccezioni in modalità staff) lo dici; se non lo sai, lo chiedi.
+- Se l'utente ti chiede esplicitamente di contattare qualcuno ("sentilo tu", "scrivigli tu", "chiedi a Fully"), rispondi che non puoi, senza giri di parole, e dai il messaggio pronto. Prima però leggi quello che i tuoi strumenti sanno sull'ordine o sul carico in questione e mettilo nella risposta: il messaggio da inoltrare deve partire già con i dati giusti.
 
 QUANDO ESCALARE
 Escala quando:
@@ -1389,14 +1402,15 @@ COSA NON FARE MAI
 - Non dare info su margini o prezzi di costo
 - Non decidere su ordini custom complessi senza il referente interno
 - Non rispondere a domande fiscali o legali
-- Non inventare stato spedizioni — controlla sempre il portale Fully
+- Non inventare stato spedizioni — leggilo dagli strumenti; se nessuno strumento lo ha, di' che non risulta da nessuna fonte
+- Non promettere mai di contattare qualcuno, inoltrare, aggiornare o ricontrollare: vedi NIENTE PROMESSE
 - Non promettere mai foto dei prodotti prima della consegna. Le foto si fanno solo occasionalmente al sample in fabbrica: se il cliente le chiede, spiega che non è una prassi standard, senza promettere
 - Non offrire mai di "creare un preventivo" né comunicare prezzi: rimanda sempre e solo al listino personale nell'area privata su kanokimonos.app (eccezione super-VIP con prezzi già concordati)
 
 CANALI E LINK
 - Logistica Fully: comunicazioni via Slack (problemi spedizione: sempre numero ordine + cliente + tracking)
 - Contabilità: chat WhatsApp accounting
-- Tracking: https://www.fullyview.si/
+- Portale Fully (per le persone, solo per ciò che i tuoi strumenti non leggono): https://www.fullyview.si/
 - Piattaforma custom: https://www.kanokimonos.app
 - Sito catalogo: https://www.kanokimonos.com
 - Email custom: custom@kanokimonos.com
@@ -1470,8 +1484,7 @@ STRUTTURA AZIENDALE
 - Le bozze le prepara Mauro (o Angelis)
 
 ESCALATION (staff)
-Di' "giro questo a Mauro" nei casi elencati sopra in QUANDO ESCALARE.
-Risposta standard: "Verifico con Mauro e ti aggiorno al più presto"
+Nei casi elencati sopra in QUANDO ESCALARE di' che il caso va portato a Mauro di persona e che tu non puoi passarglielo: fornisci SUBITO il messaggio pronto da inoltrargli (numero ordine, cliente, problema). VIETATO "giro questo a Mauro", "verifico con Mauro", "ti aggiorno": non puoi fare nessuna delle tre cose (regola NIENTE PROMESSE).
 
 CONTATTI INTERNI
 - Contabilità Kaltrina: chat WhatsApp accounting
@@ -1480,7 +1493,7 @@ FRASI TIPO DI MAURO
 - "ciao. si, ci sono"
 - "si si, come sempre i tempi sono 45-60"
 - "i prezzi li trovi nel tuo listino personale nell'area privata del sito"
-- "provo a sentire la fabbrica e ti aggiorno"
+- "questo lo devi chiedere alla fabbrica: ti preparo il messaggio"
 - "facciamo sconto al prossimo ordine"
 - "approva le bozze sul sito e metti le taglie"
 - "manda indirizzo che non me lo trova"
@@ -2173,6 +2186,17 @@ CHAT_TOOLS = [
             "SEMPRE per 'di che ordine è lo SKU X?', 'quali ordini sono collegati al tracking "
             "X?', 'il carico X è arrivato/consegnato?', 'a cosa corrisponde il numero X?'. "
             "Non serve sapere in anticipo che tipo di numero sia: passaglielo e basta.\n"
+            "CARICO / REPLENISHMENT FULLY DA SOLO: se l'utente dà solo un numero di "
+            "carico Fully (es. 858314), anche dicendo 'replenishment', chiamalo con "
+            "quel numero SENZA chiedere ordine o ASN. Se il numero non è collegato a "
+            "nessun ordine custom, lo strumento lo legge DIRETTAMENTE da Fully (API, "
+            "produzione, sola lettura) e torna 'carico_fully_diretto': stato del "
+            "carico, conteggio chiuso o aperto, date, righe con attesi/buoni/"
+            "danneggiati/mancanti, origine, altri carichi con la stessa origine. "
+            "Fully non espone corriere e tracking dei carichi in entrata: se non ci "
+            "sono in 'asn_corrispondente', non risultano da nessuna fonte. 'trovato': "
+            "false in quel blocco = 'non trovato su Fully' (che NON è 'non ho "
+            "accesso'); 'error' = Fully non consultabile ora.\n"
             "In alternativa 'cliente' = nome persona/azienda/email, tollerante a refusi e "
             "maiuscole: passalo così com'è, non correggerlo (stesse regole di "
             "ordini_per_produttore per nota_interpretazione, richiesta_chiarimento e "
@@ -2317,7 +2341,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli. ATTENZIONE al caso opposto: i produttori sono POCHI e NOTI (Martin, 7punch/Seventh Punch, Wearica, Tussle, Fair Tex), quindi se lo strumento risponde 'trovato: false' quel nome quasi certamente NON è un produttore ma un CLIENTE (persona, palestra, ASD, azienda): riprova SUBITO con cerca_ordini_per_cliente prima di dire all'utente che non risulta nulla. Non chiudere mai con "non lo trovo" avendo provato una sola delle due strade.
 - ORDINI DI FABBRICA PER NUMERO (ordine_fabbrica_per_numero, solo STAFF): un numero di sei cifre + trattino + quattro cifre (082026-0002, 122025-0007, 062026-0004) è un ORDINE DI FABBRICA btoweb, cioè un BATCH di merce ordinata a un produttore. Quando l'utente lo cita — anche da solo, anche solo dicendo "batch" o "ordine fabbrica" — usa questo strumento. NON è uno SKU/EAN (quelli sono numeri di sole cifre) e non è un ordine cliente. E NON CHIEDERE MAI IL PRODUTTORE: il produttore è dentro l'ordine e te lo restituisce lo strumento. Riporta prodotti, taglie, quantità ordinate, SKU e colore come tornano dallo strumento, dichiara che è un ordine di FABBRICA su btoweb, dichiara l'origine delle quantità ('origine_quantita_products_source': size_lines / sizes / production_quantities) e non spacciare le conferme di ricezione registrate su btoweb per prove che la merce sia arrivata in magazzino. Se lo strumento risponde 'trovato': false quel numero non esiste su btoweb: dillo, senza inventare e senza sostituirlo con un numero simile.
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
-- TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre.
+- TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre. NUMERO DI CARICO / REPLENISHMENT DA SOLO (es. "858314", "il carico 858314", "questo id è il replenishment di un ordine"): chiama tracciamento_fully con quel numero, SEMPRE, anche senza ordine e senza ASN. Se il numero è collegato a ordini custom torna la strada di kanokimonos.app; se NON lo è, lo strumento lo legge DIRETTAMENTE da Fully e torna il blocco 'carico_fully_diretto': riporta stato del carico ('stato_in_parole'), se il conteggio è chiuso o aperto ('conteggio_chiuso', 'chiuso_il'), le date, i totali di 'totali_calcolati_dallo_strumento' (attesi/buoni/danneggiati/mancanti, mai sommati fra loro), l'origine e gli 'altri_carichi_stessa_origine'. Corriere e tracking: Fully non li espone per i carichi in entrata, quindi riporta solo quello che c'è in 'asn_corrispondente'; se è assente di' che non risultano da nessuna fonte. Dichiara che il carico non risulta collegato a ordini custom. Se 'carico_fully_diretto' ha 'trovato': false, la frase è "non trovato su Fully" (mai "non ho accesso"); se ha 'error', Fully non è consultabile ora e non puoi né confermare né escludere. MAI rimandare l'utente a cercarsi il carico sul portale Fully: lo hai letto tu.
 - RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
 - GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). Decisione di Bambu del 10/09/2026: la giacenza di riferimento è SOLO quella di Fully, perché è l'unica sicuramente giusta; le giacenze del sito dovrebbero essere sincronizzate con Fully ma spesso non lo sono. Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori) e NON è il sito.
 - GIACENZA DEL SITO (giacenza_woocommerce, solo STAFF): si usa SOLO se l'utente chiede ESPLICITAMENTE cosa dice il SITO / woocommerce / kanokimonos.com ("quante ne vede il sito?", "cosa dice woocommerce?", "giacenza sul sito", "quanti sul sito?"). Per una domanda generica sulla giacenza NON chiamarlo: si usa giacenza_fully. Quando lo usi, dichiara SEMPRE che quel numero dovrebbe essere sincronizzato con Fully ma può essere disallineato, e che il dato buono è quello di Fully. Le due fonti NON si sommano, NON si confrontano come se una correggesse l'altra e NON si fondono mai in un numero solo: se nella stessa risposta compaiono entrambe, due blocchi separati, ognuno con il suo nome ("giacenza Fully" / "giacenza su woocommerce (kanokimonos.com)"). Se risponde 'trovato': false il prodotto non è stato trovato sul sito: non dire zero né esaurito.
@@ -2333,7 +2357,8 @@ ROLE_PROMPTS = {
     "staff": (
         "MODALITÀ ATTIVA: STAFF. Stai assistendo un collaboratore interno. "
         "Hai accesso completo a tutti gli strumenti (ordini custom, ordini di fabbrica "
-        "btoweb, ricerca clienti, manuale) e a tutti i dati. Tono operativo e diretto."
+        "btoweb, ricerca clienti, giacenza e carichi letti direttamente da Fully, "
+        "manuale) e a tutti i dati. Tono operativo e diretto."
     ),
     "b2b": (
         "MODALITÀ ATTIVA: B2B. Stai parlando con un cliente business (palestra, ASD, "
@@ -2341,8 +2366,8 @@ ROLE_PROMPTS = {
         "NON hai accesso agli ordini di fabbrica (btoweb) e NON puoi elencare o rivelare "
         "ordini o dati di ALTRI clienti: se te lo chiedono, rifiuta cortesemente. "
         "Tono professionale e cortese. Per eccezioni, prezzi non a listino o situazioni "
-        "delicate NON fare nomi di persone: di' che la richiesta viene presa in carico "
-        "e che per seguirla si scrive a info@kanokimonos.com."
+        "delicate NON fare nomi di persone e non dire che la inoltri tu (non puoi): "
+        "di' che per quella richiesta si scrive a info@kanokimonos.com."
     ),
     "retail": (
         "MODALITÀ ATTIVA: RETAIL. Stai parlando con un cliente finale/privato. "
@@ -5513,7 +5538,7 @@ def _fully_codice_a_ordini(codice: str, raw_orders: list, spedizioni: list,
         ))
 
     if not trovati:
-        return {
+        out = {
             "cercato": codice,
             "trovato": False,
             "famiglie_consultate": _FULLY_FAMIGLIE_CODICE,
@@ -5528,6 +5553,47 @@ def _fully_codice_a_ordini(codice: str, raw_orders: list, spedizioni: list,
                 raw_orders, righe_recon, righe_lri
             ),
         }
+        # Un numero di sole cifre che kanokimonos.app non conosce puo' essere
+        # un carico che esiste su Fully ma non e' (ancora) collegato a nessun
+        # ordine custom: si legge DIRETTAMENTE da Fully prima di rispondere.
+        # E' l'unico punto in cui tracciamento_fully legge Fully: la strada
+        # per i carichi collegati resta quella di kanokimonos.app qui sopra.
+        if re.fullmatch(r"\d{3,10}", str(codice or "").strip()):
+            diretto = _fully_carico_diretto(codice, spedizioni)
+            out["carico_fully_diretto"] = diretto
+            if diretto.get("trovato"):
+                out.update({
+                    "trovato": True,
+                    "riconosciuto_come": (
+                        "numero di carico Fully IN ENTRATA letto DIRETTAMENTE da "
+                        "Fully, NON collegato a nessun ordine custom di "
+                        "kanokimonos.app"
+                    ),
+                    "ordini_collegati": 0,
+                    "collegamento_kanokimonos": "nessuno",
+                    "nota": (
+                        f"Il numero {codice} non e' collegato a nessun ordine, ASN, "
+                        "SKU o tracking di kanokimonos.app, MA esiste su Fully come "
+                        "carico in entrata: rispondi con il blocco "
+                        "'carico_fully_diretto' (stato, date, righe, totali) e di' "
+                        "che non risulta collegato a ordini custom. Corriere e "
+                        "tracking: solo quello che il blocco riporta, niente "
+                        "dedotto."
+                    ),
+                })
+            elif diretto.get("error"):
+                out["nota"] += (
+                    " Ho provato anche a leggerlo direttamente da Fully come "
+                    "carico in entrata, ma Fully non e' consultabile ora: su "
+                    "Fully non puoi ne' confermare ne' escludere nulla."
+                )
+            else:
+                out["nota"] += (
+                    " L'ho cercato anche DIRETTAMENTE su Fully fra i carichi in "
+                    "entrata (replenishments): NON esiste nemmeno la'. Di' 'non "
+                    "trovato su Fully', che e' diverso da 'non ho accesso'."
+                )
+        return out
 
     if len(trovati) == 1:
         return {"cercato": codice, "trovato": True, **trovati[0][1]}
@@ -7700,6 +7766,293 @@ def tool_giacenza_fully(query: str = None, sku: str = None) -> dict:
             "Fully restano validi."
         )
     return out
+
+
+# --- CARICHI FULLY LETTI DIRETTAMENTE (api.fully.si, SOLO produzione, SOLO GET) --
+# Il 14/09/2026 a "carico 858314" il bot ha risposto "non ho accesso diretto al
+# portale Fully": falso, dal 09/09 legge l'API di Fully, ma la leggeva SOLO per
+# i prodotti. Qui si legge un CARICO IN ENTRATA (replenishment) direttamente
+# da Fully, quando l'utente ha solo il numero: niente ordine, niente ASN.
+# Regole fisse, le stesse del blocco giacenza:
+# - SOLO produzione (api.fully.si, FULLY_API_TOKEN), mai staging;
+# - SOLO GET, tramite _fully_get, come tutto il resto del blocco Fully;
+# - la fonte espone: id, state, origin, partner_id, scheduled_date, date_done,
+#   create_date, products[]. NON espone corriere ne' tracking: se il carico e'
+#   collegato a un ASN di kanokimonos.app quel dato sta la', altrimenti non
+#   esiste da nessuna parte e si dice cosi'.
+# Semantica dei numeri di riga, verificata il 15/09/2026 incrociando 4 carichi
+# con la vista fully_reconciliation di kanokimonos.app (che li importa da qui):
+# demand = attesi (qty_demanded), quantity = buoni (qty_good), qty_hurt =
+# danneggiati, qty_missing = mancanti. Finche' lo stato non e' 'done',
+# 'quantity' ricalca 'demand': NON e' un conteggio.
+# Stati OSSERVATI sui 119 carichi di produzione: assigned (6), done (92),
+# cancel (21). Gli altri stati di Odoo non sono mai comparsi: si riportano
+# cosi' come arrivano, senza inventarne il significato.
+_FULLY_CARICO_MAX_RIGHE = 60
+_FULLY_CARICO_MAX_FRATELLI = 20
+_FULLY_CARICO_STATI = {
+    "assigned": (
+        "APERTO: carico registrato su Fully con il conteggio NON chiuso. Da "
+        "questo stato NON si deduce se la merce sia fisicamente arrivata: puo' "
+        "essere attesa oppure arrivata e in conteggio."
+    ),
+    "done": "CHIUSO: Fully ha ricevuto la merce e chiuso il conteggio.",
+    "cancel": "ANNULLATO su Fully.",
+}
+_FULLY_CARICO_NOTA_NUMERI = (
+    "Per riga QUATTRO numeri con il loro nome, mai sommati fra loro: 'attesi' "
+    "(demand), 'buoni' (quantity), 'danneggiati' (qty_hurt), 'mancanti' "
+    "(qty_missing). Se il conteggio NON e' chiuso, 'buoni' ricalca gli attesi: "
+    "NON e' un conteggio e non va presentato come 'contati'. Solo a conteggio "
+    "chiuso 'buoni' e' quanto Fully ha contato, e 'in_piu' (buoni oltre gli "
+    "attesi) va segnalato come pezzi in piu'."
+)
+
+
+def _fully_carico_origine(origin: str, spedizioni=None) -> dict:
+    """Che cosa dice il campo 'origin' del carico, per forma. Un CROSS-... e'
+    la spedizione che kanokimonos.app chiama ASN-...: se quella spedizione
+    esiste, si aggancia (corriere e tracking stanno solo li'). Il resto si
+    riporta per forma, senza inventare cosa sia."""
+    o = str(origin or "").strip()
+    out = {"origine": o or None}
+    if not o:
+        out["nota_origine"] = "il carico non ha un'origine registrata su Fully"
+        return out
+    up = o.upper()
+    if up.startswith("CROSS-"):
+        asn = "ASN-" + o[6:]
+        out["nota_origine"] = (
+            f"origine di tipo CROSS-: e' la spedizione che kanokimonos.app chiama "
+            f"'{asn}'"
+        )
+        s = None
+        for sp in spedizioni or []:
+            if _fully_norm_num(sp.get("shipment_number")) == _fully_norm_num(asn):
+                s = sp
+                break
+        if s:
+            out["asn_corrispondente"] = {
+                "asn": s.get("shipment_number"),
+                "stato_asn": s.get("status"),
+                "corriere": s.get("courier"),
+                "tracking": s.get("tracking_number"),
+                "nota": (
+                    "spedizione trovata su kanokimonos.app per numero: corriere e "
+                    "tracking vengono da li'. Per il tracciamento completo degli "
+                    "ordini richiama tracciamento_fully con questo numero ASN."
+                ),
+            }
+        else:
+            out["asn_corrispondente"] = None
+            out["nota_asn"] = (
+                f"nessuna spedizione '{asn}' su kanokimonos.app: corriere e "
+                "tracking non risultano da nessuna fonte."
+            )
+    elif re.match(r"^\d{6}-\d{4}", o):
+        out["nota_origine"] = (
+            "origine con la forma di un numero di ORDINE DI FABBRICA btoweb "
+            "(sei cifre, trattino, quattro cifre): per il contenuto ordinato al "
+            "produttore si usa ordine_fabbrica_per_numero. Non e' un ASN."
+        )
+    elif up.startswith("RESTOCK-"):
+        out["nota_origine"] = (
+            "origine di tipo RESTOCK-: non e' un numero ASN di kanokimonos.app e "
+            "non e' un batch btoweb. Che cosa sia lo dice solo chi lo ha creato su "
+            "Fully: non dedurlo."
+        )
+    else:
+        out["nota_origine"] = (
+            "origine in forma libera: riportala cosi' com'e', senza interpretarla."
+        )
+    return out
+
+
+def _fully_carico_riga(p: dict) -> dict:
+    ean = str(p.get("barcode") or "").strip()
+    sku = str(p.get("sku") or "").strip()
+    riga = {
+        "prodotto": p.get("name"),
+        "ean": ean or None,
+        "attesi": _fully_num(p.get("demand")),
+        "buoni": _fully_num(p.get("quantity")),
+        "danneggiati": _fully_num(p.get("qty_hurt")),
+        "mancanti": _fully_num(p.get("qty_missing")),
+    }
+    if sku and sku != ean:
+        riga["codice_fully"] = sku
+    return riga
+
+
+def _fully_carico_get(percorso: str):
+    """Una GET sulla sola produzione. (dati, None) oppure (None, frase_errore)
+    oppure (None, 'non_trovato') per un 404 dichiarato dalla fonte."""
+    nome_amb, base, nome_var = _FULLY_PRODUZIONE
+    token = os.getenv(nome_var)
+    if not token:
+        return None, errore_canale("fully_carichi", f"{nome_var} non configurata")
+    try:
+        r = _fully_get(base, percorso, token)
+    except Exception as e:
+        return None, errore_canale(
+            "fully_carichi", f"connessione fallita: {type(e).__name__}: {str(e)[:200]}"
+        )
+    if r.status_code == 404:
+        return None, "non_trovato"
+    if r.status_code != 200:
+        return None, errore_canale(
+            "fully_carichi", f"HTTP {r.status_code}: {(r.text or '')[:_FULLY_MAX_TESTO]}"
+        )
+    try:
+        return r.json(), None
+    except Exception:
+        return None, errore_canale("fully_carichi", "HTTP 200 ma corpo non JSON")
+
+
+def _fully_carico_diretto(numero: str, spedizioni=None) -> dict:
+    """Un carico in entrata (replenishment) letto DIRETTAMENTE da Fully, per
+    numero. Lista filtrata per id (che porta testata E righe) e, se la lista
+    non lo ha, il dettaglio /replenishments/{id}: un 404 li' e' la fonte che
+    dice 'non esiste', che e' una risposta e non un errore."""
+    from urllib.parse import urlencode
+    n = str(numero or "").strip()
+    base = {
+        "tipo": "carico_fully_diretto",
+        "fonte": (
+            "Fully (api.fully.si, produzione), letto DIRETTAMENTE ADESSO in sola "
+            "lettura: non e' una fotografia di kanokimonos.app"
+        ),
+        "cercato": n,
+    }
+    if not re.fullmatch(r"\d{3,10}", n):
+        return {
+            **base, "trovato": False,
+            "nota": "un numero di carico Fully e' fatto di sole cifre: questo non lo e'.",
+        }
+    data, err = _fully_carico_get(
+        "/api/v2-jwt/stock.picking/replenishments?" + urlencode({"id": n, "limit": 5})
+    )
+    if err and err != "non_trovato":
+        return {**base, "error": err, "fonte": "fully_carichi"}
+    righe = []
+    if data is not None:
+        _, lista = _fully_lista(data)
+        righe = [r for r in (lista or []) if isinstance(r, dict) and str(r.get("id")) == n]
+    carico = righe[0] if righe else None
+    if carico is None:
+        # Seconda strada: il dettaglio. 404 = "Replenishment not found." detto
+        # dalla fonte, e allora "non trovato su Fully" e' la risposta.
+        det, err2 = _fully_carico_get(f"/api/v2-jwt/stock.picking/replenishments/{n}")
+        if err2 == "non_trovato" or (det is not None and not _fully_lista(det)[1]):
+            return {
+                **base, "trovato": False,
+                "nota": (
+                    f"Il numero {n} NON esiste fra i carichi in entrata "
+                    "(replenishments) di Fully, produzione: lo dice Fully stesso. "
+                    "Di' 'non trovato su Fully', che e' diverso da 'non ho accesso'. "
+                    "Non dedurre che sia un invio in uscita o altro."
+                ),
+            }
+        if err2:
+            return {**base, "error": err2, "fonte": "fully_carichi"}
+        carico = {"id": int(n), "products": _fully_lista(det)[1] or []}
+        carico["_solo_dettaglio"] = True
+
+    stato = str(carico.get("state") or "").strip()
+    chiuso_il = carico.get("date_done") or None
+    prodotti = [p for p in (carico.get("products") or []) if isinstance(p, dict)]
+    righe_fmt = [_fully_carico_riga(p) for p in prodotti]
+    tot = {k: 0 for k in ("attesi", "buoni", "danneggiati", "mancanti")}
+    for r in righe_fmt:
+        for k in tot:
+            v = r.get(k)
+            if isinstance(v, (int, float)):
+                tot[k] += v
+    tot = {k: _fully_num(v) for k, v in tot.items()}
+    in_piu = (tot["buoni"] or 0) - (tot["attesi"] or 0)
+
+    out = {
+        **base, "trovato": True,
+        "numero_carico": carico.get("id"),
+        "stato_fully": stato or None,
+        "conteggio_chiuso": stato == "done",
+        "stato_in_parole": _FULLY_CARICO_STATI.get(
+            stato, f"stato '{stato or '?'}' non fra quelli noti: riportalo cosi' com'e'"
+        ),
+        "chiuso_il": chiuso_il,
+        "data_prevista": carico.get("scheduled_date"),
+        "creato_su_fully_il": carico.get("create_date"),
+        "corriere": None,
+        "tracking": None,
+        "nota_corriere_tracking": (
+            "Fully NON espone corriere ne' tracking per i carichi in entrata: qui "
+            "sono sempre assenti. Se il carico e' collegato a una spedizione ASN di "
+            "kanokimonos.app, corriere e tracking stanno la' (vedi "
+            "'asn_corrispondente' o tracciamento_fully); se non lo e', non "
+            "risultano da nessuna fonte e va detto cosi'."
+        ),
+        "righe": len(righe_fmt),
+        "totali_calcolati_dallo_strumento": {**tot, "in_piu": _fully_num(in_piu) if in_piu > 0 else 0},
+        "nota_numeri": _FULLY_CARICO_NOTA_NUMERI,
+        "prodotti": righe_fmt[:_FULLY_CARICO_MAX_RIGHE],
+    }
+    if carico.get("_solo_dettaglio"):
+        out["nota_testata"] = (
+            "Fully ha restituito solo le righe del carico, non la testata: stato e "
+            "date NON sono disponibili, non dedurli."
+        )
+        out["stato_in_parole"] = "stato non disponibile"
+        out["conteggio_chiuso"] = None
+    if stato and stato != "done":
+        out["nota_conteggio"] = (
+            "Conteggio NON chiuso: i numeri di riga sono PROVVISORI e 'buoni' "
+            "ricalca gli attesi. Non dire 'arrivato e contato'. Se serve che Fully "
+            "chiuda il conteggio, quel sollecito lo manda una persona: prepara il "
+            "messaggio."
+        )
+    if len(righe_fmt) > _FULLY_CARICO_MAX_RIGHE:
+        out["nota_righe"] = (
+            f"mostrate le prime {_FULLY_CARICO_MAX_RIGHE} righe di {len(righe_fmt)}; "
+            "i totali sono su tutte."
+        )
+    out.update(_fully_carico_origine(carico.get("origin"), spedizioni))
+
+    # Altri carichi con la stessa origine: la fonte non dichiara il legame,
+    # quindi si elencano e basta.
+    origin = str(carico.get("origin") or "").strip()
+    if origin:
+        data2, err3 = _fully_carico_get(
+            "/api/v2-jwt/stock.picking/replenishments?"
+            + urlencode({"origin": origin, "limit": _FULLY_CARICO_MAX_FRATELLI + 1})
+        )
+        if data2 is not None:
+            _, lista2 = _fully_lista(data2)
+            altri = [
+                {
+                    "numero_carico": r.get("id"),
+                    "stato_fully": r.get("state"),
+                    "chiuso_il": r.get("date_done") or None,
+                    "creato_su_fully_il": r.get("create_date"),
+                }
+                for r in (lista2 or [])
+                if isinstance(r, dict) and str(r.get("id")) != n
+            ]
+            if altri:
+                out["altri_carichi_stessa_origine"] = altri[:_FULLY_CARICO_MAX_FRATELLI]
+                out["nota_stessa_origine"] = (
+                    "Su Fully esistono altri carichi con la STESSA origine: "
+                    "elencali. La fonte NON dice quale sia il legame fra loro "
+                    "(non dedurre 'residuo', 'backorder' o 'duplicato')."
+                )
+    return out
+
+
+@app.get("/fully-carico", dependencies=SOLO_ADMIN)
+def fully_carico(numero: str):
+    """Sonda admin: lo stesso blocco 'carico_fully_diretto' che il modello
+    riceve dentro tracciamento_fully per un numero non collegato. Deterministica
+    e senza modello: serve a verificare il deploy e a leggere un carico."""
+    return _fully_carico_diretto(numero)
 
 
 @app.get("/fully-giacenza", dependencies=SOLO_ADMIN)
