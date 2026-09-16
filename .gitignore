@@ -1,3 +1,6 @@
 .env
 __pycache__/
 *.pyc
+
+# chiave locale di collaudo, mai in un commit
+chiave_retail.txt
