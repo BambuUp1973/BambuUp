@@ -137,6 +137,23 @@ def init_db():
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_in INTEGER;")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_out INTEGER;")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_cache_in INTEGER;")
+        # Dal 16/09/2026 ogni chiamata a uno strumento lascia una riga di SOLI
+        # metadati (mai il contenuto della risposta, mai chiavi): serve a
+        # ricostruire cosa il bot ha consultato in un turno, cosa che il 16/09
+        # non si e' potuto fare per le rashguard 2026.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS strumenti_log (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT,
+                profilo TEXT,
+                strumento TEXT,
+                parametri TEXT,
+                esito TEXT,
+                byte_risposta INTEGER,
+                durata_ms INTEGER,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
         conn.commit()
         cur.close()
         conn.close()
@@ -2507,7 +2524,12 @@ ROLE_PROMPTS = {
         "MODALITÀ ATTIVA: STAFF. Stai assistendo un collaboratore interno. "
         "Hai accesso completo a tutti gli strumenti (ordini custom, ordini di fabbrica "
         "btoweb, ricerca clienti, giacenza e carichi letti direttamente da Fully, "
-        "manuale) e a tutti i dati. Tono operativo e diretto."
+        "manuale) e a tutti i dati. Tono operativo e diretto. "
+        "SE L'UTENTE DICE CHE UN NUMERO È SBAGLIATO, NON PRODUCI UN NUMERO DIVERSO. "
+        "Richiami lo strumento, riporti quello che restituisce anche se è identico a "
+        "prima, e dici da quale fonte e campo viene. Se lo strumento segnala record "
+        "doppi o anomalie, le dici. Un numero diverso dal precedente può uscire SOLO "
+        "se lo strumento lo ha restituito, e in quel caso lo dichiari."
     ),
     "b2b": (
         "MODALITÀ ATTIVA: B2B. Stai parlando con un cliente business (palestra, ASD, "
@@ -6538,6 +6560,35 @@ def _accumula_uso(uso, response):
     )
 
 
+def _registra_strumento(chat_id, role, nome, parametri, esito, byte_risposta, durata_ms):
+    """Una riga in strumenti_log per ogni chiamata a uno strumento: SOLO
+    metadati (conversazione, orario, strumento, parametri, esito, byte,
+    durata). Mai il contenuto della risposta, mai chiavi. Se il DB non scrive,
+    la stessa riga finisce nel log di Render, cosi' non si perde."""
+    try:
+        par = json.dumps(parametri or {}, ensure_ascii=False, default=str)[:2000]
+    except Exception:
+        par = str(parametri)[:2000]
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO strumenti_log (chat_id, profilo, strumento, parametri,
+                                       esito, byte_risposta, durata_ms)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (chat_id, role, nome, par, esito, byte_risposta, durata_ms),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[STRUMENTO-LOG] db non scrive ({type(e).__name__}); chat_id={chat_id} "
+              f"profilo={role} strumento={nome} esito={esito} byte={byte_risposta} "
+              f"ms={durata_ms} parametri={par}")
+
+
 def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
                     uso: dict = None) -> str:
     """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
@@ -6576,9 +6627,14 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
             for block in response.content:
                 if block.type != "tool_use":
                     continue
+                inizio = time.perf_counter()
                 result = _execute_chat_tool(block.name, block.input or {}, user_message, role)
+                esito = "errore" if isinstance(result, dict) and result.get("error") else "ok"
                 if not isinstance(result, str):
                     result = json.dumps(result, ensure_ascii=False, default=str)
+                _registra_strumento(chat_id, role, block.name, block.input or {}, esito,
+                                    len(result.encode("utf-8")),
+                                    int((time.perf_counter() - inizio) * 1000))
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -6973,6 +7029,31 @@ def _token_fissi_per_profilo(profilo: str):
         n = f"non contati: {type(e).__name__}"
     _COSTO_FISSO_CACHE[profilo] = n
     return n
+
+
+@app.get("/strumenti-log", dependencies=SOLO_ADMIN)
+def strumenti_log(chat_id: str = None, limit: int = 50):
+    """Le ultime chiamate agli strumenti, solo metadati: per conversazione
+    (chat_id) o le ultime in assoluto. Nessun contenuto di risposta, nessuna
+    chiave."""
+    limit = max(1, min(int(limit or 50), 500))
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    campi = "id, created_at, chat_id, profilo, strumento, parametri, esito, byte_risposta, durata_ms"
+    if chat_id:
+        cur.execute(f"SELECT {campi} FROM strumenti_log WHERE chat_id = %s ORDER BY id DESC LIMIT %s",
+                    (chat_id, limit))
+    else:
+        cur.execute(f"SELECT {campi} FROM strumenti_log ORDER BY id DESC LIMIT %s", (limit,))
+    righe = [
+        {"id": r[0], "orario_utc": r[1].isoformat() if r[1] else None, "chat_id": r[2],
+         "profilo": r[3], "strumento": r[4], "parametri": r[5], "esito": r[6],
+         "byte_risposta": r[7], "durata_ms": r[8]}
+        for r in cur.fetchall()
+    ]
+    cur.close()
+    conn.close()
+    return {"chat_id": chat_id, "righe": righe, "quante": len(righe)}
 
 
 @app.get("/costi", dependencies=SOLO_ADMIN)
@@ -8074,6 +8155,51 @@ def _fully_riga_giacenza(p: dict, per_ean: dict, errore_anagrafica) -> dict:
     return riga
 
 
+def _fully_unisci_record_doppi(righe: list):
+    """Fully puo' avere PIU' record per la stessa taglia con lo stesso barcode.
+    Visto il 16/09/2026 sulle rashguard 2026: per ogni taglia un record con
+    l'EAN come codice e un gemello con codice interno ('rh-f-comp-26-wht-xs'),
+    giacenza 0 e lo stesso incoming_qty, creati il 15/09 09:04:12 insieme al
+    carico 867478. Sommando i record 'in arrivo' usciva raddoppiato.
+    Qui si tiene UNA riga per barcode: i numeri sono quelli del record con
+    l'EAN come codice (o del primo), presi una volta sola e mai sommati; gli
+    altri codici restano sulla riga ('codici_fully') e in 'record_doppi', con
+    i valori che divergono fra i record, cosi' niente sparisce in silenzio.
+    Ritorna (righe_unite, record_doppi)."""
+    per_barcode = {}
+    ordine = []
+    for r in righe:
+        k = r.get("barcode") or r.get("ean") or ("id:%d" % id(r))
+        if k not in per_barcode:
+            per_barcode[k] = []
+            ordine.append(k)
+        per_barcode[k].append(r)
+    unite, doppi = [], []
+    for k in ordine:
+        gruppo = per_barcode[k]
+        if len(gruppo) == 1:
+            unite.append(gruppo[0])
+            continue
+        principale = next((r for r in gruppo if str(r.get("ean") or "").isdigit()), gruppo[0])
+        codici = [r.get("ean") for r in gruppo]
+        riga = dict(principale)
+        riga["barcode"] = k if not str(k).startswith("id:") else None
+        riga["codici_fully"] = codici
+        riga["record_in_fully"] = len(gruppo)
+        voce = {"barcode": riga["barcode"], "taglia": principale.get("taglia"),
+                "codici": codici}
+        divergenti = {}
+        for c in ("in_magazzino", "libere", "in_arrivo", "in_uscita"):
+            valori = [r.get(c) for r in gruppo]
+            if any(v != principale.get(c) for v in valori):
+                divergenti[c] = valori
+        if divergenti:
+            voce["valori_per_record"] = divergenti
+        doppi.append(voce)
+        unite.append(riga)
+    return unite, doppi
+
+
 def _fully_gruppi_giacenza(righe_fully: list, righe_viste: list, per_ean: dict,
                            per_nome: dict, errore_anagrafica, cerca_ean) -> list:
     """Righe Fully raggruppate PER PRODOTTO DELL'ANAGRAFICA btoweb quando l'EAN
@@ -8162,7 +8288,10 @@ def _fully_gruppi_giacenza(righe_fully: list, righe_viste: list, per_ean: dict,
                     visti.add(id(a))
                     mancanti.append({"taglia": str(a["size"]).strip(),
                                      "ean": a.get("ean") or a.get("sku")})
-        righe = sorted(g["righe"], key=lambda r: _fully_chiave_taglia(r["taglia"]))
+        righe_grezze = sorted(g["righe"], key=lambda r: _fully_chiave_taglia(r["taglia"]))
+        # UNA riga per barcode: i totali si calcolano sulle righe unite, mai
+        # sui record grezzi (vedi _fully_unisci_record_doppi).
+        righe, doppi = _fully_unisci_record_doppi(righe_grezze)
         totali = {}
         for c in ("in_magazzino", "libere", "in_arrivo", "in_uscita"):
             vals = [r[c] for r in righe if isinstance(r[c], (int, float))]
@@ -8171,11 +8300,21 @@ def _fully_gruppi_giacenza(righe_fully: list, righe_viste: list, per_ean: dict,
         voce = {
             "prodotto": g["prodotto"],
             "nomi_in_fully": g["nomi_in_fully"][:6],
-            "righe_fully": len(righe),
+            "righe_fully": len(righe_grezze),
+            "taglie_distinte_per_barcode": len(righe),
             "taglie_non_risolte": non_risolte,
             "righe": righe[:_FULLY_GIACENZA_MAX_RIGHE_GRUPPO],
             "totali_calcolati_dallo_strumento": totali,
         }
+        if doppi:
+            voce["record_doppi"] = doppi
+            voce["nota_record_doppi"] = (
+                f"ATTENZIONE: {len(doppi)} taglie di '{g['prodotto']}' hanno PIU' "
+                "record in Fully con lo stesso barcode (codici in 'record_doppi'). I "
+                "numeri sono contati UNA volta per barcode, non sommati fra i record. "
+                "Riferiscilo a chi chiede: e' un'anomalia di Fully da segnalare, non "
+                "un dettaglio da tacere."
+            )
         if len(righe) > _FULLY_GIACENZA_MAX_RIGHE_GRUPPO:
             voce["nota_righe"] = (
                 f"mostrate {_FULLY_GIACENZA_MAX_RIGHE_GRUPPO} righe su {len(righe)}; "
@@ -8690,6 +8829,16 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
         out["nota_sku"] = (
             "L'EAN cercato e' quello di UNA taglia: il gruppo mostra comunque tutto "
             "il prodotto, taglia per taglia, completato dall'anagrafica btoweb."
+        )
+    doppi_tot = [dict(prodotto=g["prodotto"], **d)
+                 for g in gruppi for d in g.get("record_doppi", [])]
+    if doppi_tot:
+        out["record_doppi"] = doppi_tot
+        out["nota_record_doppi"] = (
+            f"ATTENZIONE: {len(doppi_tot)} taglie hanno PIU' record in Fully con lo "
+            "stesso barcode (elenco completo in 'record_doppi': prodotto, taglia, "
+            "barcode, codici). Ogni numero e' contato UNA volta per barcode, mai "
+            "sommato fra i record gemelli. Dillo esplicitamente nella risposta."
         )
     if len(gruppi) > _FULLY_GIACENZA_MAX_GRUPPI:
         out["altri_prodotti_non_dettagliati"] = [
