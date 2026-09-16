@@ -2128,9 +2128,9 @@ CHAT_TOOLS = [
             "'nessun_prodotto_con_quel_nome'. Riporta SEMPRE 'modelli_controllati', "
             "'modelli_disponibili' e 'modelli_mostrati' e, se 'elenco_completo' è "
             "false, di' che l'elenco è troncato: un elenco parziale presentato come "
-            "completo è VIETATO. 'righe_fully_fuori_anagrafica' sono righe con la "
-            "taglia letta dal nome Fully e non risolta: dichiarale a parte, non "
-            "ometterle. 'in stock' qui vuol dire libere > 0."
+            "completo è VIETATO. Tutto passa dal master btoweb: il nome si cerca lì, "
+            "Fully si legge solo per barcode, e un barcode fuori dal master non esiste. "
+            "'in stock' qui vuol dire libere > 0."
         ),
         "input_schema": {
             "type": "object",
@@ -8155,6 +8155,74 @@ def _fully_riga_giacenza(p: dict, per_ean: dict, errore_anagrafica) -> dict:
     return riga
 
 
+def _fully_righe_per_codici(codici: list):
+    """Le righe Fully di un elenco di EAN/SKU del master: due GET per lotto di
+    200, una su default_code[in] e una su barcode[in], perche' i record gemelli
+    (codice interno rh-*, stesso barcode) escono SOLO dalla seconda. Righe
+    distinte per id. (righe, None) oppure (None, errore)."""
+    codici = sorted({str(c).strip() for c in codici if str(c or "").strip()})
+    viste = {}
+    for i in range(0, len(codici), 200):
+        lotto = ",".join(codici[i:i + 200])
+        for campo in ("default_code[in]", "barcode[in]"):
+            righe, err = _fully_prodotti({campo: lotto})
+            if err:
+                return None, err
+            for p in righe:
+                viste.setdefault(p.get("id", id(p)), p)
+    return list(viste.values()), None
+
+
+def _fully_solo_master(righe: list, per_ean: dict) -> list:
+    """Regola del 10/09/2026, portata fino in fondo il 16/09: un barcode che
+    non sta nel master btoweb non esiste, si ignora. Restano le righe il cui
+    default_code o barcode e' nel master."""
+    return [p for p in righe
+            if per_ean.get(str(p.get("default_code") or "").strip())
+            or per_ean.get(str(p.get("barcode") or "").strip())]
+
+
+def _bto_codici_per_nome(per_nome: dict, q: str):
+    """I codici (ean, sku) delle righe del master che corrispondono al nome, in
+    tre livelli: (1) nome con tutte le parole alla lettera; (2) per radici,
+    con i sinonimi (kimoni -> kimono, femminile -> female); (3) per SEZIONE
+    dell'anagrafica: le parole che combaciano con il nome della sezione sono
+    il TIPO ('kimoni' -> sezione KIMONO, i cui modelli si chiamano 'BJJ Gi
+    STEALTH' senza la parola kimono), le altre devono stare nel nome del
+    modello. (codici, corrispondenza)."""
+    def codici_di(righe):
+        out = []
+        for r in righe:
+            for k in ("ean", "sku"):
+                v = str(r.get(k) or "").strip()
+                if v:
+                    out.append(v)
+        return out
+
+    parole = [t for t in _wc_norm(q).split() if t]
+    token = _fully_taglia_token(q) or parole
+    letterale = [r for n, righe in per_nome.items() if all(t in n for t in parole) for r in righe]
+    if letterale:
+        return codici_di(letterale), "nome nel master btoweb (tutte le parole) -> EAN -> Fully per barcode"
+    radici = [r for n, righe in per_nome.items() if _bto_match_radice(n, token) for r in righe]
+    if radici:
+        return codici_di(radici), "nome nel master btoweb (radici delle parole) -> EAN -> Fully per barcode"
+    per_sezione = []
+    for sz in _bto_anagrafica_sezioni():
+        parole_sez = [x for x in _wc_norm(sz["nome"]).split() if x]
+        consumate = [t for t in token if any(_fully_taglia_stessa_parola(t, x) for x in parole_sez)]
+        if not consumate:
+            continue
+        residue = [t for t in token if t not in consumate]
+        for r in sz["righe"]:
+            if residue and not _bto_match_radice(r.get("product_name"), residue):
+                continue
+            per_sezione.append(r)
+    if per_sezione:
+        return codici_di(per_sezione), "sezione del master btoweb (tipo) + nome -> EAN -> Fully per barcode"
+    return [], None
+
+
 def _fully_unisci_record_doppi(righe: list):
     """Fully puo' avere PIU' record per la stessa taglia con lo stesso barcode.
     Visto il 16/09/2026 sulle rashguard 2026: per ogni taglia un record con
@@ -8493,43 +8561,12 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
         for r in s["righe"]:
             if _bto_match_radice(r.get("product_name"), token):
                 aggiungi(r, s["nome"])
-    # (1c) Fully per nome: le righe risolte dall'anagrafica entrano fra i
-    # candidati; quelle NON risolte si contano a parte, per taglia nel nome.
-    perno = max(token, key=len)
-    perno_fully = _radice(perno) if len(perno) >= 5 else perno
-    righe_fully_nome, err = _fully_prodotti({"name[ilike]": perno_fully})
-    if err:
-        righe_fully_nome = None
-        out["avvertenza_fully_per_nome"] = (
-            "La ricerca per NOME su Fully non ha risposto: i modelli vengono dalla "
-            "sola anagrafica btoweb e le righe Fully fuori anagrafica non sono "
-            "state contate."
-        )
-    fuori_anagrafica_taglia = []
-    fuori_anagrafica_ignota = 0
-    for p in righe_fully_nome or []:
-        ean = str(p.get("default_code") or "").strip()
-        anag = per_ean.get(ean) or per_ean.get(str(p.get("barcode") or "").strip())
-        if anag is not None:
-            if _bto_match_radice(anag.get("product_name"), token) or \
-                    _bto_match_radice(p.get("name"), token):
-                aggiungi(anag)
-            continue
-        if not _bto_match_radice(p.get("name"), token):
-            continue
-        t_nome = _fully_taglia_dal_nome(p.get("name"))
-        if t_nome is None:
-            fuori_anagrafica_ignota += 1
-        elif t_nome == tag:
-            fuori_anagrafica_taglia.append({
-                "nome_in_fully": p.get("name"), "ean": ean or None,
-                "taglia_letta_dal_nome_fully": t_nome,
-                "libere": _fully_num(p.get("free_qty")),
-                "in_magazzino": _fully_num(p.get("qty_available")),
-            })
+    # (1c) — tolto il 16/09/2026: su Fully non si cerca MAI per nome. I
+    # modelli vengono solo dal master (sezioni + nomi); un barcode che non sta
+    # nel master non esiste.
 
     out["tipo_prodotto_riconosciuto"] = sezioni_riconosciute
-    if not candidati and not fuori_anagrafica_taglia and not fuori_anagrafica_ignota:
+    if not candidati:
         out.update(
             trovato=False, caso="nessun_prodotto_con_quel_nome",
             caso_in_parole=(
@@ -8565,7 +8602,7 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
         modelli_senza_questa_taglia_in_anagrafica=len(modelli_senza_taglia),
         taglie_esistenti_per_questi_modelli=sorted(taglie_esistenti, key=_fully_chiave_taglia),
     )
-    if not modelli_con_taglia and not fuori_anagrafica_taglia:
+    if not modelli_con_taglia:
         out.update(
             trovato=True, caso="taglia_inesistente_per_questo_prodotto",
             caso_in_parole=(
@@ -8576,8 +8613,6 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
                 "'esaurita': non esiste proprio."
             ),
         )
-        if fuori_anagrafica_ignota:
-            out["righe_fully_fuori_anagrafica_taglia_ignota"] = fuori_anagrafica_ignota
         return out
 
     # (3) libere da Fully, per EAN, a lotti.
@@ -8663,18 +8698,6 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
                     "righe disponibili, dillo esplicitamente.")
         ),
     )
-    if fuori_anagrafica_taglia or fuori_anagrafica_ignota:
-        out["righe_fully_fuori_anagrafica"] = {
-            "con_questa_taglia_nel_nome": fuori_anagrafica_taglia[:_FULLY_TAGLIA_MAX_MODELLI],
-            "quante_con_questa_taglia_nel_nome": len(fuori_anagrafica_taglia),
-            "taglia_ignota": fuori_anagrafica_ignota,
-            "nota": (
-                "Righe Fully che corrispondono al nome ma il cui EAN NON e' "
-                "nell'anagrafica btoweb: la taglia NON e' risolta, e' solo LETTA dal "
-                "nome Fully. Contale A PARTE e dichiarale come tali, non fonderle "
-                "con i modelli sopra e non ometterle."
-            ),
-        }
     if not disponibili:
         out.update(
             caso="taglia_non_disponibile_in_nessun_modello",
@@ -8701,11 +8724,13 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
 
 def tool_giacenza_fully(query: str = None, sku: str = None,
                         taglia: str = None) -> dict:
-    """Giacenza di magazzino da Fully (solo staff, SOLO produzione, SOLO GET):
-    per NOME (name[ilike]) o per EAN/SKU (default_code), una riga per taglia
-    con la taglia risolta dall'anagrafica btoweb e i quattro numeri di Fully
-    distinti (in magazzino, libere, in arrivo, in uscita) piu' i totali per
-    campo."""
+    """Giacenza di magazzino da Fully (solo staff, SOLO produzione, SOLO GET).
+    TUTTO PER BARCODE (regola del 16/09/2026): il NOME si cerca solo nel
+    master btoweb, che da' gli EAN; Fully si interroga SOLO per codice o
+    barcode, mai per nome; un barcode che non sta nel master si ignora. Una
+    riga per taglia (un record per barcode: i gemelli di Fully non si
+    sommano), i quattro numeri di Fully distinti (in magazzino, libere, in
+    arrivo, in uscita) e i totali per campo."""
     q = (query or "").strip()
     sku_clean = (sku or "").strip()
     taglia_clean = (taglia or "").strip()
@@ -8732,14 +8757,25 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
 
     righe_viste = []
     corrispondenza = None
+    per_ean, per_nome, errore_anagrafica = _bto_anagrafica_indici()
     if sku_clean:
-        righe, err = _fully_prodotti({"default_code": sku_clean})
+        if not errore_anagrafica and not per_ean.get(sku_clean):
+            nota = (
+                f"'{sku_clean}' NON e' nel master btoweb: per noi quel codice non "
+                "esiste (regola del 10/09/2026) e Fully non viene interrogato. "
+                "Questo NON e' 'giacenza zero': e' 'codice non nostro'. Se l'utente "
+                "ha anche detto il nome del prodotto, riprova per nome."
+            )
+            if _BTO_NUMERO_BATCH_RE.match(sku_clean):
+                nota += (
+                    f" ATTENZIONE: '{sku_clean}' ha la forma di un numero di ORDINE "
+                    "DI FABBRICA (batch), non di un EAN: richiama "
+                    "ordine_fabbrica_per_numero con questo numero."
+                )
+            return {**base, "trovato": False, "nota": nota}
+        righe, err = _fully_righe_per_codici([sku_clean])
         if err:
             return {**base, "error": err, "fonte": "fully"}
-        if not righe:
-            righe, err = _fully_prodotti({"barcode": sku_clean})
-            if err:
-                return {**base, "error": err, "fonte": "fully"}
         if not righe:
             nota = (
                 f"NESSUNA riga in Fully (produzione) con EAN/SKU '{sku_clean}', ne' "
@@ -8756,33 +8792,26 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
             return {**base, "trovato": False, "nota": nota}
         corrispondenza = "ean"
     else:
-        # Il filtro server-side e' un solo ilike: Fully non sa l'AND di piu'
-        # parole in qualunque ordine ('rashguard killer bunny female' NON e'
-        # sottostringa di 'RASHGUARD FEMALE KILLER BUNNY'). Quindi: al server
-        # la parola piu' lunga, e qui l'AND di tutte le parole sul nome.
-        parole = [t for t in _wc_norm(q).split() if t]
-        perno = max(parole, key=len) if parole else q
-        righe_viste, err = _fully_prodotti({"name[ilike]": perno})
-        if err:
-            return {**base, "error": err, "fonte": "fully"}
-        righe = [p for p in righe_viste
-                 if all(t in _wc_norm(p.get("name")) for t in parole)]
-        corrispondenza = "nome (tutte le parole)"
-        if not righe:
-            # Ripiego sulle radici, come per btoweb: 'kimoni' deve trovare
-            # 'Kimono'. Al server va la radice della parola piu' lunga.
-            radice = _radice(perno) if len(perno) >= 3 else perno
-            if radice and radice != perno:
-                righe_viste, err = _fully_prodotti({"name[ilike]": radice})
-                if err:
-                    return {**base, "error": err, "fonte": "fully"}
-            righe = [p for p in righe_viste if _bto_match_radice(p.get("name"), parole)]
-            corrispondenza = "radici delle parole (ricerca allargata)" if righe else None
-        if not righe:
+        # Il NOME si cerca SOLO nel master btoweb (Fully chiama lo stesso
+        # articolo in piu' modi, anche sbagliati, e ha 468 righe con EAN non
+        # nostri): il master da' gli EAN, e Fully si interroga per barcode.
+        if errore_anagrafica:
+            return {
+                **base, "error": errore_canale("btoweb", f"per nome: {errore_anagrafica}"),
+                "fonte": "btoweb",
+                "nota": (
+                    "Il master btoweb non e' consultabile ora e la ricerca per NOME "
+                    "passa solo da li': la giacenza per nome NON e' leggibile in "
+                    "questo momento. Dillo cosi'; non dire che il prodotto non esiste. "
+                    "Se l'utente ha un EAN, riprova con 'sku'."
+                ),
+            }
+        codici, corrispondenza = _bto_codici_per_nome(per_nome, q)
+        if not codici:
             return {
                 **base, "trovato": False,
                 "nota": (
-                    f"NESSUN prodotto in Fully (produzione) ha nel nome tutte le parole "
+                    f"NESSUN prodotto nel master btoweb ha nel nome tutte le parole "
                     f"di '{q}', ne' alla lettera ne' per radice. Questo NON e' 'giacenza "
                     "zero' e NON e' 'esaurito': e' 'non trovato', e va detto con queste "
                     "parole. Prima di chiudere riprova con un'altra forma del nome (meno "
@@ -8790,8 +8819,24 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
                     "riprova con 'sku'."
                 ),
             }
+        righe, err = _fully_righe_per_codici(codici)
+        if err:
+            return {**base, "error": err, "fonte": "fully"}
+        if not righe:
+            return {
+                **base, "trovato": False,
+                "corrispondenza": corrispondenza,
+                "codici_del_master_cercati": len(codici),
+                "nota": (
+                    f"'{q}' esiste nel master btoweb ({len(codici)} codici) ma Fully "
+                    "(produzione) NON ha nessuna riga con quei barcode. NON e' giacenza "
+                    "zero: e' 'nessuna riga in Fully', e va detto con queste parole."
+                ),
+            }
 
-    per_ean, per_nome, errore_anagrafica = _bto_anagrafica_indici()
+    # Regola del 10/09/2026: un barcode che non sta nel master non esiste.
+    if not errore_anagrafica:
+        righe = _fully_solo_master(righe, per_ean)
 
     # Il completamento per EAN e' una GET per gruppo: su una query larga
     # ('kimoni' pesca decine di prodotti) si limita ai gruppi dettagliati.
