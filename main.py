@@ -155,6 +155,7 @@ def init_db():
                 da_inviare_email BOOLEAN DEFAULT FALSE
             );
         """)
+        cur.execute("ALTER TABLE richieste_operatore ADD COLUMN IF NOT EXISTS motivo TEXT;")
         cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_chat ON richieste_operatore (chat_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_stato ON richieste_operatore (stato, priorita, created_at);")
         cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_ip ON richieste_operatore (ip_hash, created_at);")
@@ -7243,7 +7244,9 @@ def strumenti_log(chat_id: str = None, limit: int = 50):
 RESEND_API_KEY_BOT = os.getenv("RESEND_API_KEY_BOT")
 MINISITO_RICHIESTE_URL = os.getenv("MINISITO_RICHIESTE_URL") or "(pagina del mini-sito non ancora configurata)"
 RICHIESTE_MITTENTE = "Kano Staff <staff@kanokimonos.app>"
-RICHIESTE_DESTINATARIO_STAFF = "admin@kanokimonos.com"
+# Decisione di Bambu del 20/09/2026: gli avvisi vanno a info@, non ad admin@,
+# che e' gia' troppo carica; queste sono richieste reali di clienti.
+RICHIESTE_DESTINATARIO_STAFF = "info@kanokimonos.com"
 RICHIESTE_MAX_GIORNO_IP = 5
 RICHIESTE_TIPI = ("bot_non_sa", "cliente_chiede")
 RICHIESTE_PRIORITA = {"bot_non_sa": "alta", "cliente_chiede": "normale"}
@@ -7645,14 +7648,22 @@ class RichiestaRispondiRequest(BaseModel):
     operatore: str
 
 
+class RichiestaChiudiRequest(BaseModel):
+    # Facoltativi nel modello, validati nel codice: un operatore mancante
+    # deve dare 400 con un messaggio chiaro, non il 422 di FastAPI.
+    operatore: str = None
+    motivo: str = None
+
+
 _RICHIESTA_CAMPI = ("id, chat_id, created_at, tipo, priorita, stato, lingua, domanda, "
                     "contesto, email_cliente, risposta, operatore, risposto_il, "
-                    "notificata_il, da_inviare_email")
+                    "notificata_il, da_inviare_email, motivo")
 
 
 def _richiesta_dict(r, email_intera: bool) -> dict:
     (rid, chat_id, created_at, tipo, priorita, stato, lingua, domanda, contesto,
-     email_cliente, risposta, operatore, risposto_il, notificata_il, da_inviare_email) = r
+     email_cliente, risposta, operatore, risposto_il, notificata_il, da_inviare_email,
+     motivo) = r
     return {
         "id": rid, "chat_id": chat_id,
         "created_at": created_at.isoformat() if created_at else None,
@@ -7663,6 +7674,7 @@ def _richiesta_dict(r, email_intera: bool) -> dict:
         "risposto_il": risposto_il.isoformat() if risposto_il else None,
         "notificata_il": notificata_il.isoformat() if notificata_il else None,
         "da_inviare_email": bool(da_inviare_email),
+        "motivo": motivo,
     }
 
 
@@ -7753,6 +7765,41 @@ def richieste_rispondi(rid: int, body: RichiestaRispondiRequest):
           f"stato_prima={stato_prima} da_inviare_email={da_inviare}")
     return {"id": rid, "stato": "risposta", "chat_id": chat_id, "messaggio_id": mid,
             "da_inviare_email": da_inviare}
+
+
+@app.post("/richieste/{rid}/chiudi", dependencies=SOLO_STAFF)
+def richieste_chiudi(rid: int, body: RichiestaChiudiRequest):
+    """Chiude una richiesta senza rispondere al cliente: stato 'chiusa', con
+    chi l'ha chiusa e quando. A differenza di /rispondi NON scrive niente
+    nella chat del cliente: serve ai casi gia' risolti altrove, ai doppioni e
+    alle prove. Il 'motivo' e' facoltativo e resta solo per lo staff."""
+    operatore = (body.operatore or "").strip()
+    motivo = (body.motivo or "").strip() or None
+    if not operatore:
+        raise HTTPException(status_code=400, detail="Serve 'operatore'.")
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT chat_id, stato FROM richieste_operatore WHERE id = %s", (rid,))
+    r = cur.fetchone()
+    if not r:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="Richiesta non trovata.")
+    chat_id, stato_prima = r
+    cur.execute(
+        """
+        UPDATE richieste_operatore
+        SET stato = 'chiusa', operatore = %s, motivo = %s, risposto_il = NOW()
+        WHERE id = %s
+        """,
+        (operatore, motivo, rid),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(f"[RICHIESTA] chiusa id={rid} operatore={operatore} chat={chat_id} "
+          f"stato_prima={stato_prima} motivo={motivo!r}")
+    return {"id": rid, "stato": "chiusa", "chat_id": chat_id, "operatore": operatore,
+            "motivo": motivo, "stato_precedente": stato_prima}
 
 
 @app.post("/richieste/{rid}/rinotifica", dependencies=SOLO_ADMIN)
