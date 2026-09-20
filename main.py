@@ -2531,14 +2531,17 @@ ROLE_PROMPTS = {
         "doppi o anomalie, le dici. Un numero diverso dal precedente può uscire SOLO "
         "se lo strumento lo ha restituito, e in quel caso lo dichiari. "
         "FORMATO DELLE GIACENZE CON PIÙ MODELLI. Oltre 5 modelli NIENTE tabella per "
-        "modello: una riga per modello con le taglie in fila e il totale, es. "
+        "modello e niente elenco taglia per taglia: la regola dei quattro numeri per "
+        "taglia vale fino a 5 modelli, oltre si scrive una riga per modello con le "
+        "taglie in fila (numero 'libere' per taglia), il totale e gli in arrivo, es. "
         "\"White 2026: XXS 5 · XS 9 · S 14 · M 24 · L 21 · XL 8 · XXL 6 = 87, in "
-        "arrivo 81\". Le linee diverse vanno in SEZIONI SEPARATE, ognuna col suo nome "
-        "come sta nell'anagrafica (es. \"Belt rank 2026 uomo\", \"Belt rank 2026 "
-        "donna\", \"Kumo 2026\"): MAI fuse sotto un'unica voce \"uomo\" o \"donna\", "
-        "e MAI una linea secondaria prima di quella chiesta. In ogni sezione prima i "
-        "totali per colore, poi il dettaglio delle taglie. Tutti i modelli restituiti "
-        "dallo strumento compaiono: se sono tanti si accorcia il formato, non l'elenco."
+        "arrivo 81\". Le SEZIONI sono le 'linee' che giacenza_fully restituisce, nel "
+        "suo ordine, ognuna col suo nome e genere (es. \"Belt rank 2026 uomo\", "
+        "\"Belt rank 2026 donna\", \"Kumo 2026\"): MAI fuse sotto un'unica voce "
+        "\"uomo\" o \"donna\", e MAI una linea secondaria prima di quella chiesta. In "
+        "ogni sezione prima i totali per colore, poi il dettaglio delle taglie. Tutti "
+        "i modelli restituiti dallo strumento compaiono: se sono tanti si accorcia il "
+        "formato, non l'elenco."
     ),
     "b2b": (
         "MODALITÀ ATTIVA: B2B. Stai parlando con un cliente business (palestra, ASD, "
@@ -8807,6 +8810,78 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
     return out
 
 
+# --- LINEE E FORMATO COMPATTO (piu' di 5 prodotti) ---------------------------
+# Il 20/09/2026 su "rashguard beltrank 2026 uomo e donna" (15 modelli) il
+# modello ha fuso la linea Kumo dentro "uomo", l'ha messa per prima e ha
+# scritto una tabella taglia per taglia per ogni modello. Decidere le sezioni
+# a mano non gli riesce: qui le decide lo strumento. Una LINEA e' il nome del
+# prodotto senza il colore ("rash comp belt rank 2026 edition", "rash comp
+# kumo 2026 belt rank", "female bjj rashguard competition 2026 belt"); le
+# linee si ordinano per numero di modelli e poi per pezzi a magazzino, cosi'
+# una linea secondaria non viene mai per prima; i prodotti nel payload seguono
+# lo stesso ordine. Oltre _FULLY_SOGLIA_COMPATTO prodotti la nota chiede la
+# riga unica per modello con le 'libere' per taglia.
+_FULLY_SOGLIA_COMPATTO = 5
+_FULLY_COLORI = {
+    "white", "black", "blue", "brown", "purple", "red", "pink", "grey", "gray",
+    "green", "yellow", "orange", "navy", "coral", "sky", "silver", "gold",
+    "bianco", "bianca", "nero", "nera", "blu", "marrone", "viola", "rosso",
+    "rossa", "rosa", "verde", "giallo", "gialla", "grigio", "grigia",
+}
+
+
+def _fully_linea_di(nome) -> str:
+    parole = [p for p in re.split(r"[^a-z0-9]+", _wc_norm(nome)) if p and p not in _FULLY_COLORI]
+    return " ".join(parole)
+
+
+def _fully_genere_del_nome(nome) -> str:
+    n = " " + _wc_norm(nome) + " "
+    if any(m in n for m in ("female", "woman", "women")):
+        return "donna"
+    if any(m in n for m in ("kids", "kid ", "junior", "youth", "bambin")):
+        return "bambino"
+    return "uomo"
+
+
+def _fully_linee(gruppi: list) -> list:
+    """Le linee dei gruppi, ordinate (piu' modelli prima, poi piu' pezzi a
+    magazzino). Riordina anche 'gruppi' sul posto: stesso ordine delle linee,
+    e dentro la linea l'ordine originale."""
+    linee, ordine = {}, []
+    for g in gruppi:
+        k = _fully_linea_di(g["prodotto"])
+        if k not in linee:
+            linee[k] = {"linea": k, "genere": _fully_genere_del_nome(g["prodotto"]),
+                        "modelli": [], "in_magazzino": 0}
+            ordine.append(k)
+        linee[k]["modelli"].append(g["prodotto"])
+        tot = g.get("totali_calcolati_dallo_strumento") or {}
+        linee[k]["in_magazzino"] += int(tot.get("in_magazzino") or 0)
+    out = [linee[k] for k in ordine]
+    out.sort(key=lambda l: (-len(l["modelli"]), -l["in_magazzino"]))
+    posizione = {n: i for i, l in enumerate(out) for n in l["modelli"]}
+    gruppi.sort(key=lambda g: posizione.get(g["prodotto"], len(out)))
+    return out
+
+
+_FULLY_NOTA_COMPATTO = (
+    "FORMATO OBBLIGATORIO con piu' di {soglia} prodotti: NIENTE elenco taglia per "
+    "taglia e NIENTE tabella per modello. Le SEZIONI sono le 'linee' qui sotto, in "
+    "QUESTO ordine, ognuna con un titolo suo fatto dal nome della linea e dal "
+    "genere (es. \"Belt rank 2026 uomo\", \"Belt rank 2026 donna\", \"Kumo 2026\"): "
+    "due linee diverse NON si fondono in una sezione sola anche se hanno lo stesso "
+    "genere. In ogni sezione: (1) prima i totali per colore, sulla stessa riga "
+    "(\"White 87 · Blue 94 · Purple 77 · Brown 48 · Black 75\"); (2) poi UNA riga per "
+    "modello con le taglie in fila, usando per ogni taglia il numero 'libere', il "
+    "totale e gli 'in arrivo': \"White: XXS 5 · XS 9 · S 14 · M 24 · L 21 · XL 8 · "
+    "XXL 6 = 87, in arrivo 81\". Se per un modello 'in_magazzino' e 'libere' sono "
+    "diversi, aggiungi \"(in magazzino N)\" dopo il totale. Tutti i modelli "
+    "compaiono. I record doppi si dichiarano UNA volta, in una riga in fondo, "
+    "senza segnare ogni modello."
+)
+
+
 def tool_giacenza_fully(query: str = None, sku: str = None,
                         taglia: str = None) -> dict:
     """Giacenza di magazzino da Fully (solo staff, SOLO produzione, SOLO GET).
@@ -8938,6 +9013,7 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
 
     gruppi = _fully_gruppi_giacenza(righe, righe_viste, per_ean, per_nome,
                                     errore_anagrafica, cerca_ean)
+    linee = _fully_linee(gruppi)   # riordina anche 'gruppi'
     out = {
         **base,
         "trovato": True,
@@ -8949,6 +9025,9 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
         "nota_taglie": _FULLY_NOTA_TAGLIE,
         "nota_fonte": _FULLY_NOTA_FONTE,
     }
+    if len(gruppi) > _FULLY_SOGLIA_COMPATTO:
+        out["linee"] = linee
+        out["nota_formato_compatto"] = _FULLY_NOTA_COMPATTO.format(soglia=_FULLY_SOGLIA_COMPATTO)
     if sku_clean and gruppi:
         out["sku_cercato_corrisponde_a"] = next(
             ({"taglia": r["taglia"], "ean": r["ean"]}
@@ -8979,7 +9058,13 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
             f"{_FULLY_GIACENZA_MAX_GRUPPI}. Gli altri sono elencati per nome: se "
             "l'utente ne vuole uno, richiama lo strumento con il nome preciso."
         )
-    if len(gruppi) > 1:
+    if len(gruppi) > _FULLY_SOGLIA_COMPATTO:
+        out["nota_piu_prodotti"] = (
+            f"'{q or sku_clean}' corrisponde a {len(gruppi)} prodotti diversi in "
+            "Fully: segui 'nota_formato_compatto' e le 'linee'. NON sommare i totali "
+            "di prodotti diversi in un numero unico."
+        )
+    elif len(gruppi) > 1:
         out["nota_piu_prodotti"] = (
             f"'{q or sku_clean}' corrisponde a {len(gruppi)} prodotti diversi in "
             "Fully: presentali UNO PER UNO, ognuno con le sue taglie e i suoi totali. "
