@@ -7506,9 +7506,13 @@ def apri_richiesta_operatore(chat_id: str, tipo: str, lingua: str, ip_hash,
                 "testo_da_riferire": _testo_richiesta("limite", lingua)}
 
 
-def _notifica_staff_richiesta(rid: int):
+def _notifica_staff_richiesta(rid: int) -> str:
     """Email allo staff via Resend. Fail-silent: una riga di log per esito,
-    mai un'eccezione verso chi apre. Idempotente su notificata_il."""
+    mai un'eccezione verso chi apre. Idempotente su notificata_il.
+    Restituisce l'esito ('inviata', 'gia_inviata', 'chiave_assente',
+    'errore http <n>', 'inesistente', 'errore <Eccezione>'): all'apertura gira
+    in un thread e l'esito si legge solo nel log, su /rinotifica torna al
+    chiamante."""
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
@@ -7519,16 +7523,16 @@ def _notifica_staff_richiesta(rid: int):
         if not r:
             cur.close(); conn.close()
             print(f"[RICHIESTA email non inviata: id={rid} inesistente]")
-            return
+            return "inesistente"
         chat_id, tipo, priorita, lingua, domanda, contesto, email_cliente, notificata_il = r
         if notificata_il:
             cur.close(); conn.close()
             print(f"[RICHIESTA email gia' inviata id={rid} il {notificata_il}]")
-            return
+            return "gia_inviata"
         if not RESEND_API_KEY_BOT:
             cur.close(); conn.close()
             print(f"[RICHIESTA email non inviata: chiave assente] id={rid}")
-            return
+            return "chiave_assente"
         corpo = (
             f"Tipo: {tipo} (priorita' {priorita})\n"
             f"Lingua: {lingua}\n"
@@ -7549,14 +7553,18 @@ def _notifica_staff_richiesta(rid: int):
         if 200 <= resp.status_code < 300:
             cur.execute("UPDATE richieste_operatore SET notificata_il = NOW() WHERE id = %s", (rid,))
             conn.commit()
+            esito = "inviata"
             print(f"[RICHIESTA email inviata id={rid} tipo={tipo} http={resp.status_code}]")
         else:
+            esito = f"errore http {resp.status_code}"
             print(f"[RICHIESTA email non inviata: id={rid} http={resp.status_code} "
                   f"{resp.text[:200]!r}]")
         cur.close()
         conn.close()
+        return esito
     except Exception as e:
         print(f"[RICHIESTA email non inviata: id={rid} {type(e).__name__}: {str(e)[:200]}]")
+        return f"errore {type(e).__name__}"
 
 
 def tool_passa_a_operatore(tipo, riassunto, lingua_hint, user_message, contesto: dict) -> dict:
@@ -7745,6 +7753,32 @@ def richieste_rispondi(rid: int, body: RichiestaRispondiRequest):
           f"stato_prima={stato_prima} da_inviare_email={da_inviare}")
     return {"id": rid, "stato": "risposta", "chat_id": chat_id, "messaggio_id": mid,
             "da_inviare_email": da_inviare}
+
+
+@app.post("/richieste/{rid}/rinotifica", dependencies=SOLO_ADMIN)
+def richieste_rinotifica(rid: int):
+    """Rilancia l'avviso allo staff per una richiesta il cui invio si e' perso.
+    SINCRONO, a differenza dell'invio all'apertura: l'esito torna al chiamante
+    invece di finire solo nel log. Resta idempotente: se notificata_il c'e'
+    gia', non riparte niente."""
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM richieste_operatore WHERE id = %s", (rid,))
+    esiste = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not esiste:
+        raise HTTPException(status_code=404, detail="Richiesta non trovata.")
+    esito = _notifica_staff_richiesta(rid)
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT notificata_il FROM richieste_operatore WHERE id = %s", (rid,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    notificata_il = r[0].isoformat() if r and r[0] else None
+    print(f"[RICHIESTA] rinotifica id={rid} esito={esito} notificata_il={notificata_il}")
+    return {"id": rid, "notificata_il": notificata_il, "esito": esito}
 
 
 @app.get("/conversazioni", dependencies=SOLO_ADMIN)
@@ -8261,6 +8295,22 @@ def _diag_errore(prefisso: str, risposta) -> str:
     if len(testo) > _DIAG_MAX_TESTO:
         testo = testo[:_DIAG_MAX_TESTO] + "..."
     return f"errore: {prefisso} HTTP {risposta.status_code} - {testo}"
+
+
+def _diag_resend() -> dict:
+    """Solo PRESENZA della chiave che manda gli avvisi allo staff: qui non si
+    invia niente e il valore non viene mai letto ne' restituito. Mittente e
+    destinatario non sono segreti e aiutano a capire cosa partirebbe."""
+    presente = bool(RESEND_API_KEY_BOT)
+    return {
+        "variabile": "RESEND_API_KEY_BOT",
+        "presente": "si" if presente else "no",
+        "esito": "ok: chiave presente (nessun invio di prova da qui)"
+                 if presente else "chiave mancante: gli avvisi allo staff NON partono",
+        "mittente": RICHIESTE_MITTENTE,
+        "destinatario_staff": RICHIESTE_DESTINATARIO_STAFF,
+        "pagina_minisito_configurata": "si" if os.getenv("MINISITO_RICHIESTE_URL") else "no",
+    }
 
 
 def _diag_b2b() -> dict:
@@ -10233,6 +10283,7 @@ def diagnostica_collegamenti():
         ("fully", _diag_fully),
         ("woocommerce", _diag_woocommerce),
         ("woocommerce_wc", _diag_woocommerce_wc),
+        ("resend", _diag_resend),
     ):
         try:
             canali[nome] = funzione()
