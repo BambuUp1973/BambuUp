@@ -7738,7 +7738,9 @@ def richieste_dettaglio(rid: int):
     conn.close()
     if not r:
         raise HTTPException(status_code=404, detail="Richiesta non trovata.")
-    return _richiesta_dict(r, email_intera=True)
+    out = _richiesta_dict(r, email_intera=True)
+    out["email_cliente_ultimo_errore"] = _ULTIMO_ERRORE_EMAIL_CLIENTE.get(rid)
+    return out
 
 
 @app.post("/richieste/{rid}/rispondi", dependencies=SOLO_STAFF)
@@ -7934,14 +7936,42 @@ def _invia_email_cliente(rid: int) -> str:
             print(f"[RICHIESTA email cliente inviata id={rid} lingua={lingua} http={resp.status_code}]")
         else:
             esito = f"errore http {resp.status_code}"
+            _ULTIMO_ERRORE_EMAIL_CLIENTE[rid] = f"http {resp.status_code}: {resp.text[:300]}"
             print(f"[RICHIESTA email cliente non inviata: id={rid} http={resp.status_code} "
                   f"{resp.text[:200]!r}]")
         cur.close()
         conn.close()
         return esito
     except Exception as e:
+        _ULTIMO_ERRORE_EMAIL_CLIENTE[rid] = f"{type(e).__name__}: {str(e)[:300]}"
         print(f"[RICHIESTA email cliente non inviata: id={rid} {type(e).__name__}: {str(e)[:200]}]")
         return f"errore {type(e).__name__}"
+
+
+# Ultimo errore di invio per richiesta, in memoria: lo staff lo legge nel
+# dettaglio e da /reinvia-email, senza cercarlo nei log. Mai il testo
+# dell'email, solo la risposta di Resend.
+_ULTIMO_ERRORE_EMAIL_CLIENTE = {}
+
+
+@app.post("/richieste/{rid}/reinvia-email", dependencies=SOLO_ADMIN)
+def richieste_reinvia_email(rid: int):
+    """Riprova l'email al cliente per una richiesta gia' risposta il cui invio
+    e' fallito (da_inviare_email ancora true). Sincrono, idempotente su
+    email_cliente_inviata_il, esito e dettaglio dell'errore al chiamante."""
+    esito = _invia_email_cliente(rid)
+    if esito == "inesistente":
+        raise HTTPException(status_code=404, detail="Richiesta non trovata.")
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT email_cliente_inviata_il, da_inviare_email FROM richieste_operatore WHERE id = %s", (rid,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    return {"id": rid, "esito": esito,
+            "email_cliente_inviata_il": r[0].isoformat() if r and r[0] else None,
+            "da_inviare_email": bool(r[1]) if r else None,
+            "dettaglio_errore": _ULTIMO_ERRORE_EMAIL_CLIENTE.get(rid) if esito.startswith("errore") else None}
 
 
 # Limite leggero e SEPARATO per la lettura dei messaggi dal widget (che ogni
