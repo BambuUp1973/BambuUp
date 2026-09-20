@@ -8239,12 +8239,20 @@ def _bto_codici_per_nome(per_nome: dict, q: str):
                     out.append(v)
         return out
 
-    parole = [t for t in _wc_norm(q).split() if t]
-    token = _fully_taglia_token(q) or parole
-    letterale = [r for n, righe in per_nome.items() if all(t in n for t in parole) for r in righe]
+    parole, _ = _fully_genere([t for t in _wc_norm(q).split() if t])
+    token, solo_uomo = _fully_genere(_fully_taglia_token(q) or parole)
+    if not parole or not token:
+        # Solo parole di genere ("uomo"): senza un nome un AND vuoto direbbe
+        # True e si porterebbe a casa tutto il master.
+        return [], None
+    # "uomo" senza "donna": via i modelli con marcatore donna/bambino.
+    tieni = _fully_nome_da_uomo if solo_uomo else (lambda nome: True)
+    letterale = [r for n, righe in per_nome.items()
+                 if all(t in n for t in parole) and tieni(n) for r in righe]
     if letterale:
         return codici_di(letterale), "nome nel master btoweb (tutte le parole) -> EAN -> Fully per barcode"
-    radici = [r for n, righe in per_nome.items() if _bto_match_radice(n, token) for r in righe]
+    radici = [r for n, righe in per_nome.items()
+              if _bto_match_radice(n, token) and tieni(n) for r in righe]
     if radici:
         return codici_di(radici), "nome nel master btoweb (radici delle parole) -> EAN -> Fully per barcode"
     per_sezione = []
@@ -8256,6 +8264,8 @@ def _bto_codici_per_nome(per_nome: dict, q: str):
         residue = [t for t in token if t not in consumate]
         for r in sz["righe"]:
             if residue and not _bto_match_radice(r.get("product_name"), residue):
+                continue
+            if not tieni(r.get("product_name")):
                 continue
             per_sezione.append(r)
     if per_sezione:
@@ -8483,6 +8493,38 @@ _FULLY_TAGLIA_SINONIMI = {
 }
 _FULLY_TAGLIA_XRUN_RE = re.compile(r"^(Y)?(X{2,})(L|S)$")
 
+# Parole di GENERE nella query. "uomo" non compare in NESSUN nome del master:
+# i modelli maschili non hanno un marcatore ("rash comp belt rank white 2026
+# edition"), sono le donne e i bambini ad averlo (FEMALE, KIDS). Quindi
+# "uomo" non e' una parola da cercare nel nome: e' un FILTRO che toglie i
+# modelli donna e bambino. "donna" da sola resta una parola del nome (->
+# female, via sinonimi). Se la query nomina sia uomo che donna ("uomo e
+# donna") si vuole tutto: nessun filtro e niente 'female' nel nome.
+# Visto il 20/09/2026: "rashguard beltrank 2026 uomo" tornava "non trovato".
+_FULLY_PAROLE_UOMO = {"uomo", "uomini", "maschile", "maschili", "man", "men", "mens", "male"}
+_FULLY_PAROLE_DONNA = {"donna", "donne", "femminile", "femminili", "woman", "women", "female"}
+_FULLY_MARCATORI_NON_UOMO = ("female", "woman", "women", "kids", "kid ", "junior", "youth", "bambin")
+
+
+def _fully_genere(token: list):
+    """(parole senza quelle di genere, solo_uomo). solo_uomo e' True quando la
+    query dice uomo e non donna: allora i modelli con marcatore donna/bambino
+    vanno esclusi. Con entrambi i generi si tolgono tutte e due le parole e
+    non si filtra."""
+    uomo = any(t in _FULLY_PAROLE_UOMO for t in token)
+    if not uomo:
+        return list(token), False
+    donna = any(t in _FULLY_PAROLE_DONNA for t in token)
+    resto = [t for t in token
+             if t not in _FULLY_PAROLE_UOMO and not (donna and t in _FULLY_PAROLE_DONNA)]
+    return resto, not donna
+
+
+def _fully_nome_da_uomo(nome) -> bool:
+    """True se il nome NON porta un marcatore donna/bambino."""
+    n = " " + _wc_norm(str(nome or "")) + " "
+    return not any(m in n for m in _FULLY_MARCATORI_NON_UOMO)
+
 
 def _fully_norm_taglia(t) -> str:
     """Forma canonica di una taglia per il confronto: maiuscola, senza spazi
@@ -8535,7 +8577,8 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
     la taglia non e' libera in nessun modello. Le righe Fully fuori anagrafica
     con quella taglia nel nome si contano A PARTE, mai in silenzio."""
     tag = _fully_norm_taglia(taglia)
-    token = [t for t in _fully_taglia_token(q) if _fully_norm_taglia(t) != tag]
+    token, solo_uomo = _fully_genere(
+        [t for t in _fully_taglia_token(q) if _fully_norm_taglia(t) != tag])
     out = {
         **base,
         "tipo": "giacenza_fully_per_taglia",
@@ -8573,6 +8616,8 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
         nome = str(r.get("product_name") or "").strip()
         k = _wc_norm(nome).strip()
         if not k:
+            return
+        if solo_uomo and not _fully_nome_da_uomo(nome):
             return
         v = candidati.setdefault(k, {"nome": nome, "righe": [], "sezioni": set(), "_ids": set()})
         if id(r) not in v["_ids"]:
