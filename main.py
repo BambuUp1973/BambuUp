@@ -8852,14 +8852,18 @@ def _fully_linee(gruppi: list) -> list:
     for g in gruppi:
         k = _fully_linea_di(g["prodotto"])
         if k not in linee:
-            linee[k] = {"linea": k, "genere": _fully_genere_del_nome(g["prodotto"]),
-                        "modelli": [], "in_magazzino": 0}
+            genere = _fully_genere_del_nome(g["prodotto"])
+            linee[k] = {"titolo_sezione": f"{k} ({genere})", "modelli": [],
+                        "totali_linea": {"in_magazzino": 0, "libere": 0, "in_arrivo": 0, "in_uscita": 0}}
             ordine.append(k)
         linee[k]["modelli"].append(g["prodotto"])
         tot = g.get("totali_calcolati_dallo_strumento") or {}
-        linee[k]["in_magazzino"] += int(tot.get("in_magazzino") or 0)
+        for campo in linee[k]["totali_linea"]:
+            linee[k]["totali_linea"][campo] += int(tot.get(campo) or 0)
     out = [linee[k] for k in ordine]
-    out.sort(key=lambda l: (-len(l["modelli"]), -l["in_magazzino"]))
+    out.sort(key=lambda l: (-len(l["modelli"]), -l["totali_linea"]["in_magazzino"]))
+    for i, l in enumerate(out, 1):
+        l["sezione"] = f"{i} di {len(out)}"
     posizione = {n: i for i, l in enumerate(out) for n in l["modelli"]}
     gruppi.sort(key=lambda g: posizione.get(g["prodotto"], len(out)))
     return out
@@ -8867,18 +8871,21 @@ def _fully_linee(gruppi: list) -> list:
 
 _FULLY_NOTA_COMPATTO = (
     "FORMATO OBBLIGATORIO con piu' di {soglia} prodotti: NIENTE elenco taglia per "
-    "taglia e NIENTE tabella per modello. Le SEZIONI sono le 'linee' qui sotto, in "
-    "QUESTO ordine, ognuna con un titolo suo fatto dal nome della linea e dal "
-    "genere (es. \"Belt rank 2026 uomo\", \"Belt rank 2026 donna\", \"Kumo 2026\"): "
-    "due linee diverse NON si fondono in una sezione sola anche se hanno lo stesso "
-    "genere. In ogni sezione: (1) prima i totali per colore, sulla stessa riga "
-    "(\"White 87 · Blue 94 · Purple 77 · Brown 48 · Black 75\"); (2) poi UNA riga per "
-    "modello con le taglie in fila, usando per ogni taglia il numero 'libere', il "
-    "totale e gli 'in arrivo': \"White: XXS 5 · XS 9 · S 14 · M 24 · L 21 · XL 8 · "
-    "XXL 6 = 87, in arrivo 81\". Se per un modello 'in_magazzino' e 'libere' sono "
-    "diversi, aggiungi \"(in magazzino N)\" dopo il totale. Tutti i modelli "
-    "compaiono. I record doppi si dichiarano UNA volta, in una riga in fondo, "
-    "senza segnare ogni modello."
+    "taglia e NIENTE tabella per modello. Le SEZIONI sono ESATTAMENTE le 'linee': "
+    "una sezione per linea, con 'titolo_sezione' come titolo (ripulito: \"rash comp "
+    "belt rank 2026 edition (uomo)\" -> \"Belt rank 2026 uomo\"), nell'ordine di "
+    "'sezione'. Tre linee = tre sezioni: uomo e donna NON sono sezioni e due linee "
+    "con lo stesso genere restano due sezioni separate, una dopo l'altra, mai una "
+    "dentro l'altra. In ogni sezione: (1) prima i totali per colore, sulla stessa "
+    "riga (\"White 87 · Blue 94 · Purple 77 · Brown 48 · Black 75\"), presi da "
+    "'totali_calcolati_dallo_strumento' di ogni modello; (2) poi UNA riga per modello "
+    "con le taglie in fila, usando per ogni taglia il numero 'libere', il totale e "
+    "gli 'in arrivo': \"White: XXS 5 · XS 9 · S 14 · M 24 · L 21 · XL 8 · XXL 6 = "
+    "87, in arrivo 81\". Se per un modello 'in_magazzino' e 'libere' sono diversi, "
+    "aggiungi \"(in magazzino N)\" dopo il totale. I totali di una linea sono SOLO "
+    "quelli in 'totali_linea': non calcolarne altri, non sommare linee fra loro. "
+    "Tutti i modelli compaiono. I record doppi si dichiarano UNA volta, in una riga "
+    "in fondo a tutto, senza segnare ogni modello."
 )
 
 
