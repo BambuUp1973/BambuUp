@@ -7331,14 +7331,14 @@ def _risposta_finale(testo: str, contesto: dict) -> str:
 # di chiamare passa_a_operatore. Solo retail, solo se nessuno strumento ha
 # gia' fissato il testo in questo turno.
 _RETE_NON_SO_RE = re.compile(
-    r"non ho (questa |quest'|una |le |la )?(informazion|risposta precisa|dettagli|indicazion)"
-    r"|non (dispongo|trovo) (di )?(questa |quest')?informazion"
-    r"|(nel|dal|il) manuale\b|manuale (a mia |a )?disposizione"
-    r"|materiale (a mia |a )?disposizione|nei documenti|nei dati"
+    r"non ho trovato"
+    r"|non (ho|dispongo|trovo|abbiamo)[^.\n]{0,40}?(informazion|risposta precisa|dettagli|indicazion|istruzion)"
+    r"|(nel|dal|del) (manuale|materiale)\b|il manuale\b|(manuale|materiale) (che ho|ricevuto|a mia disposizione|a disposizione)"
+    r"|nei documenti|nei dati|nelle informazioni che ho"
     r"|non contiene (informazioni|istruzioni|indicazioni|il dato)"
-    r"|i don'?t have (this|that|the|any) (information|detail|data)"
-    r"|no (specific )?information (on|about)|not (covered|included) in"
-    r"|(the|my|our) manual\b|material available",
+    r"|i (don'?t|do not|couldn'?t|could not|can'?t|cannot) (have|find)[^.\n]{0,40}?(information|detail|data|instruction)"
+    r"|no (specific )?information (on|about)|not (covered|included|available) in"
+    r"|(the|my|our|available) (manual|material)\b",
     re.IGNORECASE,
 )
 
@@ -7354,6 +7354,23 @@ def _rete_bot_non_sa(risposta: str, role: str, contesto: dict, messaggio_cliente
     print(f"[RICHIESTA] rete bot_non_sa esito={out['esito']} id={out['id']} "
           f"chat={contesto.get('chat_id')} risposta_scartata={risposta[:120]!r}")
     return out["testo_da_riferire"]
+
+
+def _rete_email(risposta: str, role: str, contesto: dict, messaggio_cliente: str) -> str:
+    """Solo retail, solo se nessuno strumento ha fissato il testo: un'email nel
+    messaggio del cliente con una richiesta aperta si salva qui. Se non c'e'
+    una richiesta aperta la risposta del modello resta com'e'."""
+    if _normalize_role(role) != "retail" or not contesto or contesto.get("testo_fisso"):
+        return risposta
+    trovata = _EMAIL_RE.search(messaggio_cliente or "")
+    if not trovata:
+        return risposta
+    esito = tool_salva_email_richiesta(trovata.group(0), messaggio_cliente, contesto)
+    if esito.get("esito") != "email_salvata":
+        return risposta
+    print(f"[RICHIESTA] rete email chat={contesto.get('chat_id')} "
+          f"risposta_scartata={risposta[:120]!r}")
+    return esito["testo_da_riferire"]
 
 
 _PAROLE_IT = {
@@ -7965,6 +7982,10 @@ def chat(request: ChatRequest, http_request: Request,
         # passa_a_operatore, la richiesta si apre qui e il cliente riceve il
         # testo fisso. Visto il 20/09/2026 alla prima verifica live.
         bot_reply = _rete_bot_non_sa(bot_reply, role, contesto, request.message)
+        # Stessa rete per l'email: se il cliente ne ha scritta una e c'e' una
+        # richiesta aperta, si salva nel codice anche se il modello non ha
+        # chiamato salva_email_richiesta.
+        bot_reply = _rete_email(bot_reply, role, contesto, request.message)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
