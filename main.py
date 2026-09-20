@@ -133,6 +133,31 @@ def init_db():
         # soli clienti. E i token del modello per ogni risposta, per misurare
         # il costo dal traffico vero invece di stimarlo. Nessun indirizzo IP
         # viene mai scritto qui.
+        # Richieste all'operatore (lotto 1, 20/09/2026): aperte dal bot retail
+        # quando non sa rispondere o quando il cliente chiede una persona.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS richieste_operatore (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                tipo TEXT NOT NULL,
+                priorita TEXT NOT NULL,
+                stato TEXT NOT NULL DEFAULT 'aperta',
+                lingua TEXT,
+                domanda TEXT,
+                contesto TEXT,
+                email_cliente TEXT,
+                risposta TEXT,
+                operatore TEXT,
+                risposto_il TIMESTAMP,
+                notificata_il TIMESTAMP,
+                ip_hash TEXT,
+                da_inviare_email BOOLEAN DEFAULT FALSE
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_chat ON richieste_operatore (chat_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_stato ON richieste_operatore (stato, priorita, created_at);")
+        cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_ip ON richieste_operatore (ip_hash, created_at);")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS profilo TEXT;")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_in INTEGER;")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_out INTEGER;")
@@ -2387,6 +2412,60 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "passa_a_operatore",
+        "description": (
+            "SOLO CLIENTE FINALE. Passa la conversazione a un operatore umano che "
+            "rispondera' qui in chat. Chiamalo in DUE casi soltanto: (1) tipo "
+            "'bot_non_sa': rispondi_dal_manuale ha restituito NESSUN_CONTENUTO oppure "
+            "il materiale non contiene il dato preciso richiesto (un costo, un tempo, "
+            "una regola, un'informazione sul prodotto) — NON inventare e NON rimandare "
+            "a un'email: chiama questo; (2) tipo 'cliente_chiede': il cliente chiede "
+            "esplicitamente di parlare con una persona, un operatore, un umano, "
+            "qualcuno dello staff. NON chiamarlo per ingrosso/squadre/rivendita, "
+            "reclami con foto, pagamenti e bonifici, persone dell'azienda: quelli "
+            "vanno a info@kanokimonos.com. Restituisce 'testo_da_riferire': lo riporti "
+            "al cliente PAROLA PER PAROLA, senza aggiungere, togliere o riformulare, "
+            "e senza mai usare le parole 'richiesta', 'ticket', 'priorita''."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tipo": {
+                    "type": "string",
+                    "enum": ["bot_non_sa", "cliente_chiede"],
+                    "description": "bot_non_sa = non ho l'informazione; cliente_chiede = il cliente vuole una persona.",
+                },
+                "riassunto": {
+                    "type": "string",
+                    "description": "Una riga: cosa vuole sapere o ottenere il cliente.",
+                },
+                "lingua": {
+                    "type": "string",
+                    "enum": ["it", "en"],
+                    "description": "Lingua in cui scrive il cliente.",
+                },
+            },
+            "required": ["tipo", "riassunto"],
+        },
+    },
+    {
+        "name": "salva_email_richiesta",
+        "description": (
+            "SOLO CLIENTE FINALE. Dopo che la conversazione e' stata passata a un "
+            "operatore, se il cliente scrive un indirizzo email chiamalo con quell'"
+            "indirizzo: viene associato alla sua conversazione cosi' l'operatore gli "
+            "scrive anche li'. Restituisce 'testo_da_riferire' da riportare parola "
+            "per parola."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "description": "L'indirizzo email scritto dal cliente."},
+            },
+            "required": ["email"],
+        },
+    },
+    {
         "name": "rispondi_dal_manuale",
         "description": (
             "Recupera informazioni dal manuale operativo interno / knowledge base "
@@ -2467,17 +2546,23 @@ COSA SAI FARE (e nient'altro)
 
 PRIMA DI RISPONDERE CONSULTI, SEMPRE
 - Per taglie, spedizioni, resi, cambi, pagamenti, cura del prodotto e ogni altra informazione di fatto (un tempo, un costo, un termine, una regola) chiami rispondi_dal_manuale PRIMA di rispondere. Mai a memoria: un numero o una regola che non sta nel materiale ricevuto in questa conversazione è un numero inventato, anche se suona ragionevole. Niente "di norma", "in genere", "circa", niente intervalli plausibili.
-- Se rispondi_dal_manuale restituisce NESSUN_CONTENUTO, oppure il materiale non contiene il dato preciso richiesto, dici solo che quel dato non ce l'hai e che si chiede a info@kanokimonos.com. Se il materiale risponde solo in parte, dai la parte che c'è e dici quale parte manca, senza riempire il buco.
+- Se rispondi_dal_manuale restituisce NESSUN_CONTENUTO, oppure il materiale non contiene il dato preciso richiesto, NON rimandi a un'email: chiami passa_a_operatore con tipo 'bot_non_sa' e riporti il suo testo parola per parola. Se il materiale risponde solo in parte, dai la parte che c'è e per la parte che manca chiami passa_a_operatore, senza riempire il buco.
 - Verso il cliente non dici mai che hai consultato, cercato o letto qualcosa: dai la risposta e basta.
 
 COSA NON PUOI FARE, DETTO COME UN FATTO
 - Non vedi il magazzino, non vedi le giacenze, non vedi gli ordini, non vedi le spedizioni, non vedi i tracking. Non è una restrizione da spiegare: è semplicemente ciò che non hai.
-- Non puoi controllare, cercare, verificare, contattare nessuno, richiamare o aggiornare. Non esiste un secondo messaggio: quello che non dici adesso non lo dirai mai.
+- Non puoi controllare, cercare, verificare, contattare nessuno, richiamare o aggiornare. L'unico seguito possibile è l'operatore, e solo tramite passa_a_operatore: fuori da quello non esiste un secondo messaggio, quello che non dici adesso non lo dirai mai.
 - Vietate le formule "controllo", "verifico", "cerco", "fammi vedere", "ti dico subito", "ti faccio sapere", "ti aggiorno" e ogni equivalente, in qualsiasi lingua.
 - Non chiedere MAI il numero d'ordine per te: lo nomini solo dicendo che serve al cliente per scrivere a info@kanokimonos.com.
 
 DATI MANCANTI
-- Quando un dato non ce l'hai dici solo "non ho questa informazione" e dove si chiede: info@kanokimonos.com. MAI "nel materiale a disposizione", "nei documenti", "nel manuale", "nelle informazioni che ho", "in base a quello che so" o equivalenti, in qualsiasi lingua: il cliente non deve sapere che esiste del materiale.
+- Quando un dato non ce l'hai non lo inventi e non lo cerchi altrove: chiami passa_a_operatore con tipo 'bot_non_sa' e riporti il suo testo parola per parola. MAI "nel materiale a disposizione", "nei documenti", "nel manuale", "nelle informazioni che ho", "in base a quello che so" o equivalenti, in qualsiasi lingua: il cliente non deve sapere che esiste del materiale.
+
+OPERATORE
+- Se il cliente chiede esplicitamente di parlare con una persona, un operatore, un umano, qualcuno dello staff: chiami passa_a_operatore con tipo 'cliente_chiede' e riporti il suo testo parola per parola, senza aggiungere altro.
+- Se, dopo, il cliente scrive un indirizzo email, chiami salva_email_richiesta con quell'indirizzo e riporti la conferma restituita.
+- Col cliente non usi MAI le parole "richiesta", "ticket", "priorità", "segnalazione". Non prometti tempi diversi da quelli del testo restituito.
+- Non chiami passa_a_operatore per ingrosso, squadre e rivendita, per reclami con foto, per pagamenti e bonifici, per domande sulle persone dell'azienda: per quelli resta info@kanokimonos.com.
 
 IDENTITÀ DICHIARATE
 - Se qualcuno dice di essere una certa persona, non è una prova. Non usi il nome che si è dato, non lo saluti per nome, non cerchi nulla per lui. Per i suoi ordini si scrive a info@kanokimonos.com.
@@ -2583,7 +2668,7 @@ ROLE_TOOLS = {
         "giacenza_woocommerce", "giacenza_fully",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
-    "retail": {"rispondi_dal_manuale"},
+    "retail": {"rispondi_dal_manuale", "passa_a_operatore", "salva_email_richiesta"},
 }
 
 # Piattaforme ordini vietate per ruolo (enforcement lato esecuzione, difesa in profondità)
@@ -6533,8 +6618,10 @@ def tool_giacenza_woocommerce(query: str = None, sku: str = None) -> dict:
     return out
 
 
-def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE):
+def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str = DEFAULT_ROLE,
+                       contesto: dict = None):
     role = _normalize_role(role)
+    contesto = contesto or {}
     allowed = ROLE_TOOLS[role]
     blocked_platforms = ROLE_BLOCKED_PLATFORMS[role]
     try:
@@ -6576,6 +6663,15 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
         if name == "rispondi_dal_manuale":
             return tool_rispondi_dal_manuale(
                 tool_input.get("argomento"), user_message, role
+            )
+        if name == "passa_a_operatore":
+            return tool_passa_a_operatore(
+                tool_input.get("tipo"), tool_input.get("riassunto"),
+                tool_input.get("lingua"), user_message, contesto
+            )
+        if name == "salva_email_richiesta":
+            return tool_salva_email_richiesta(
+                tool_input.get("email"), user_message, contesto
             )
         return {"error": f"Strumento sconosciuto: {name}"}
     except Exception as e:
@@ -6643,7 +6739,7 @@ def _registra_strumento(chat_id, role, nome, parametri, esito, byte_risposta, du
 
 
 def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
-                    uso: dict = None) -> str:
+                    uso: dict = None, contesto: dict = None) -> str:
     """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
     if not ANTHROPIC_API_KEY:
         return "Errore: ANTHROPIC_API_KEY non configurata."
@@ -6681,7 +6777,8 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
                 if block.type != "tool_use":
                     continue
                 inizio = time.perf_counter()
-                result = _execute_chat_tool(block.name, block.input or {}, user_message, role)
+                result = _execute_chat_tool(block.name, block.input or {}, user_message, role,
+                                            contesto)
                 esito = "errore" if isinstance(result, dict) and result.get("error") else "ok"
                 if not isinstance(result, str):
                     result = json.dumps(result, ensure_ascii=False, default=str)
@@ -6989,6 +7086,23 @@ def pulizia_conversazioni_clienti(esegui: bool = False) -> dict:
             "messaggi": sum(v["messaggi"] for p, v in per_profilo.items() if p in PROFILI_CLIENTI),
         }
         out["da_cancellare"] = da_cancellare
+        # Le richieste all'operatore seguono la stessa finestra: piu' vecchie
+        # di 90 giorni si cancellano insieme alle conversazioni dei clienti.
+        cur.execute(
+            "SELECT COUNT(*) FROM richieste_operatore "
+            "WHERE created_at < NOW() - (%s * INTERVAL '1 day')",
+            (CONSERVAZIONE_CLIENTI_GIORNI,),
+        )
+        richieste_vecchie = cur.fetchone()[0]
+        out["richieste_operatore_da_cancellare"] = richieste_vecchie
+        if esegui and consentito and richieste_vecchie:
+            cur.execute(
+                "DELETE FROM richieste_operatore "
+                "WHERE created_at < NOW() - (%s * INTERVAL '1 day')",
+                (CONSERVAZIONE_CLIENTI_GIORNI,),
+            )
+            out["cancellate_richieste_operatore"] = cur.rowcount
+            conn.commit()
         if esegui and consentito and da_cancellare["messaggi"]:
             cur.execute(
                 """
@@ -7106,6 +7220,454 @@ def strumenti_log(chat_id: str = None, limit: int = 50):
     cur.close()
     conn.close()
     return {"chat_id": chat_id, "righe": righe, "quante": len(righe)}
+
+
+# --- RICHIESTE ALL'OPERATORE (lotto 1, 20/09/2026) ----------------------------
+# Il cliente finale (profilo retail) puo' finire in mano a una persona in due
+# casi: il bot non ha l'informazione (tipo 'bot_non_sa', priorita' alta) o il
+# cliente chiede esplicitamente una persona ('cliente_chiede', normale). La
+# riga sta in richieste_operatore; il cliente riceve un testo FISSO deciso
+# qui, mai dal modello; lo staff riceve un'email via Resend (fail-silent) e
+# lavora le richieste dagli endpoint /richieste con la chiave staff. Limiti:
+# una richiesta aperta per chat, cinque aperture al giorno per impronta IP.
+RESEND_API_KEY_BOT = os.getenv("RESEND_API_KEY_BOT")
+MINISITO_RICHIESTE_URL = os.getenv("MINISITO_RICHIESTE_URL") or "(pagina del mini-sito non ancora configurata)"
+RICHIESTE_MITTENTE = "Kano Staff <staff@kanokimonos.app>"
+RICHIESTE_DESTINATARIO_STAFF = "admin@kanokimonos.com"
+RICHIESTE_MAX_GIORNO_IP = 5
+RICHIESTE_TIPI = ("bot_non_sa", "cliente_chiede")
+RICHIESTE_PRIORITA = {"bot_non_sa": "alta", "cliente_chiede": "normale"}
+RICHIESTE_CONTESTO_MESSAGGI = 6
+
+# Testi ESATTI che il bot riferisce al cliente: il modello li riporta parola
+# per parola. Niente "richiesta", "ticket", "priorita'".
+RICHIESTE_TESTI = {
+    ("bot_non_sa", "it"): (
+        "Su questo non ho una risposta precisa, quindi ho passato la tua domanda a un "
+        "operatore: ti risponde qui in chat, di norma entro un giorno lavorativo. Se "
+        "vuoi, lascia la tua email e ti scriviamo anche lì."
+    ),
+    ("bot_non_sa", "en"): (
+        "I don't have a precise answer to this, so I've passed your question to an "
+        "operator: they'll reply here in the chat, usually within one working day. If "
+        "you like, leave your email and we'll write to you there too."
+    ),
+    ("cliente_chiede", "it"): (
+        "Va bene, passo la conversazione a un operatore. Ti risponde qui in chat: serve "
+        "un po' di tempo, di norma entro due giorni lavorativi. Se vuoi, lascia la tua "
+        "email e ti scriviamo anche lì."
+    ),
+    ("cliente_chiede", "en"): (
+        "All right, I'm passing the conversation to an operator. They'll reply here in "
+        "the chat: it takes a little time, usually within two working days. If you like, "
+        "leave your email and we'll write to you there too."
+    ),
+    ("gia_aperta", "it"): (
+        "Un operatore ha già in carico questa conversazione e ti risponde qui in chat. "
+        "Se vuoi, lascia la tua email e ti scriviamo anche lì."
+    ),
+    ("gia_aperta", "en"): (
+        "An operator already has this conversation and will reply here in the chat. If "
+        "you like, leave your email and we'll write to you there too."
+    ),
+    ("limite", "it"): (
+        "In questo momento non riesco a passarti a un operatore: scrivi a "
+        "info@kanokimonos.com e ti rispondono da lì."
+    ),
+    ("limite", "en"): (
+        "Right now I can't pass you to an operator: write to info@kanokimonos.com and "
+        "they'll reply from there."
+    ),
+    ("email_ok", "it"): "Grazie, ho aggiunto la tua email: l'operatore ti scrive anche lì.",
+    ("email_ok", "en"): "Thanks, I've added your email: the operator will write to you there too.",
+    ("email_non_valida", "it"): "L'indirizzo email non sembra scritto bene: puoi ricontrollarlo e riscriverlo?",
+    ("email_non_valida", "en"): "That email address doesn't look right: could you check it and write it again?",
+    ("email_senza_richiesta", "it"): (
+        "Al momento nessun operatore ha in carico questa conversazione, quindi non ho "
+        "dove salvare la tua email. Se vuoi parlare con un operatore, dimmelo."
+    ),
+    ("email_senza_richiesta", "en"): (
+        "No operator has this conversation at the moment, so I have nowhere to save "
+        "your email. If you'd like to talk to an operator, just tell me."
+    ),
+}
+RICHIESTE_ISTRUZIONE = (
+    "Riporta al cliente ESATTAMENTE 'testo_da_riferire', parola per parola, senza "
+    "aggiungere, togliere o riformulare nulla."
+)
+
+_PAROLE_IT = {
+    "il", "lo", "la", "gli", "le", "di", "che", "non", "per", "una", "un", "con", "sono",
+    "come", "quanto", "quanti", "posso", "voglio", "vorrei", "mi", "ho", "del", "della",
+    "alla", "è", "se", "ma", "anche", "grazie", "ciao", "buongiorno", "parlare", "persona",
+    "operatore", "qualcuno", "mia", "mio", "questa", "questo", "dove", "quando",
+}
+_PAROLE_EN = {
+    "the", "i", "you", "is", "are", "can", "do", "my", "to", "and", "what", "how", "want",
+    "would", "with", "of", "for", "it", "in", "please", "an", "which", "should", "size",
+    "talk", "speak", "someone", "person", "human", "operator", "hello", "hi", "thanks",
+    "i'm", "im", "i'd", "order", "return", "where", "when", "does", "did", "am",
+}
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+
+def _lingua_del_testo(testo: str) -> str:
+    """'en' se le parole inglesi battono quelle italiane, altrimenti 'it'."""
+    parole = re.findall(r"[a-zà-ùA-ZÀ-Ù']+", testo or "")
+    parole = [p.lower() for p in parole]
+    it = sum(1 for p in parole if p in _PAROLE_IT)
+    en = sum(1 for p in parole if p in _PAROLE_EN)
+    return "en" if en > it else "it"
+
+
+def _lingua_richiesta(hint, contesto: dict, user_message: str) -> str:
+    if hint in ("it", "en"):
+        return hint
+    l = (contesto or {}).get("lingua")
+    return l if l in ("it", "en") else _lingua_del_testo(user_message)
+
+
+def _email_valida(email: str):
+    """L'email ripulita se ha una forma valida, altrimenti None."""
+    e = (email or "").strip().strip("<>").strip()
+    if len(e) > 254 or not _EMAIL_RE.fullmatch(e):
+        return None
+    return e
+
+
+def _testo_richiesta(chiave: str, lingua: str) -> str:
+    return RICHIESTE_TESTI.get((chiave, lingua)) or RICHIESTE_TESTI[(chiave, "it")]
+
+
+def _maschera_email(email):
+    if not email or "@" not in email:
+        return None
+    locale, dominio = email.split("@", 1)
+    return f"{locale[:1]}***@{dominio}"
+
+
+def _domanda_e_contesto(cur, chat_id: str):
+    """(ultimo messaggio del cliente, ultimi N messaggi della chat come testo)."""
+    cur.execute(
+        "SELECT role, sender, content FROM messages WHERE chat_id = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT %s",
+        (chat_id, RICHIESTE_CONTESTO_MESSAGGI),
+    )
+    righe = list(reversed(cur.fetchall()))
+    domanda = next((c for r, s, c in reversed(righe) if r == "user"), None)
+    etichette = {"user": "cliente", "assistant": "bot"}
+    contesto = "\n".join(
+        f"{'operatore' if (s or '').lower() == 'operatore' else etichette.get(r, r)}: {c}"
+        for r, s, c in righe
+    )
+    return domanda, contesto
+
+
+def _richiesta_aperta_di(cur, chat_id: str):
+    cur.execute(
+        "SELECT id, email_cliente FROM richieste_operatore "
+        "WHERE chat_id = %s AND stato = 'aperta' ORDER BY id DESC LIMIT 1",
+        (chat_id,),
+    )
+    return cur.fetchone()
+
+
+def apri_richiesta_operatore(chat_id: str, tipo: str, lingua: str, ip_hash,
+                             riassunto: str = None) -> dict:
+    """Apre una richiesta per la chat (se non ce n'e' gia' una aperta e se
+    l'impronta IP non ha superato le aperture del giorno). Ritorna
+    {'esito': aperta|gia_aperta|limite|errore, 'id', 'testo_da_riferire'}."""
+    if tipo not in RICHIESTE_TIPI:
+        tipo = "cliente_chiede"
+    lingua = lingua if lingua in ("it", "en") else "it"
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        gia = _richiesta_aperta_di(cur, chat_id)
+        if gia:
+            cur.close()
+            conn.close()
+            print(f"[RICHIESTA] gia' aperta id={gia[0]} chat={chat_id}")
+            return {"esito": "gia_aperta", "id": gia[0],
+                    "testo_da_riferire": _testo_richiesta("gia_aperta", lingua)}
+        if ip_hash:
+            cur.execute(
+                "SELECT COUNT(*) FROM richieste_operatore WHERE ip_hash = %s AND "
+                "(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Rome')::date = "
+                "(NOW() AT TIME ZONE 'Europe/Rome')::date",
+                (ip_hash,),
+            )
+            oggi = cur.fetchone()[0]
+            if oggi >= RICHIESTE_MAX_GIORNO_IP:
+                cur.close()
+                conn.close()
+                print(f"[RICHIESTA] limite giornaliero ip_hash={ip_hash} aperture={oggi}")
+                return {"esito": "limite", "id": None,
+                        "testo_da_riferire": _testo_richiesta("limite", lingua)}
+        domanda, contesto = _domanda_e_contesto(cur, chat_id)
+        if not domanda:
+            domanda = riassunto
+        cur.execute(
+            """
+            INSERT INTO richieste_operatore
+                (chat_id, tipo, priorita, stato, lingua, domanda, contesto, ip_hash)
+            VALUES (%s, %s, %s, 'aperta', %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (chat_id, tipo, RICHIESTE_PRIORITA[tipo], lingua, domanda, contesto, ip_hash),
+        )
+        rid = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"[RICHIESTA] aperta id={rid} tipo={tipo} lingua={lingua} chat={chat_id}")
+        threading.Thread(target=_notifica_staff_richiesta, args=(rid,), daemon=True).start()
+        return {"esito": "aperta", "id": rid, "testo_da_riferire": _testo_richiesta(tipo, lingua)}
+    except Exception as e:
+        print(f"[RICHIESTA] errore apertura chat={chat_id}: {type(e).__name__}: {str(e)[:200]}")
+        return {"esito": "errore", "id": None,
+                "testo_da_riferire": _testo_richiesta("limite", lingua)}
+
+
+def _notifica_staff_richiesta(rid: int):
+    """Email allo staff via Resend. Fail-silent: una riga di log per esito,
+    mai un'eccezione verso chi apre. Idempotente su notificata_il."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT chat_id, tipo, priorita, lingua, domanda, contesto, email_cliente, "
+            "notificata_il FROM richieste_operatore WHERE id = %s", (rid,))
+        r = cur.fetchone()
+        if not r:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email non inviata: id={rid} inesistente]")
+            return
+        chat_id, tipo, priorita, lingua, domanda, contesto, email_cliente, notificata_il = r
+        if notificata_il:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email gia' inviata id={rid} il {notificata_il}]")
+            return
+        if not RESEND_API_KEY_BOT:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email non inviata: chiave assente] id={rid}")
+            return
+        corpo = (
+            f"Tipo: {tipo} (priorita' {priorita})\n"
+            f"Lingua: {lingua}\n"
+            f"Conversazione: {chat_id}\n\n"
+            f"Domanda:\n{domanda or '(vuota)'}\n\n"
+            f"Contesto (ultimi messaggi):\n{contesto or '(vuoto)'}\n\n"
+            f"Email del cliente: {email_cliente or '(non lasciata)'}\n\n"
+            f"Pagina: {MINISITO_RICHIESTE_URL}\n"
+        )
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY_BOT}",
+                     "Content-Type": "application/json"},
+            json={"from": RICHIESTE_MITTENTE, "to": [RICHIESTE_DESTINATARIO_STAFF],
+                  "subject": f"[Staff] Richiesta cliente - {tipo}", "text": corpo},
+            timeout=15,
+        )
+        if 200 <= resp.status_code < 300:
+            cur.execute("UPDATE richieste_operatore SET notificata_il = NOW() WHERE id = %s", (rid,))
+            conn.commit()
+            print(f"[RICHIESTA email inviata id={rid} tipo={tipo} http={resp.status_code}]")
+        else:
+            print(f"[RICHIESTA email non inviata: id={rid} http={resp.status_code} "
+                  f"{resp.text[:200]!r}]")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[RICHIESTA email non inviata: id={rid} {type(e).__name__}: {str(e)[:200]}]")
+
+
+def tool_passa_a_operatore(tipo, riassunto, lingua_hint, user_message, contesto: dict) -> dict:
+    chat_id = (contesto or {}).get("chat_id")
+    lingua = _lingua_richiesta(lingua_hint, contesto, user_message)
+    if not chat_id:
+        return {"esito": "errore", "testo_da_riferire": _testo_richiesta("limite", lingua),
+                "istruzione": RICHIESTE_ISTRUZIONE}
+    out = apri_richiesta_operatore(chat_id, tipo, lingua, (contesto or {}).get("ip_hash"), riassunto)
+    return {"esito": out["esito"], "testo_da_riferire": out["testo_da_riferire"],
+            "istruzione": RICHIESTE_ISTRUZIONE}
+
+
+def tool_salva_email_richiesta(email, user_message, contesto: dict) -> dict:
+    chat_id = (contesto or {}).get("chat_id")
+    lingua = _lingua_richiesta(None, contesto, user_message)
+    pulita = _email_valida(email)
+    if not pulita:
+        # Il modello puo' aver storpiato l'indirizzo: si riprova dal messaggio.
+        trovata = _EMAIL_RE.search(user_message or "")
+        pulita = _email_valida(trovata.group(0)) if trovata else None
+    if not pulita:
+        return {"esito": "email_non_valida",
+                "testo_da_riferire": _testo_richiesta("email_non_valida", lingua),
+                "istruzione": RICHIESTE_ISTRUZIONE}
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        aperta = _richiesta_aperta_di(cur, chat_id) if chat_id else None
+        if not aperta:
+            cur.close(); conn.close()
+            return {"esito": "email_senza_richiesta",
+                    "testo_da_riferire": _testo_richiesta("email_senza_richiesta", lingua),
+                    "istruzione": RICHIESTE_ISTRUZIONE}
+        cur.execute("UPDATE richieste_operatore SET email_cliente = %s WHERE id = %s",
+                    (pulita, aperta[0]))
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"[RICHIESTA] email salvata id={aperta[0]} chat={chat_id}")
+        return {"esito": "email_salvata",
+                "testo_da_riferire": _testo_richiesta("email_ok", lingua),
+                "istruzione": RICHIESTE_ISTRUZIONE}
+    except Exception as e:
+        print(f"[RICHIESTA] errore email chat={chat_id}: {type(e).__name__}: {str(e)[:200]}")
+        return {"esito": "errore", "testo_da_riferire": _testo_richiesta("limite", lingua),
+                "istruzione": RICHIESTE_ISTRUZIONE}
+
+
+# Chiavi client per gli endpoint delle richieste: la stessa x-bot-client-key di
+# /chat. Lo staff legge e risponde; il retail (widget) puo' solo aprire.
+def richiedi_chiave_staff(x_bot_client_key: str = Header(default=None)):
+    ruolo = ruolo_da_chiave_client(x_bot_client_key)
+    print(f"[RICHIESTE-KEY] chiave={esito_chiave_client(x_bot_client_key, ruolo)} richiesto=staff")
+    if ruolo != "staff":
+        rifiuta_chiave_client()
+
+
+def richiedi_chiave_retail(x_bot_client_key: str = Header(default=None)):
+    ruolo = ruolo_da_chiave_client(x_bot_client_key)
+    print(f"[RICHIESTE-KEY] chiave={esito_chiave_client(x_bot_client_key, ruolo)} richiesto=retail")
+    if ruolo != "retail":
+        rifiuta_chiave_client()
+
+
+SOLO_STAFF = [Depends(richiedi_chiave_staff)]
+SOLO_RETAIL = [Depends(richiedi_chiave_retail)]
+
+
+class RichiestaApriRequest(BaseModel):
+    chat_id: str
+    tipo: str = "cliente_chiede"
+    lingua: str = None
+
+
+class RichiestaRispondiRequest(BaseModel):
+    testo: str
+    operatore: str
+
+
+_RICHIESTA_CAMPI = ("id, chat_id, created_at, tipo, priorita, stato, lingua, domanda, "
+                    "contesto, email_cliente, risposta, operatore, risposto_il, "
+                    "notificata_il, da_inviare_email")
+
+
+def _richiesta_dict(r, email_intera: bool) -> dict:
+    (rid, chat_id, created_at, tipo, priorita, stato, lingua, domanda, contesto,
+     email_cliente, risposta, operatore, risposto_il, notificata_il, da_inviare_email) = r
+    return {
+        "id": rid, "chat_id": chat_id,
+        "created_at": created_at.isoformat() if created_at else None,
+        "tipo": tipo, "priorita": priorita, "stato": stato, "lingua": lingua,
+        "domanda": domanda, "contesto": contesto,
+        "email_cliente": email_cliente if email_intera else _maschera_email(email_cliente),
+        "risposta": risposta, "operatore": operatore,
+        "risposto_il": risposto_il.isoformat() if risposto_il else None,
+        "notificata_il": notificata_il.isoformat() if notificata_il else None,
+        "da_inviare_email": bool(da_inviare_email),
+    }
+
+
+@app.post("/richieste/apri", dependencies=SOLO_RETAIL)
+def richieste_apri(body: RichiestaApriRequest, http_request: Request):
+    """Apertura dal widget (lotto 2): chiave retail, chat_id e tipo."""
+    tipo = body.tipo if body.tipo in RICHIESTE_TIPI else "cliente_chiede"
+    lingua = body.lingua if body.lingua in ("it", "en") else "it"
+    ip_hash = _impronta_ip(ip_del_chiamante(http_request))
+    out = apri_richiesta_operatore(body.chat_id, tipo, lingua, ip_hash)
+    return {"esito": out["esito"], "id": out["id"], "testo": out["testo_da_riferire"]}
+
+
+@app.get("/richieste", dependencies=SOLO_STAFF)
+def richieste_elenco(stato: str = "aperta", limit: int = 200):
+    """Elenco per lo staff: prima le priorita' alte, poi le piu' vecchie.
+    L'email del cliente qui e' mascherata; intera nel dettaglio."""
+    limit = max(1, min(int(limit or 200), 2000))
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    ordine = "ORDER BY CASE priorita WHEN 'alta' THEN 0 ELSE 1 END, created_at ASC, id ASC"
+    if stato and stato != "tutte":
+        cur.execute(f"SELECT {_RICHIESTA_CAMPI} FROM richieste_operatore WHERE stato = %s "
+                    f"{ordine} LIMIT %s", (stato, limit))
+    else:
+        cur.execute(f"SELECT {_RICHIESTA_CAMPI} FROM richieste_operatore {ordine} LIMIT %s",
+                    (limit,))
+    righe = [_richiesta_dict(r, email_intera=False) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"stato": stato, "quante": len(righe), "richieste": righe}
+
+
+@app.get("/richieste/{rid}", dependencies=SOLO_STAFF)
+def richieste_dettaglio(rid: int):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute(f"SELECT {_RICHIESTA_CAMPI} FROM richieste_operatore WHERE id = %s", (rid,))
+    r = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="Richiesta non trovata.")
+    return _richiesta_dict(r, email_intera=True)
+
+
+@app.post("/richieste/{rid}/rispondi", dependencies=SOLO_STAFF)
+def richieste_rispondi(rid: int, body: RichiestaRispondiRequest):
+    """La risposta dell'operatore: stato 'risposta', e la riga entra nella
+    chat del cliente (messages, sender 'operatore') cosi' il widget del
+    lotto 2 la trovera'. L'invio per email al cliente e' del lotto 2: qui si
+    marca solo da_inviare_email quando l'email c'e'."""
+    testo = (body.testo or "").strip()
+    operatore = (body.operatore or "").strip()
+    if not testo or not operatore:
+        raise HTTPException(status_code=400, detail="Servono 'testo' e 'operatore'.")
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT chat_id, email_cliente, stato FROM richieste_operatore WHERE id = %s", (rid,))
+    r = cur.fetchone()
+    if not r:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="Richiesta non trovata.")
+    chat_id, email_cliente, stato_prima = r
+    da_inviare = bool(email_cliente)
+    cur.execute(
+        """
+        UPDATE richieste_operatore
+        SET risposta = %s, operatore = %s, risposto_il = NOW(), stato = 'risposta',
+            da_inviare_email = %s
+        WHERE id = %s
+        """,
+        (testo, operatore, da_inviare, rid),
+    )
+    cur.execute(
+        """
+        INSERT INTO messages (source, sender, chat_id, role, content, profilo)
+        VALUES ('operatore', 'operatore', %s, 'assistant', %s, 'retail')
+        RETURNING id
+        """,
+        (chat_id, testo),
+    )
+    mid = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(f"[RICHIESTA] risposta id={rid} operatore={operatore} chat={chat_id} messaggio={mid} "
+          f"stato_prima={stato_prima} da_inviare_email={da_inviare}")
+    return {"id": rid, "stato": "risposta", "chat_id": chat_id, "messaggio_id": mid,
+            "da_inviare_email": da_inviare}
 
 
 @app.get("/conversazioni", dependencies=SOLO_ADMIN)
@@ -7329,7 +7891,15 @@ def chat(request: ChatRequest, http_request: Request,
         # quali parametri (sostituisce la vecchia cascata di regex).
         # role seleziona modalità utente: deciso sopra, solo dalla chiave.
         uso = {}
-        bot_reply = chat_with_tools(request.chat_id, request.message, role, uso)
+        # Contesto per gli strumenti che aprono richieste all'operatore (solo
+        # retail): la conversazione, l'impronta dell'IP (mai l'IP) e la lingua.
+        contesto = {
+            "chat_id": request.chat_id,
+            "ip_hash": (_impronta_ip(ip_del_chiamante(http_request))
+                        if role not in ROLES_INTERNI else None),
+            "lingua": _lingua_del_testo(request.message),
+        }
+        bot_reply = chat_with_tools(request.chat_id, request.message, role, uso, contesto)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
