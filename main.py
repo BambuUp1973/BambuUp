@@ -2529,7 +2529,16 @@ ROLE_PROMPTS = {
         "Richiami lo strumento, riporti quello che restituisce anche se è identico a "
         "prima, e dici da quale fonte e campo viene. Se lo strumento segnala record "
         "doppi o anomalie, le dici. Un numero diverso dal precedente può uscire SOLO "
-        "se lo strumento lo ha restituito, e in quel caso lo dichiari."
+        "se lo strumento lo ha restituito, e in quel caso lo dichiari. "
+        "FORMATO DELLE GIACENZE CON PIÙ MODELLI. Oltre 5 modelli NIENTE tabella per "
+        "modello: una riga per modello con le taglie in fila e il totale, es. "
+        "\"White 2026: XXS 5 · XS 9 · S 14 · M 24 · L 21 · XL 8 · XXL 6 = 87, in "
+        "arrivo 81\". Le linee diverse vanno in SEZIONI SEPARATE, ognuna col suo nome "
+        "come sta nell'anagrafica (es. \"Belt rank 2026 uomo\", \"Belt rank 2026 "
+        "donna\", \"Kumo 2026\"): MAI fuse sotto un'unica voce \"uomo\" o \"donna\", "
+        "e MAI una linea secondaria prima di quella chiesta. In ogni sezione prima i "
+        "totali per colore, poi il dettaglio delle taglie. Tutti i modelli restituiti "
+        "dallo strumento compaiono: se sono tanti si accorcia il formato, non l'elenco."
     ),
     "b2b": (
         "MODALITÀ ATTIVA: B2B. Stai parlando con un cliente business (palestra, ASD, "
@@ -2570,6 +2579,32 @@ ROLE_BLOCKED_PLATFORMS = {
 }
 
 DEFAULT_ROLE = "staff"
+
+# Tetto di token in uscita per profilo. Il 19/09/2026 una giacenza su 15
+# modelli ("rashguard beltrank 2026 uomo e donna") si e' fermata a 2048 token
+# (stop_reason max_tokens) ed e' stata consegnata come se fosse completa: lo
+# staff chiede elenchi lunghi, gli altri profili no e restano com'erano.
+ROLE_MAX_TOKENS = {
+    "staff": 4096,
+    "b2b": 2048,
+    "retail": 2048,
+}
+
+# Riga aggiunta in coda a una risposta che il modello NON ha finito
+# (stop_reason max_tokens): una risposta troncata non si consegna mai come
+# se fosse intera.
+AVVISO_RISPOSTA_TRONCATA = "[Risposta interrotta per lunghezza: chiedimi la parte mancante]"
+
+
+def _testo_risposta(response, vuoto: str) -> str:
+    """Testo di una risposta del modello; se e' stata tagliata dal tetto di
+    token lo dice in coda invece di fingere che sia finita."""
+    text_parts = [b.text for b in response.content if b.type == "text"]
+    testo = "\n".join(text_parts).strip() or vuoto
+    if response.stop_reason == "max_tokens":
+        print(f"[AI] risposta troncata da max_tokens ({len(testo)} caratteri)")
+        testo = testo + "\n\n" + AVVISO_RISPOSTA_TRONCATA
+    return testo
 
 
 def _normalize_role(role: str) -> str:
@@ -6552,6 +6587,9 @@ def _accumula_uso(uso, response):
     if u is None:
         return
     uso["chiamate"] = uso.get("chiamate", 0) + 1
+    # stop_reason dell'ULTIMA chiamata del turno: e' quello che dice se la
+    # risposta consegnata e' finita (end_turn) o tagliata (max_tokens).
+    uso["stop_reason"] = getattr(response, "stop_reason", None)
     uso["token_in"] = uso.get("token_in", 0) + (getattr(u, "input_tokens", 0) or 0)
     uso["token_out"] = uso.get("token_out", 0) + (getattr(u, "output_tokens", 0) or 0)
     uso["token_cache_in"] = uso.get("token_cache_in", 0) + (
@@ -6597,6 +6635,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
 
     role = _normalize_role(role)
     active_tools = [t for t in CHAT_TOOLS if t["name"] in ROLE_TOOLS[role]]
+    max_tokens = ROLE_MAX_TOKENS.get(role, 2048)
 
     history = get_recent_messages(chat_id)
     system = _compose_system(role)
@@ -6610,7 +6649,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
         for _ in range(4):  # cap iterazioni tool
             response = client.messages.create(
                 model=ANTHROPIC_MODEL,
-                max_tokens=2048,
+                max_tokens=max_tokens,
                 system=system,
                 tools=active_tools,
                 messages=messages,
@@ -6618,8 +6657,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
 
             _accumula_uso(uso, response)
             if response.stop_reason != "tool_use":
-                text_parts = [b.text for b in response.content if b.type == "text"]
-                return "\n".join(text_parts).strip() or "Non ho una risposta per questo."
+                return _testo_risposta(response, "Non ho una risposta per questo.")
 
             # Esegui gli strumenti richiesti e rimanda i risultati a Haiku
             messages.append({"role": "assistant", "content": response.content})
@@ -6650,7 +6688,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
         # che ha, senza annunciare ricerche.
         final = client.messages.create(
             model=ANTHROPIC_MODEL,
-            max_tokens=2048,
+            max_tokens=max_tokens,
             system=system + (
                 "\n\nLE CHIAMATE AGLI STRUMENTI PER QUESTO TURNO SONO FINITE: rispondi "
                 "ORA all'utente con i dati che hai già ricevuto. NON annunciare altre "
@@ -6660,8 +6698,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
             messages=messages,
         )
         _accumula_uso(uso, final)
-        text_parts = [b.text for b in final.content if b.type == "text"]
-        return "\n".join(text_parts).strip() or "Non sono riuscito a completare la richiesta."
+        return _testo_risposta(final, "Non sono riuscito a completare la richiesta.")
 
     except Exception as e:
         # Unico punto che parla all'utente SENZA passare dal modello: qui usciva
@@ -7245,7 +7282,10 @@ def chat(request: ChatRequest, http_request: Request,
         return {
             "reply": bot_reply,
             "chat_id": request.chat_id,
-            "status": "saved"
+            "status": "saved",
+            # Diagnostica: perche' il modello si e' fermato ("end_turn" = risposta
+            # finita, "max_tokens" = tagliata, e in quel caso reply ha l'avviso).
+            "stop_reason": uso.get("stop_reason"),
         }
 
     except Exception as e:
