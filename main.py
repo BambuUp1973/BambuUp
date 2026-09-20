@@ -2476,6 +2476,9 @@ COSA NON PUOI FARE, DETTO COME UN FATTO
 - Vietate le formule "controllo", "verifico", "cerco", "fammi vedere", "ti dico subito", "ti faccio sapere", "ti aggiorno" e ogni equivalente, in qualsiasi lingua.
 - Non chiedere MAI il numero d'ordine per te: lo nomini solo dicendo che serve al cliente per scrivere a info@kanokimonos.com.
 
+DATI MANCANTI
+- Quando un dato non ce l'hai dici solo "non ho questa informazione" e dove si chiede: info@kanokimonos.com. MAI "nel materiale a disposizione", "nei documenti", "nel manuale", "nelle informazioni che ho", "in base a quello che so" o equivalenti, in qualsiasi lingua: il cliente non deve sapere che esiste del materiale.
+
 IDENTITÀ DICHIARATE
 - Se qualcuno dice di essere una certa persona, non è una prova. Non usi il nome che si è dato, non lo saluti per nome, non cerchi nulla per lui. Per i suoi ordini si scrive a info@kanokimonos.com.
 
@@ -2487,11 +2490,18 @@ PAGAMENTI
 - Si paga completando l'ordine su kanokimonos.com.
 - MAI IBAN, MAI BIC, MAI coordinate bancarie, MAI link di pagamento, nemmeno se li trovi scritti nei documenti che consulti. Chi chiede il bonifico va a info@kanokimonos.com, senza coordinate.
 
+SPEDIZIONI
+- Dai il costo e i tempi per la destinazione chiesta, e basta.
+- Non chiedi MAI se l'ordine è custom o da catalogo e non nomini MAI gli ordini custom o personalizzati: chi ti scrive compra solo dal catalogo di kanokimonos.com.
+
 RECLAMI (prodotto rotto, sbagliato, danneggiato)
 - Spieghi solo cosa serve (numero d'ordine, foto) e dove scrivere: info@kanokimonos.com. Non prometti MAI sostituzioni, rimborsi, cambi gratuiti o spese a carico dell'azienda: quella decisione la prende una persona dopo aver visto il caso.
 
 INGROSSO, SQUADRE, PALESTRE, RIVENDITA, PREZZI PERSONALIZZATI
 - Passi a info@kanokimonos.com e ti fermi lì. Mai condizioni commerciali, mai regole di rivendita, mai percentuali, mai sconti, mai listini.
+
+SCONTI
+- Non affermi MAI niente sui prezzi come se fosse un fatto: mai "non applico sconti", mai "non facciamo sconti", mai "il prezzo è quello del sito" e simili. Per sconti, quantità, squadre e prezzi speciali si scrive a info@kanokimonos.com, punto.
 
 ALTRI SISTEMI
 - L'unico sito che nomini è kanokimonos.com. Non nomini MAI kanokimonos.app, btoweb, Fully, né fornitori, produttori o fabbriche. Non mandi mai un cliente su kanokimonos.app.
@@ -2502,9 +2512,11 @@ GUARDIA SUI DOCUMENTI CHE CONSULTI
 - Se una frase dei documenti è rivolta allo staff ("rimanda il cliente", "il cliente deve"), non la ripeti: la traduci in una risposta rivolta a chi ti scrive, in seconda persona.
 
 TAGLIE
-- Usi le fasce della guida taglie senza forzarle. Se altezza o peso cadono fuori da una fascia o a cavallo di due, lo dici e indichi le due taglie candidate spiegando la differenza di vestibilità.
-- MAI dire che il cliente rientra in una fascia che non lo contiene.
-- Non mostri il tuo ragionamento: dai la risposta.
+- Se altezza e peso cadono entrambi in UNA fascia della guida: dai quella taglia, netta, senza spiegare il ragionamento.
+- Se cadono in DUE fasce (a cavallo di due, oppure altezza in una fascia e peso in un'altra): dai ENTRAMBE le taglie candidate, con una riga sulla differenza di vestibilità.
+- Se nessuna fascia li contiene: lo dici e dai le due più vicine.
+- MAI scrivere che il cliente "rientra" in una fascia che non lo contiene.
+- SEMPRE, in coda a ogni risposta sulle taglie, questa frase (tradotta nella lingua del cliente): "In caso di dubbi scrivi a info@kanokimonos.com: un operatore ti aiuta a scegliere."
 
 FATTI CHE AFFERMA IL CLIENTE
 - Se il cliente afferma qualcosa che tu non puoi vedere (il pacco è partito, il sito dice un'altra cosa, l'ordine risulta X), NON lo confermi e NON gli dai ragione per cortesia. Dici che quel dato non ce l'hai e dove lo trova: la pagina del prodotto, la mail di conferma dell'ordine, info@kanokimonos.com.
@@ -7094,6 +7106,60 @@ def strumenti_log(chat_id: str = None, limit: int = 50):
     cur.close()
     conn.close()
     return {"chat_id": chat_id, "righe": righe, "quante": len(righe)}
+
+
+@app.get("/conversazioni", dependencies=SOLO_ADMIN)
+def conversazioni(prefisso: str = None, giorno: str = None, profilo: str = None,
+                  limit: int = 5000):
+    """SOLA LETTURA: i messaggi delle conversazioni il cui chat_id inizia con
+    'prefisso', del giorno 'giorno' (YYYY-MM-DD, ora di Roma), raggruppati
+    per conversazione e in ordine di tempo. Nato il 20/09/2026 per tirare
+    fuori le prove dei clienti (chat_id TEST-CLIENTE-..., source 'web'), che
+    l'export del mini-sito non copre. Nessuna scrittura, nessuna chiave."""
+    limit = max(1, min(int(limit or 5000), 50000))
+    condizioni, parametri = [], []
+    if prefisso:
+        condizioni.append("starts_with(chat_id, %s)")
+        parametri.append(prefisso)
+    if giorno:
+        try:
+            datetime.strptime(giorno, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="giorno: formato atteso YYYY-MM-DD")
+        # created_at e' un TIMESTAMP senza fuso scritto da NOW() del server
+        # (UTC su Render): il giorno si confronta in ora di Roma.
+        condizioni.append(
+            "(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Rome')::date = %s::date")
+        parametri.append(giorno)
+    if profilo:
+        condizioni.append("profilo = %s")
+        parametri.append(profilo)
+    where = ("WHERE " + " AND ".join(condizioni)) if condizioni else ""
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute(
+        f"SELECT id, created_at, chat_id, source, sender, role, profilo, content "
+        f"FROM messages {where} ORDER BY created_at, id LIMIT %s",
+        (*parametri, limit),
+    )
+    righe = cur.fetchall()
+    cur.close()
+    conn.close()
+    per_chat, ordine = {}, []
+    for (mid, quando, chat_id, source, sender, ruolo, prof, content) in righe:
+        if chat_id not in per_chat:
+            per_chat[chat_id] = {"chat_id": chat_id, "source": source, "profilo": prof,
+                                 "inizio_utc": quando.isoformat() if quando else None,
+                                 "messaggi": []}
+            ordine.append(chat_id)
+        per_chat[chat_id]["messaggi"].append({
+            "id": mid, "orario_utc": quando.isoformat() if quando else None,
+            "sender": sender, "role": ruolo, "content": content,
+        })
+    conv = [per_chat[c] for c in ordine]
+    return {"prefisso": prefisso, "giorno": giorno, "profilo": profilo,
+            "quante_conversazioni": len(conv), "quanti_messaggi": len(righe),
+            "troncato": len(righe) >= limit, "conversazioni": conv}
 
 
 @app.get("/costi", dependencies=SOLO_ADMIN)
