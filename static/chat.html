@@ -1,313 +1,258 @@
 <!DOCTYPE html>
+<!--
+  Widget chat Kano Kimonos (profilo cliente finale).
+  Configurazione facoltativa, da mettere PRIMA di questo file quando lo si
+  incorpora nel sito:
+      <script>window.KANO_CHAT = {base: "https://<host-del-bot>", key: "<chiave cliente>"};</script>
+  Senza configurazione il widget parla con la stessa origine da cui e' servito
+  e non manda nessuna chiave: e' il caso della pagina locale di collaudo, che
+  aggiunge la chiave lei stessa.
+  Servito su /webchat SENZA configurazione resta volutamente inerte (401).
+-->
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BambuUp Chat</title>
+  <title>Chat Kano Kimonos</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 20px;
-      background: #f7f7f7;
+    :root {
+      --sfondo: #f6f6f4; --carta: #fff; --bordo: #ddd; --testo: #222; --grigio: #666;
+      --cliente: #e3efff; --bot: #f0f0ee; --operatore: #fff4d6; --operatore-bordo: #e0a800;
+      --azione: #2b5fb3;
     }
-
-    h1 {
-      margin-bottom: 10px;
-    }
-
-    .chat-box {
-      background: white;
-      border: 1px solid #ddd;
-      border-radius: 12px;
-      padding: 16px;
-      height: 500px;
-      overflow-y: auto;
-      margin-bottom: 16px;
-    }
-
-    .msg {
-      margin-bottom: 4px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      max-width: 80%;
-      white-space: pre-wrap;
-    }
-
-    .user {
-      background: #dff1ff;
-      margin-left: auto;
-    }
-
-    .bot {
-      background: #ececec;
-      margin-right: auto;
-    }
-
-    .msg-wrapper {
-      margin-bottom: 12px;
-    }
-
-    .feedback-btn {
-      display: inline-block;
-      margin-top: 4px;
-      font-size: 12px;
-      padding: 3px 8px;
-      background: transparent;
-      color: #999;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-
-    .feedback-btn:hover {
-      color: #c00;
-      border-color: #c00;
-    }
-
-    .controls {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
-
-    input, textarea, button {
-      font-size: 16px;
-      padding: 10px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-    }
-
-    input {
-      width: 200px;
-    }
-
-    textarea {
-      flex: 1;
-      resize: vertical;
-      min-height: 80px;
-    }
-
-    button {
-      cursor: pointer;
-      background: black;
-      color: white;
-      border: none;
-      padding: 12px 16px;
-    }
-
-    .row {
-      display: flex;
-      gap: 10px;
-      align-items: flex-start;
-    }
-
-    /* Modale feedback */
-    #feedbackOverlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.4);
-      z-index: 100;
-      justify-content: center;
-      align-items: center;
-    }
-
-    #feedbackOverlay.open {
-      display: flex;
-    }
-
-    #feedbackModal {
-      background: white;
-      border-radius: 12px;
-      padding: 24px;
-      width: 560px;
-      max-width: 95vw;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    #feedbackModal h2 {
-      margin: 0 0 4px;
-      font-size: 18px;
-    }
-
-    #feedbackModal label {
-      font-size: 13px;
-      color: #555;
-      margin-bottom: 2px;
-      display: block;
-    }
-
-    #feedbackModal textarea {
-      width: 100%;
-      box-sizing: border-box;
-      font-size: 14px;
-      resize: vertical;
-      min-height: 70px;
-      background: #f9f9f9;
-    }
-
-    #feedbackModal textarea.editable {
-      background: white;
-    }
-
-    .modal-actions {
-      display: flex;
-      gap: 10px;
-      justify-content: flex-end;
-    }
-
-    .modal-actions button.cancel {
-      background: #eee;
-      color: #333;
-    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, "Segoe UI", Arial, sans-serif; background: var(--sfondo); color: var(--testo); }
+    .kano-chat { max-width: 720px; margin: 0 auto; padding: 12px 16px 16px; display: flex; flex-direction: column; min-height: 100vh; }
+    .avviso { position: sticky; top: 0; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px;
+              padding: 10px 12px; font-size: 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; z-index: 2; }
+    .avviso .lingua { display: flex; gap: 4px; }
+    .avviso .lingua button { font-size: 12px; padding: 4px 8px; border: 1px solid var(--bordo); background: var(--carta); border-radius: 6px; cursor: pointer; color: var(--grigio); }
+    .avviso .lingua button.attiva { background: var(--testo); color: #fff; border-color: var(--testo); }
+    .stato { font-size: 13px; color: var(--grigio); margin: 8px 2px 0; min-height: 18px; }
+    .storico { flex: 1; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px; padding: 12px; margin-top: 8px;
+               overflow-y: auto; max-height: 62vh; min-height: 300px; }
+    .m { margin: 8px 0; padding: 9px 11px; border-radius: 8px; white-space: pre-wrap; line-height: 1.45; max-width: 88%; font-size: 15px; }
+    .m .chi { font-size: 11px; color: var(--grigio); margin-bottom: 3px; letter-spacing: .02em; }
+    .cliente { background: var(--cliente); margin-left: auto; }
+    .cliente.in-attesa { opacity: .6; }
+    .cliente.non-inviato { opacity: .5; text-decoration: line-through; }
+    .bot { background: var(--bot); margin-right: auto; }
+    .operatore { background: var(--operatore); border-left: 4px solid var(--operatore-bordo); margin-right: auto; }
+    .operatore .chi { color: #8a6500; font-weight: 600; }
+    .operatore.nuovo { animation: lampeggia 1.2s ease-in-out 3; }
+    @keyframes lampeggia { 50% { background: #ffe9a8; } }
+    .puntini { color: var(--grigio); }
+    form { display: flex; gap: 8px; margin-top: 10px; }
+    input[type=text] { flex: 1; padding: 11px; font-size: 15px; border: 1px solid #bbb; border-radius: 6px; }
+    button.invia { padding: 11px 18px; font-size: 15px; border: 0; border-radius: 6px; background: var(--azione); color: #fff; cursor: pointer; }
+    button.invia:disabled { background: #999; }
+    button.operatore-btn { margin-top: 8px; padding: 10px 14px; font-size: 14px; border: 1px solid var(--operatore-bordo); background: var(--operatore);
+                           color: #5a4300; border-radius: 6px; cursor: pointer; align-self: flex-start; }
+    button.operatore-btn:disabled { opacity: .55; cursor: default; }
   </style>
 </head>
 <body>
-  <h1>BambuUp Internal Chat</h1>
-  <p>Test interno del bot con memoria conversazionale.</p>
-
-  <div class="controls">
-    <input id="sender" type="text" value="Mauro" placeholder="Nome utente" />
-    <input id="chatId" type="text" value="team001" placeholder="Chat ID" />
-  </div>
-
-  <div id="chatBox" class="chat-box"></div>
-
-  <div class="row">
-    <textarea id="message" placeholder="Scrivi un messaggio..."></textarea>
-    <button onclick="sendMessage()">Invia</button>
-  </div>
-
-  <!-- Modale feedback -->
-  <div id="feedbackOverlay">
-    <div id="feedbackModal">
-      <h2>Segnala risposta sbagliata</h2>
-
-      <div>
-        <label>Domanda</label>
-        <textarea id="fbQuestion" readonly></textarea>
-      </div>
-      <div>
-        <label>Risposta sbagliata del bot</label>
-        <textarea id="fbWrong" readonly></textarea>
-      </div>
-      <div>
-        <label>Risposta corretta (scrivi tu)</label>
-        <textarea id="fbCorrect" class="editable" placeholder="Come avrebbe dovuto rispondere..."></textarea>
-      </div>
-
-      <div class="modal-actions">
-        <button class="cancel" onclick="closeFeedbackModal()">Annulla</button>
-        <button onclick="submitFeedback()">Invia feedback</button>
-      </div>
+  <div class="kano-chat">
+    <div class="avviso">
+      <span id="rigaFissa"></span>
+      <span class="lingua">
+        <button type="button" data-lingua="it">IT</button>
+        <button type="button" data-lingua="en">EN</button>
+      </span>
     </div>
+    <div id="storico" class="storico" aria-live="polite"></div>
+    <div id="stato" class="stato"></div>
+    <form id="modulo">
+      <input id="testo" type="text" autocomplete="off" />
+      <button id="invia" class="invia" type="submit"></button>
+    </form>
+    <button id="operatoreBtn" class="operatore-btn" type="button"></button>
   </div>
 
-  <script>
-    let lastUserMessage = "";
+<script>
+(function () {
+  var CONF = window.KANO_CHAT || {};
+  var BASE = (CONF.base || "").replace(/\/+$/, "");
+  var KEY = CONF.key || null;
+  var OGNI_MS = 15000;
 
-    function addMessage(text, role) {
-      const chatBox = document.getElementById("chatBox");
-      const wrapper = document.createElement("div");
-      wrapper.className = "msg-wrapper";
-
-      const div = document.createElement("div");
-      div.className = `msg ${role}`;
-      div.textContent = text;
-      wrapper.appendChild(div);
-
-      if (role === "bot") {
-        const capturedQuestion = lastUserMessage;
-        const capturedReply = text;
-        const btn = document.createElement("button");
-        btn.className = "feedback-btn";
-        btn.textContent = "👎 Risposta sbagliata";
-        btn.onclick = () => openFeedbackModal(capturedQuestion, capturedReply);
-        wrapper.appendChild(btn);
-      } else {
-        lastUserMessage = text;
-      }
-
-      chatBox.appendChild(wrapper);
-      chatBox.scrollTop = chatBox.scrollHeight;
+  var T = {
+    it: {
+      fissa: "Assistente automatico di Kano Kimonos. Per parlare con una persona usa il bottone qui sotto.",
+      scrivi: "Scrivi qui il tuo messaggio",
+      invia: "Invia",
+      operatore: "Parla con un operatore",
+      tu: "Tu", bot: "Assistente", op: "Operatore Kano",
+      attesa: "Un operatore ti risponderà qui in chat: puoi chiudere e tornare più tardi, la conversazione resta.",
+      nuovo: "Nuovo messaggio dell'operatore",
+      errore_rete: "Non riesco a collegarmi in questo momento: riprova fra poco.",
+      nessuna_risposta: "Non ho ricevuto una risposta: riprova fra poco."
+    },
+    en: {
+      fissa: "Kano Kimonos automated assistant. To talk to a person use the button below.",
+      scrivi: "Type your message here",
+      invia: "Send",
+      operatore: "Talk to an operator",
+      tu: "You", bot: "Assistant", op: "Kano operator",
+      attesa: "An operator will reply here in the chat: you can close this and come back later, the conversation stays.",
+      nuovo: "New message from the operator",
+      errore_rete: "I can't connect right now: please try again in a moment.",
+      nessuna_risposta: "I didn't get a reply: please try again in a moment."
     }
+  };
 
-    function openFeedbackModal(question, wrongReply) {
-      document.getElementById("fbQuestion").value = question;
-      document.getElementById("fbWrong").value = wrongReply;
-      document.getElementById("fbCorrect").value = "";
-      document.getElementById("feedbackOverlay").classList.add("open");
-      document.getElementById("fbCorrect").focus();
+  function leggi(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function scrivi(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  var chatId = leggi("kano_chat_id");
+  if (!chatId) {
+    var r = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+    chatId = "WEB-" + r;
+    scrivi("kano_chat_id", chatId);
+  }
+  var lingua = leggi("kano_chat_lingua") || ((navigator.language || "it").toLowerCase().indexOf("it") === 0 ? "it" : "en");
+
+  var storico = document.getElementById("storico");
+  var stato = document.getElementById("stato");
+  var testo = document.getElementById("testo");
+  var invia = document.getElementById("invia");
+  var opBtn = document.getElementById("operatoreBtn");
+  var ultimoId = 0;
+  var aperta = false;
+  var timer = null;
+  var titoloBase = document.title;
+
+  function t(k) { return T[lingua][k]; }
+
+  function applicaLingua() {
+    document.documentElement.lang = lingua;
+    document.getElementById("rigaFissa").textContent = t("fissa");
+    testo.placeholder = t("scrivi");
+    invia.textContent = t("invia");
+    opBtn.textContent = t("operatore");
+    var bottoni = document.querySelectorAll(".lingua button");
+    for (var i = 0; i < bottoni.length; i++) bottoni[i].classList.toggle("attiva", bottoni[i].getAttribute("data-lingua") === lingua);
+    var etichette = storico.querySelectorAll(".m");
+    for (var j = 0; j < etichette.length; j++) {
+      var chi = etichette[j].querySelector(".chi");
+      if (!chi) continue;
+      if (etichette[j].classList.contains("cliente")) chi.textContent = t("tu");
+      else if (etichette[j].classList.contains("operatore")) chi.textContent = t("op");
+      else chi.textContent = t("bot");
     }
-
-    function closeFeedbackModal() {
-      document.getElementById("feedbackOverlay").classList.remove("open");
-    }
-
-    async function submitFeedback() {
-      const question = document.getElementById("fbQuestion").value;
-      const wrongReply = document.getElementById("fbWrong").value;
-      const correctReply = document.getElementById("fbCorrect").value.trim();
-
-      if (!correctReply) {
-        alert("Inserisci la risposta corretta prima di inviare.");
-        return;
-      }
-
-      try {
-        await fetch("/feedback", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            question: question,
-            wrong_reply: wrongReply,
-            correct_reply: correctReply
-          })
-        });
-        closeFeedbackModal();
-      } catch (e) {
-        alert("Errore nell'invio del feedback.");
-      }
-    }
-
-    // Chiudi modale cliccando fuori
-    document.getElementById("feedbackOverlay").addEventListener("click", function(e) {
-      if (e.target === this) closeFeedbackModal();
+    stato.textContent = aperta ? t("attesa") : "";
+  }
+  var bottoniLingua = document.querySelectorAll(".lingua button");
+  for (var b = 0; b < bottoniLingua.length; b++) {
+    bottoniLingua[b].addEventListener("click", function () {
+      lingua = this.getAttribute("data-lingua"); scrivi("kano_chat_lingua", lingua); applicaLingua();
     });
+  }
 
-    async function sendMessage() {
-      const sender = document.getElementById("sender").value.trim();
-      const chatId = document.getElementById("chatId").value.trim();
-      const messageEl = document.getElementById("message");
-      const message = messageEl.value.trim();
+  function intestazioni(json) {
+    var h = {};
+    if (json) h["Content-Type"] = "application/json";
+    if (KEY) h["x-bot-client-key"] = KEY;
+    return h;
+  }
 
-      if (!sender || !chatId || !message) return;
+  function bolla(da, contenuto, extra) {
+    var d = document.createElement("div");
+    d.className = "m " + da + (extra ? " " + extra : "");
+    var chi = document.createElement("div");
+    chi.className = "chi";
+    chi.textContent = da === "cliente" ? t("tu") : (da === "operatore" ? t("op") : t("bot"));
+    d.appendChild(chi);
+    d.appendChild(document.createTextNode(contenuto));
+    storico.appendChild(d);
+    storico.scrollTop = storico.scrollHeight;
+    return d;
+  }
 
-      addMessage(message, "user");
-      messageEl.value = "";
-
-      try {
-        const response = await fetch("/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            source: "web",
-            sender: sender,
-            chat_id: chatId,
-            message: message
-          })
-        });
-
-        const data = await response.json();
-        addMessage(data.reply || "Errore nella risposta del bot.", "bot");
-      } catch (error) {
-        addMessage("Errore di connessione al server.", "bot");
-      }
+  function mostraMessaggi(lista, evidenziaOperatore) {
+    var arrivatoOperatore = false;
+    for (var i = 0; i < lista.length; i++) {
+      var m = lista[i];
+      if (m.id <= ultimoId) continue;
+      bolla(m.da, m.content, (m.da === "operatore" && evidenziaOperatore) ? "nuovo" : "");
+      ultimoId = m.id;
+      if (m.da === "operatore") arrivatoOperatore = true;
     }
-  </script>
+    if (arrivatoOperatore && evidenziaOperatore) {
+      document.title = "● " + titoloBase;
+      setTimeout(function () { document.title = titoloBase; }, 8000);
+    }
+  }
+
+  function aggiornaStato(nuovaAperta) {
+    aperta = !!nuovaAperta;
+    opBtn.disabled = aperta;
+    stato.textContent = aperta ? t("attesa") : "";
+    if (aperta && !timer) timer = setInterval(sincronizza, OGNI_MS);
+    if (!aperta && timer) { clearInterval(timer); timer = null; }
+  }
+
+  function sincronizza(evidenzia) {
+    var url = BASE + "/chat/" + encodeURIComponent(chatId) + "/messaggi" + (ultimoId ? "?dopo_id=" + ultimoId : "");
+    return fetch(url, { headers: intestazioni(false) })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return null;
+        var pendenti = storico.querySelectorAll(".in-attesa");
+        for (var i = 0; i < pendenti.length; i++) pendenti[i].remove();
+        mostraMessaggi(d.messaggi || [], evidenzia !== false);
+        aggiornaStato(d.richiesta_aperta);
+        return d;
+      })
+      .catch(function () { return null; });
+  }
+
+  document.getElementById("modulo").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var msg = testo.value.trim();
+    if (!msg) return;
+    testo.value = "";
+    invia.disabled = true;
+    var mia = bolla("cliente", msg, "in-attesa");
+    var puntini = bolla("bot", "…", "puntini");
+    fetch(BASE + "/chat", {
+      method: "POST", headers: intestazioni(true),
+      body: JSON.stringify({ source: "web", sender: "Cliente", chat_id: chatId, message: msg, role: "retail" })
+    }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, d: d }; });
+    }).then(function (x) {
+      puntini.remove();
+      if (x.ok && x.d && x.d.status === "saved") {
+        return sincronizza(true);
+      }
+      mia.classList.remove("in-attesa"); mia.classList.add("non-inviato");
+      bolla("bot", (x.d && (x.d.reply || x.d.detail)) || t("nessuna_risposta"));
+    }).catch(function () {
+      puntini.remove();
+      mia.classList.remove("in-attesa"); mia.classList.add("non-inviato");
+      bolla("bot", t("errore_rete"));
+    }).then(function () { invia.disabled = false; testo.focus(); });
+  });
+
+  opBtn.addEventListener("click", function () {
+    opBtn.disabled = true;
+    fetch(BASE + "/richieste/apri", {
+      method: "POST", headers: intestazioni(true),
+      body: JSON.stringify({ chat_id: chatId, tipo: "cliente_chiede", lingua: lingua })
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.esito === "aperta") {
+          return sincronizza(false).then(function () { aggiornaStato(true); });
+        }
+        if (d.testo) bolla("bot", d.testo);
+        aggiornaStato(d.richiesta_aperta);
+      })
+      .catch(function () { bolla("bot", t("errore_rete")); opBtn.disabled = false; });
+  });
+
+  applicaLingua();
+  sincronizza(false);
+})();
+</script>
 </body>
 </html>

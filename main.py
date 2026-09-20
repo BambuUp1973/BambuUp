@@ -156,6 +156,7 @@ def init_db():
             );
         """)
         cur.execute("ALTER TABLE richieste_operatore ADD COLUMN IF NOT EXISTS motivo TEXT;")
+        cur.execute("ALTER TABLE richieste_operatore ADD COLUMN IF NOT EXISTS email_cliente_inviata_il TIMESTAMP;")
         cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_chat ON richieste_operatore (chat_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_stato ON richieste_operatore (stato, priorita, created_at);")
         cur.execute("CREATE INDEX IF NOT EXISTS richieste_operatore_ip ON richieste_operatore (ip_hash, created_at);")
@@ -7657,13 +7658,13 @@ class RichiestaChiudiRequest(BaseModel):
 
 _RICHIESTA_CAMPI = ("id, chat_id, created_at, tipo, priorita, stato, lingua, domanda, "
                     "contesto, email_cliente, risposta, operatore, risposto_il, "
-                    "notificata_il, da_inviare_email, motivo")
+                    "notificata_il, da_inviare_email, motivo, email_cliente_inviata_il")
 
 
 def _richiesta_dict(r, email_intera: bool) -> dict:
     (rid, chat_id, created_at, tipo, priorita, stato, lingua, domanda, contesto,
      email_cliente, risposta, operatore, risposto_il, notificata_il, da_inviare_email,
-     motivo) = r
+     motivo, email_cliente_inviata_il) = r
     return {
         "id": rid, "chat_id": chat_id,
         "created_at": created_at.isoformat() if created_at else None,
@@ -7675,6 +7676,7 @@ def _richiesta_dict(r, email_intera: bool) -> dict:
         "notificata_il": notificata_il.isoformat() if notificata_il else None,
         "da_inviare_email": bool(da_inviare_email),
         "motivo": motivo,
+        "email_cliente_inviata_il": email_cliente_inviata_il.isoformat() if email_cliente_inviata_il else None,
     }
 
 
@@ -7685,7 +7687,25 @@ def richieste_apri(body: RichiestaApriRequest, http_request: Request):
     lingua = body.lingua if body.lingua in ("it", "en") else "it"
     ip_hash = _impronta_ip(ip_del_chiamante(http_request))
     out = apri_richiesta_operatore(body.chat_id, tipo, lingua, ip_hash)
-    return {"esito": out["esito"], "id": out["id"], "testo": out["testo_da_riferire"]}
+    if out["esito"] == "aperta":
+        # Il testo detto al cliente entra nella sua chat come messaggio del
+        # bot: cosi' ricaricando il widget la storia e' completa (lotto 2).
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO messages (source, sender, chat_id, role, content, profilo) "
+                "VALUES ('web', 'BambuUp', %s, 'assistant', %s, 'retail')",
+                (body.chat_id, out["testo_da_riferire"]),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"[RICHIESTA] testo di apertura non salvato in chat={body.chat_id}: "
+                  f"{type(e).__name__}: {str(e)[:120]}")
+    return {"esito": out["esito"], "id": out["id"], "testo": out["testo_da_riferire"],
+            "richiesta_aperta": out["esito"] in ("aperta", "gia_aperta")}
 
 
 @app.get("/richieste", dependencies=SOLO_STAFF)
@@ -7763,8 +7783,12 @@ def richieste_rispondi(rid: int, body: RichiestaRispondiRequest):
     conn.close()
     print(f"[RICHIESTA] risposta id={rid} operatore={operatore} chat={chat_id} messaggio={mid} "
           f"stato_prima={stato_prima} da_inviare_email={da_inviare}")
+    # Lotto 2: l'email al cliente parte QUI, dopo il commit, cosi' la risposta in
+    # chat e' salvata comunque anche se Resend non risponde. Fail-silent.
+    email_esito = _invia_email_cliente(rid) if da_inviare else "senza_email"
     return {"id": rid, "stato": "risposta", "chat_id": chat_id, "messaggio_id": mid,
-            "da_inviare_email": da_inviare}
+            "da_inviare_email": da_inviare and email_esito != "inviata",
+            "email_cliente_esito": email_esito}
 
 
 @app.post("/richieste/{rid}/chiudi", dependencies=SOLO_STAFF)
@@ -7826,6 +7850,165 @@ def richieste_rinotifica(rid: int):
     notificata_il = r[0].isoformat() if r and r[0] else None
     print(f"[RICHIESTA] rinotifica id={rid} esito={esito} notificata_il={notificata_il}")
     return {"id": rid, "notificata_il": notificata_il, "esito": esito}
+
+
+# --- LOTTO 2: LATO CLIENTE ----------------------------------------------------
+# Il widget legge la propria chat (storia + risposte dell'operatore) e apre
+# la conversazione con una persona dal bottone. Il retail vede SOLO messaggi
+# di profilo retail: mai una chat dello staff, anche indovinando il chat_id.
+RICHIESTE_MITTENTE_CLIENTE = "Kano Kimonos <staff@kanokimonos.app>"
+RICHIESTE_REPLY_TO_CLIENTE = "info@kanokimonos.com"
+RICHIESTE_OGGETTO_CLIENTE = {
+    "it": "Risposta alla tua domanda - Kano Kimonos",
+    "en": "Reply to your question - Kano Kimonos",
+}
+
+
+def _corpo_email_cliente(lingua: str, domanda: str, risposta: str) -> str:
+    if lingua == "en":
+        return (
+            "Hi,\n\n"
+            f"you wrote:\n\"{domanda or '(no text)'}\"\n\n"
+            f"Here is the reply from our operator:\n{risposta}\n\n"
+            "To continue the conversation, reply to this email or come back to the "
+            "chat on kanokimonos.com.\n\nKano Kimonos"
+        )
+    return (
+        "Ciao,\n\n"
+        f"hai scritto:\n\"{domanda or '(senza testo)'}\"\n\n"
+        f"Ecco la risposta del nostro operatore:\n{risposta}\n\n"
+        "Per continuare la conversazione rispondi a questa email oppure torna in "
+        "chat su kanokimonos.com.\n\nKano Kimonos"
+    )
+
+
+def _invia_email_cliente(rid: int) -> str:
+    """Email al cliente con la risposta dell'operatore. Fail-silent, una riga
+    di log per esito, idempotente su email_cliente_inviata_il. Esiti:
+    'inviata', 'gia_inviata', 'senza_email', 'senza_risposta',
+    'chiave_assente', 'errore http <n>', 'errore <Eccezione>'."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT email_cliente, lingua, domanda, risposta, email_cliente_inviata_il "
+            "FROM richieste_operatore WHERE id = %s", (rid,))
+        r = cur.fetchone()
+        if not r:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email cliente non inviata: id={rid} inesistente]")
+            return "inesistente"
+        email, lingua, domanda, risposta, inviata_il = r
+        if not email:
+            cur.close(); conn.close()
+            return "senza_email"
+        if inviata_il:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email cliente gia' inviata id={rid} il {inviata_il}]")
+            return "gia_inviata"
+        if not risposta:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email cliente non inviata: id={rid} senza risposta]")
+            return "senza_risposta"
+        if not RESEND_API_KEY_BOT:
+            cur.close(); conn.close()
+            print(f"[RICHIESTA email cliente non inviata: chiave assente] id={rid}")
+            return "chiave_assente"
+        lingua = lingua if lingua in ("it", "en") else "it"
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY_BOT}",
+                     "Content-Type": "application/json"},
+            json={"from": RICHIESTE_MITTENTE_CLIENTE, "to": [email],
+                  "reply_to": RICHIESTE_REPLY_TO_CLIENTE,
+                  "subject": RICHIESTE_OGGETTO_CLIENTE[lingua],
+                  "text": _corpo_email_cliente(lingua, domanda, risposta)},
+            timeout=15,
+        )
+        if 200 <= resp.status_code < 300:
+            cur.execute(
+                "UPDATE richieste_operatore SET email_cliente_inviata_il = NOW(), "
+                "da_inviare_email = FALSE WHERE id = %s", (rid,))
+            conn.commit()
+            esito = "inviata"
+            print(f"[RICHIESTA email cliente inviata id={rid} lingua={lingua} http={resp.status_code}]")
+        else:
+            esito = f"errore http {resp.status_code}"
+            print(f"[RICHIESTA email cliente non inviata: id={rid} http={resp.status_code} "
+                  f"{resp.text[:200]!r}]")
+        cur.close()
+        conn.close()
+        return esito
+    except Exception as e:
+        print(f"[RICHIESTA email cliente non inviata: id={rid} {type(e).__name__}: {str(e)[:200]}]")
+        return f"errore {type(e).__name__}"
+
+
+# Limite leggero e SEPARATO per la lettura dei messaggi dal widget (che ogni
+# 15 secondi chiede le novita' finche' aspetta un operatore): 60 letture
+# per impronta IP ogni 5 minuti, in memoria, senza toccare il limite di /chat.
+_LIMITE_MESSAGGI_5MIN = 60
+_LIMITE_MESSAGGI_PER_IP = {}
+
+
+def controlla_limite_messaggi(ip: str) -> bool:
+    """True se la lettura va rifiutata. Le rifiutate non si contano."""
+    ora = time.time()
+    k = _impronta_ip(ip)
+    with _LIMITE_LOCK:
+        dq = _LIMITE_MESSAGGI_PER_IP.setdefault(k, deque())
+        while dq and ora - dq[0] > 300:
+            dq.popleft()
+        if len(dq) >= _LIMITE_MESSAGGI_5MIN:
+            return True
+        dq.append(ora)
+        if len(_LIMITE_MESSAGGI_PER_IP) > 5000:
+            for kk in [kk for kk, d in _LIMITE_MESSAGGI_PER_IP.items() if not d]:
+                _LIMITE_MESSAGGI_PER_IP.pop(kk, None)
+    return False
+
+
+@app.get("/chat/{chat_id}/messaggi", dependencies=SOLO_RETAIL)
+def chat_messaggi(chat_id: str, http_request: Request, dopo_id: int = None, limit: int = 200):
+    """I messaggi della chat con id > dopo_id (tutti se manca), SOLO di
+    profilo retail, piu' 'richiesta_aperta' per quella chat. Quelli
+    dell'operatore escono con sender 'operatore' e da='operatore'."""
+    if controlla_limite_messaggi(ip_del_chiamante(http_request)):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Troppe letture in poco tempo: riprova fra un minuto."},
+            headers={"Retry-After": "60"},
+        )
+    limit = max(1, min(int(limit or 200), 500))
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, role, sender, content, created_at FROM messages "
+        "WHERE chat_id = %s AND profilo = 'retail' AND id > %s ORDER BY id LIMIT %s",
+        (chat_id, int(dopo_id or 0), limit),
+    )
+    righe = cur.fetchall()
+    cur.execute(
+        "SELECT 1 FROM richieste_operatore WHERE chat_id = %s AND stato = 'aperta' LIMIT 1",
+        (chat_id,),
+    )
+    aperta = cur.fetchone() is not None
+    cur.close()
+    conn.close()
+    messaggi = []
+    for mid, ruolo, sender, content, quando in righe:
+        if (sender or "").lower() == "operatore":
+            da = "operatore"
+        elif ruolo == "user":
+            da = "cliente"
+        else:
+            da = "bot"
+        messaggi.append({"id": mid, "role": ruolo, "sender": sender, "da": da,
+                         "content": content,
+                         "created_at": quando.isoformat() if quando else None})
+    return {"chat_id": chat_id, "dopo_id": dopo_id, "messaggi": messaggi,
+            "ultimo_id": messaggi[-1]["id"] if messaggi else (dopo_id or 0),
+            "richiesta_aperta": aperta}
 
 
 @app.get("/conversazioni", dependencies=SOLO_ADMIN)

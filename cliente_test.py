@@ -111,93 +111,80 @@ def chiedi_al_bot(messaggio, chat_id):
 
 # --- MODO INTERATTIVO --------------------------------------------------------
 
-PAGINA = """<!doctype html>
-<html lang="it"><head><meta charset="utf-8">
-<title>Collaudo cliente BambuUp</title>
-<style>
- body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;background:#f6f6f4;color:#222}
- h1{font-size:18px;margin:0 0 4px}
- .nota{font-size:12px;color:#666;margin-bottom:14px}
- #storico{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;min-height:320px;max-height:60vh;overflow-y:auto}
- .m{margin:8px 0;padding:8px 10px;border-radius:8px;white-space:pre-wrap;line-height:1.4}
- .cliente{background:#e3efff;margin-left:15%}
- .bot{background:#f0f0ee;margin-right:15%}
- .meta{font-size:11px;color:#777;margin-top:4px}
- form{display:flex;gap:8px;margin-top:12px}
- input{flex:1;padding:10px;font-size:15px;border:1px solid #bbb;border-radius:6px}
- button{padding:10px 18px;font-size:15px;border:0;border-radius:6px;background:#2b5fb3;color:#fff;cursor:pointer}
- button:disabled{background:#999}
-</style></head><body>
-<h1>Collaudo cliente BambuUp (profilo retail)</h1>
-<div class="nota">Conversazione: <span id="cid"></span> - le domande passano dal server locale, che le inoltra a bambuup.onrender.com</div>
-<div id="storico"></div>
-<form id="f"><input id="t" autocomplete="off" placeholder="Scrivi come un cliente e premi Invio" autofocus>
-<button id="b" type="submit">Invia</button></form>
-<script>
-const storico=document.getElementById('storico'),t=document.getElementById('t'),b=document.getElementById('b');
-fetch('/chat_id').then(r=>r.json()).then(d=>document.getElementById('cid').textContent=d.chat_id);
-function agg(cls,testo,meta){const d=document.createElement('div');d.className='m '+cls;d.textContent=testo;
- if(meta){const m=document.createElement('div');m.className='meta';m.textContent=meta;d.appendChild(m);}
- storico.appendChild(d);storico.scrollTop=storico.scrollHeight;return d;}
-document.getElementById('f').onsubmit=async e=>{e.preventDefault();const msg=t.value.trim();if(!msg)return;
- t.value='';b.disabled=true;agg('cliente',msg);const attesa=agg('bot','...');
- try{const r=await fetch('/invia',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
-  const d=await r.json();attesa.remove();agg('bot',d.reply,'tempo di risposta: '+d.secondi+' s');}
- catch(err){attesa.remove();agg('bot','[errore del server locale]');}
- b.disabled=false;t.focus();};
-</script></body></html>"""
+# La pagina locale e' LO STESSO widget che andra' sul sito (static/chat.html),
+# servito da qui senza configurazione: il widget parla con questa origine e
+# questo server aggiunge la chiave retail e inoltra a bambuup.onrender.com.
+# Cosi' storia, bottone operatore e aggiornamento ogni 15 s si collaudano
+# sullo stesso HTML che vedra' il cliente.
+BOT_BASE = BOT_URL[: -len("/chat")]
+FILE_WIDGET = os.path.join(CARTELLA, "static", "chat.html")
+INOLTRA_POST = {"/chat", "/richieste/apri"}          # percorsi inoltrati tali e quali
 
 
 class Locale(BaseHTTPRequestHandler):
-    chat_id = None   # uno per tutta la sessione
-
     def log_message(self, fmt, *args):   # niente log di default (sicurezza + pulizia)
         pass
 
-    def _json(self, obj, codice=200):
-        corpo = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    def _rispondi(self, codice, corpo, tipo, extra=None):
         self.send_response(codice)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", tipo)
         self.send_header("Content-Length", str(len(corpo)))
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(corpo)
+
+    def _inoltra(self, metodo, corpo=None):
+        """Inoltra la chiamata al bot con la chiave retail; riporta stato,
+        corpo JSON e Retry-After come li manda il server. La chiave non
+        viene mai loggata."""
+        url = BOT_BASE + self.path
+        inizio = time.perf_counter()
+        try:
+            if metodo == "POST":
+                r = requests.post(url, data=corpo, headers={HEADER_CHIAVE: CHIAVE,
+                                  "Content-Type": "application/json"}, timeout=TIMEOUT_BOT)
+            else:
+                r = requests.get(url, headers={HEADER_CHIAVE: CHIAVE}, timeout=TIMEOUT_BOT)
+        except requests.RequestException as e:
+            print(f"[{datetime.now():%H:%M:%S}] {metodo} {self.path} errore di rete {type(e).__name__}")
+            self._rispondi(502, json.dumps({"detail": "[errore di rete verso il bot]"}).encode("utf-8"),
+                           "application/json; charset=utf-8")
+            return
+        secondi = time.perf_counter() - inizio
+        percorso = urlparse(self.path).path
+        if not percorso.endswith("/messaggi"):
+            print(f"[{datetime.now():%H:%M:%S}] {metodo} {percorso} HTTP {r.status_code} in {secondi:.1f}s")
+        extra = {}
+        if r.headers.get("Retry-After"):
+            extra["Retry-After"] = r.headers["Retry-After"]
+        self._rispondi(r.status_code, r.content, r.headers.get("Content-Type", "application/json"), extra)
 
     def do_GET(self):
         percorso = urlparse(self.path).path
         if percorso == "/":
-            corpo = PAGINA.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(corpo)))
-            self.end_headers()
-            self.wfile.write(corpo)
-        elif percorso == "/chat_id":
-            self._json({"chat_id": Locale.chat_id})
+            with open(FILE_WIDGET, "rb") as f:
+                self._rispondi(200, f.read(), "text/html; charset=utf-8")
+        elif percorso.startswith("/chat/") and percorso.endswith("/messaggi"):
+            self._inoltra("GET")
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/invia":
+        percorso = urlparse(self.path).path
+        if percorso not in INOLTRA_POST:
             self.send_error(404)
             return
         n = int(self.headers.get("Content-Length") or 0)
-        try:
-            dati = json.loads(self.rfile.read(n).decode("utf-8"))
-            messaggio = str(dati.get("message", "")).strip()
-        except (ValueError, UnicodeDecodeError):
-            self._json({"reply": "[richiesta non valida]", "secondi": 0}, 400)
-            return
-        codice, risposta, secondi, _ = chiedi_al_bot(messaggio, Locale.chat_id)
-        print(f"[{datetime.now():%H:%M:%S}] HTTP {codice} in {secondi:.1f}s")
-        self._json({"reply": risposta, "secondi": round(secondi, 1)})
+        self._inoltra("POST", self.rfile.read(n))
 
 
 def modo_interattivo():
-    Locale.chat_id = nuovo_chat_id()
     server = ThreadingHTTPServer(("127.0.0.1", PORTA_LOCALE), Locale)
     url = f"http://localhost:{PORTA_LOCALE}"
-    print(f"Server locale su {url}  (conversazione {Locale.chat_id})")
-    print("Ctrl+C per chiudere.")
+    print(f"Server locale su {url}: serve static/chat.html e inoltra /chat, /chat/<id>/messaggi "
+          f"e /richieste/apri a {BOT_BASE} con la chiave retail.")
+    print("La conversazione la tiene il browser (localStorage). Ctrl+C per chiudere.")
     threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
