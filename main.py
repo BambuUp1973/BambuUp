@@ -3131,6 +3131,7 @@ def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "",
             "rimossi da questo materiale e NON vanno ricostruiti né ipotizzati. "
             "Se l'utente chiede di persone, personale o organigramma, rimanda a "
             "info@kanokimonos.com.]"
+            + _NOTA_RETAIL_DATO_MANCANTE(role)
         )
 
     # Domande sulle taglie: restituisci la GUIDA TAGLIE per intero (contigua),
@@ -3142,7 +3143,8 @@ def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "",
             return _consegna(guide + (("\n\n" + extra) if extra else ""))
     context = get_knowledge_context(query)
     if not context:
-        return "NESSUN_CONTENUTO: il manuale non contiene informazioni su questo argomento."
+        return ("NESSUN_CONTENUTO: il manuale non contiene informazioni su questo argomento."
+                + _NOTA_RETAIL_DATO_MANCANTE(role))
     return _consegna(context)
 
 
@@ -6664,15 +6666,21 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             return tool_rispondi_dal_manuale(
                 tool_input.get("argomento"), user_message, role
             )
-        if name == "passa_a_operatore":
-            return tool_passa_a_operatore(
-                tool_input.get("tipo"), tool_input.get("riassunto"),
-                tool_input.get("lingua"), user_message, contesto
-            )
-        if name == "salva_email_richiesta":
-            return tool_salva_email_richiesta(
-                tool_input.get("email"), user_message, contesto
-            )
+        if name in ("passa_a_operatore", "salva_email_richiesta"):
+            if name == "passa_a_operatore":
+                esito = tool_passa_a_operatore(
+                    tool_input.get("tipo"), tool_input.get("riassunto"),
+                    tool_input.get("lingua"), user_message, contesto
+                )
+            else:
+                esito = tool_salva_email_richiesta(
+                    tool_input.get("email"), user_message, contesto
+                )
+            # Il testo per il cliente e' deciso qui, non dal modello: lo si
+            # registra e chat_with_tools lo consegna al posto della risposta.
+            if isinstance(esito, dict) and esito.get("testo_da_riferire"):
+                contesto["testo_fisso"] = esito["testo_da_riferire"]
+            return esito
         return {"error": f"Strumento sconosciuto: {name}"}
     except Exception as e:
         # Il testo dell'eccezione resta nel log: al modello va una frase che
@@ -6768,7 +6776,8 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
 
             _accumula_uso(uso, response)
             if response.stop_reason != "tool_use":
-                return _testo_risposta(response, "Non ho una risposta per questo.")
+                return _risposta_finale(
+                    _testo_risposta(response, "Non ho una risposta per questo."), contesto)
 
             # Esegui gli strumenti richiesti e rimanda i risultati a Haiku
             messages.append({"role": "assistant", "content": response.content})
@@ -6810,7 +6819,8 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
             messages=messages,
         )
         _accumula_uso(uso, final)
-        return _testo_risposta(final, "Non sono riuscito a completare la richiesta.")
+        return _risposta_finale(
+            _testo_risposta(final, "Non sono riuscito a completare la richiesta."), contesto)
 
     except Exception as e:
         # Unico punto che parla all'utente SENZA passare dal modello: qui usciva
@@ -7295,6 +7305,56 @@ RICHIESTE_ISTRUZIONE = (
     "Riporta al cliente ESATTAMENTE 'testo_da_riferire', parola per parola, senza "
     "aggiungere, togliere o riformulare nulla."
 )
+
+def _NOTA_RETAIL_DATO_MANCANTE(role) -> str:
+    """Coda al materiale del manuale, SOLO retail: se il dato preciso chiesto
+    non c'e', la mossa successiva e' passa_a_operatore, non una frase di
+    scuse. Sta nel payload perche' il prompt da solo non basta a Haiku."""
+    if _normalize_role(role) != "retail":
+        return ""
+    return (
+        "\n\n[SE IL DATO PRECISO CHIESTO DAL CLIENTE NON STA IN QUESTO MATERIALE, "
+        "la tua PROSSIMA E UNICA azione e' chiamare passa_a_operatore con tipo "
+        "'bot_non_sa': NON scrivere che non ce l'hai, NON nominare manuale, "
+        "materiale o documenti, NON rimandare a un'email.]"
+    )
+
+
+def _risposta_finale(testo: str, contesto: dict) -> str:
+    """Se in questo turno uno strumento ha fissato il testo per il cliente
+    (passa_a_operatore, salva_email_richiesta), quello vince sul modello."""
+    fisso = (contesto or {}).get("testo_fisso")
+    return fisso if fisso else testo
+
+
+# Formule con cui il modello dice "non lo so" (o nomina il materiale) invece
+# di chiamare passa_a_operatore. Solo retail, solo se nessuno strumento ha
+# gia' fissato il testo in questo turno.
+_RETE_NON_SO_RE = re.compile(
+    r"non ho (questa |quest'|una |le |la )?(informazion|risposta precisa|dettagli|indicazion)"
+    r"|non (dispongo|trovo) (di )?(questa |quest')?informazion"
+    r"|(nel|dal|il) manuale\b|manuale (a mia |a )?disposizione"
+    r"|materiale (a mia |a )?disposizione|nei documenti|nei dati"
+    r"|non contiene (informazioni|istruzioni|indicazioni|il dato)"
+    r"|i don'?t have (this|that|the|any) (information|detail|data)"
+    r"|no (specific )?information (on|about)|not (covered|included) in"
+    r"|(the|my|our) manual\b|material available",
+    re.IGNORECASE,
+)
+
+
+def _rete_bot_non_sa(risposta: str, role: str, contesto: dict, messaggio_cliente: str) -> str:
+    if _normalize_role(role) != "retail" or not contesto or contesto.get("testo_fisso"):
+        return risposta
+    if not _RETE_NON_SO_RE.search(risposta or ""):
+        return risposta
+    lingua = contesto.get("lingua") if contesto.get("lingua") in ("it", "en") else "it"
+    out = apri_richiesta_operatore(contesto.get("chat_id"), "bot_non_sa", lingua,
+                                   contesto.get("ip_hash"), riassunto=messaggio_cliente)
+    print(f"[RICHIESTA] rete bot_non_sa esito={out['esito']} id={out['id']} "
+          f"chat={contesto.get('chat_id')} risposta_scartata={risposta[:120]!r}")
+    return out["testo_da_riferire"]
+
 
 _PAROLE_IT = {
     "il", "lo", "la", "gli", "le", "di", "che", "non", "per", "una", "un", "con", "sono",
@@ -7900,6 +7960,11 @@ def chat(request: ChatRequest, http_request: Request,
             "lingua": _lingua_del_testo(request.message),
         }
         bot_reply = chat_with_tools(request.chat_id, request.message, role, uso, contesto)
+        # Rete per il retail: se il modello ha scritto "non ho questa
+        # informazione" (o ha nominato manuale/materiale) senza chiamare
+        # passa_a_operatore, la richiesta si apre qui e il cliente riceve il
+        # testo fisso. Visto il 20/09/2026 alla prima verifica live.
+        bot_reply = _rete_bot_non_sa(bot_reply, role, contesto, request.message)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
