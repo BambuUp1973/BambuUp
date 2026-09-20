@@ -104,6 +104,11 @@
   function leggi(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function scrivi(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
+  // ?chat=<id> nell'indirizzo riprende una conversazione precisa (assistenza,
+  // collaudo): viene salvata e da li' in poi vale come le altre.
+  var daUrl = null;
+  try { daUrl = new URLSearchParams(location.search).get("chat"); } catch (e) {}
+  if (daUrl && /^[A-Za-z0-9._:-]{4,120}$/.test(daUrl)) scrivi("kano_chat_id", daUrl);
   var chatId = leggi("kano_chat_id");
   if (!chatId) {
     var r = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
