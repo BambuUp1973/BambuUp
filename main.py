@@ -102,12 +102,21 @@ BOT_ADMIN_KEY = os.getenv("BOT_ADMIN_KEY")
 # chiave del widget Shopify (static/widget.js sul nuovo sito) e' stata
 # generata il 21/09/2026 e va valorizzata su Render come
 # BOT_CLIENT_KEY_WIDGET_SHOPIFY: finche' manca, il widget riceve 401.
+# Ogni voce porta anche il NOME della variabile: senza, una diagnosi puo' dire
+# "una chiave retail manca" ma non QUALE, ed e' proprio quello che serve sapere
+# quando un frontend riceve 401.
 BOT_CLIENT_KEYS = [
-    ("staff", os.getenv("BOT_CLIENT_KEY_MINISITO")),
-    ("staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI")),
-    ("retail", os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY")),
-    ("retail", os.getenv("BOT_CLIENT_KEY_DIAGNOSI_RETAIL")),
+    ("BOT_CLIENT_KEY_MINISITO", "staff", os.getenv("BOT_CLIENT_KEY_MINISITO")),
+    ("BOT_CLIENT_KEY_DIAGNOSI", "staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI")),
+    ("BOT_CLIENT_KEY_WIDGET_SHOPIFY", "retail", os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY")),
+    ("BOT_CLIENT_KEY_DIAGNOSI_RETAIL", "retail", os.getenv("BOT_CLIENT_KEY_DIAGNOSI_RETAIL")),
 ]
+
+# Ora di avvio del processo. Su Render un salvataggio delle variabili d'ambiente
+# fa ripartire il servizio: se questa ora e' ANTERIORE al salvataggio, il
+# processo sta ancora girando con i valori vecchi e la diagnosi delle chiavi
+# descrive il passato.
+AVVIO_PROCESSO = datetime.now(timezone.utc)
 
 
 def init_db():
@@ -6890,7 +6899,7 @@ def ruolo_da_chiave_client(chiave_fornita):
     if not chiave_fornita:
         return None
     fornita = chiave_fornita.encode("utf-8")
-    for ruolo, attesa in BOT_CLIENT_KEYS:
+    for _nome, ruolo, attesa in BOT_CLIENT_KEYS:
         if attesa and hmac.compare_digest(fornita, attesa.encode("utf-8")):
             return ruolo
     return None
@@ -6914,7 +6923,7 @@ def esito_chiave_client(chiave_fornita, ruolo):
 # il problema è nostro); si risponde 503, fail closed come richiedi_chiave_admin
 # ma distinguibile nei fatti da una chiave errata.
 def rifiuta_chiave_client():
-    if not any(attesa for _ruolo, attesa in BOT_CLIENT_KEYS):
+    if not any(attesa for _nome, _ruolo, attesa in BOT_CLIENT_KEYS):
         raise HTTPException(
             status_code=503,
             detail="Servizio momentaneamente non disponibile.",
@@ -8556,6 +8565,42 @@ def _diag_nomi_variabili() -> list:
         n for n in os.environ
         if any(p in n.upper() for p in _DIAG_PREFISSI)
     )
+
+
+def _diag_chiavi_client() -> list:
+    """Stato delle chiavi di /chat SENZA mai restituirne il valore, nemmeno
+    troncato. Per ognuna: nome della variabile, ruolo che assegna, presenza,
+    lunghezza, e i difetti tipici di un incolla sbagliato su Render (spazi o
+    a capo ai bordi, virgolette rimaste attorno al valore).
+
+    L'impronta e' i primi 12 caratteri esadecimali di uno sha256: serve a
+    confrontare la chiave del server con quella di un file locale senza che
+    nessuna delle due passi di qui. Da 12 caratteri non si torna indietro al
+    valore, e comunque il confronto vero delle chiavi resta hmac.compare_digest.
+    """
+    voci = []
+    for nome, ruolo, valore in BOT_CLIENT_KEYS:
+        if not valore:
+            voci.append({
+                "variabile": nome,
+                "ruolo": ruolo,
+                "presente": False,
+                "nota": "non valorizzata nel processo",
+            })
+            continue
+        pulito = valore.strip()
+        voci.append({
+            "variabile": nome,
+            "ruolo": ruolo,
+            "presente": True,
+            "lunghezza": len(valore),
+            "lunghezza_senza_bordi": len(pulito),
+            "spazi_o_acapo_ai_bordi": valore != pulito,
+            "virgolette_attorno": len(pulito) >= 2 and pulito[0] == pulito[-1]
+                                  and pulito[0] in ("'", '"'),
+            "impronta": hashlib.sha256(valore.encode("utf-8")).hexdigest()[:12],
+        })
+    return voci
 
 
 def _diag_mancanti(coppie) -> list:
@@ -10748,7 +10793,10 @@ def diagnostica_collegamenti():
     """Inventario dei NOMI delle variabili d'ambiente dei canali, e poi una
     lettura vera su ognuno. Nessun valore di chiave esce da qui. WooCommerce
     compare DUE volte, una per set di credenziali: 'woocommerce' e' il set WOO_*
-    della migrazione, 'woocommerce_wc' e' il set WC_* che get_wcapi() usa oggi."""
+    della migrazione, 'woocommerce_wc' e' il set WC_* che get_wcapi() usa oggi.
+    Da qui si legge anche lo stato delle chiavi client di /chat ('chiavi_client')
+    e l'ora di avvio del processo, per capire se Render ha gia' riavviato con le
+    variabili salvate di recente."""
     canali = {}
     for nome, funzione in (
         ("b2b", _diag_b2b),
@@ -10766,9 +10814,13 @@ def diagnostica_collegamenti():
             canali[nome] = {
                 "esito": f"errore: eccezione non prevista ({type(e).__name__}: {e})"
             }
+    adesso = datetime.now(timezone.utc)
     return {
-        "letto_il": datetime.now(timezone.utc).isoformat(),
+        "letto_il": adesso.isoformat(),
         "nota": "Solo NOMI di variabili: nessun valore di chiave viene mai restituito.",
+        "avvio_processo": AVVIO_PROCESSO.isoformat(),
+        "attivo_da_minuti": round((adesso - AVVIO_PROCESSO).total_seconds() / 60, 1),
         "variabili_presenti_nel_processo": _diag_nomi_variabili(),
+        "chiavi_client": _diag_chiavi_client(),
         "canali": canali,
     }
