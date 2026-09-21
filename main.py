@@ -66,6 +66,20 @@ app.add_middleware(
 )
 
 
+# I file sotto /static (widget.js e chat.html del sito) e /webchat vanno
+# serviti con Cache-Control: no-cache: il browser li tiene in cache ma li
+# riconvalida a ogni uso (ETag/Last-Modified di StaticFiles, 304 se uguali),
+# cosi' un aggiornamento del widget arriva sul sito al deploy successivo e non
+# quando scade una cache di cui non decidiamo noi la durata.
+@app.middleware("http")
+async def _statici_senza_cache(request: Request, call_next):
+    risposta = await call_next(request)
+    percorso = request.url.path
+    if percorso.startswith("/static/") or percorso == "/webchat":
+        risposta.headers["Cache-Control"] = "no-cache"
+    return risposta
+
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
@@ -84,8 +98,10 @@ BOT_ADMIN_KEY = os.getenv("BOT_ADMIN_KEY")
 # tecnici nella risposta: quelli restano nei log). Lista di coppie e non dict
 # perché più chiavi possono dare lo stesso ruolo: mini-sito e script di
 # diagnosi sono entrambe staff (la seconda esiste perché senza una chiave
-# nostra, dopo i rifiuti, le prove live non sarebbero più possibili). Il
-# widget Shopify resta predisposto, chiave non ancora generata.
+# nostra, dopo i rifiuti, le prove live non sarebbero più possibili). La
+# chiave del widget Shopify (static/widget.js sul nuovo sito) e' stata
+# generata il 21/09/2026 e va valorizzata su Render come
+# BOT_CLIENT_KEY_WIDGET_SHOPIFY: finche' manca, il widget riceve 401.
 BOT_CLIENT_KEYS = [
     ("staff", os.getenv("BOT_CLIENT_KEY_MINISITO")),
     ("staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI")),
@@ -10527,6 +10543,204 @@ def _diag_woocommerce_wc() -> dict:
         ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"],
         WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET,
     )
+
+
+# --- SHOPIFY: tema principale e riga del widget (admin) ----------------------
+# Le credenziali Shopify vivono solo su Render, quindi la lettura degli scope,
+# del dominio e del tema, e l'installazione della riga del widget in
+# layout/theme.liquid, passano da qui. Regole: la chiave del widget arriva nel
+# CORPO della POST (mai nel percorso, che finisce nei log di accesso) e non
+# viene mai restituita: dove nella risposta compare la riga installata, il
+# valore di data-key e' sostituito da <chiave>. Nessuna altra scrittura verso
+# Shopify oltre a quell'unico asset, e solo se la riga non c'e' gia'.
+_WIDGET_HOST_DEFAULT = "https://bambuup.onrender.com"
+_WIDGET_ASSET = "layout/theme.liquid"
+
+
+def _shopify_riga_widget(host: str, chiave: str) -> str:
+    return (f'<script src="{host}/static/widget.js" data-key="{chiave}" '
+            'data-lang="{{ request.locale.iso_code | slice: 0, 2 }}" defer></script>')
+
+
+def _shopify_maschera_chiave(testo: str) -> str:
+    return re.sub(r'data-key="[^"]*"', 'data-key="<chiave>"', testo or "")
+
+
+def _shopify_sessione():
+    """(store, token, None) oppure (None, None, dict d'errore)."""
+    store_raw = os.getenv("SHOPIFY_STORE")
+    client_id = os.getenv("SHOPIFY_CLIENT_ID")
+    client_secret = os.getenv("SHOPIFY_CLIENT_SECRET")
+    mancanti = _diag_mancanti([
+        ("SHOPIFY_STORE", store_raw),
+        ("SHOPIFY_CLIENT_ID", client_id),
+        ("SHOPIFY_CLIENT_SECRET", client_secret),
+    ])
+    if mancanti:
+        return None, None, {"esito": "chiave mancante", "variabili_non_valorizzate": mancanti}
+    store = _shopify_store_pulito(store_raw)
+    token, errore = _shopify_token(store, client_id, client_secret)
+    if errore:
+        return None, None, {"esito": errore, "negozio_interrogato": store}
+    return store, token, None
+
+
+def _shopify_rest(store, token, metodo, percorso, **kw):
+    """Una chiamata REST all'Admin API. Ritorna (json_o_None, errore_o_None).
+    'percorso' e' relativo a /admin/ (es. 'oauth/access_scopes.json' oppure
+    'api/<versione>/shop.json')."""
+    try:
+        r = requests.request(
+            metodo, f"https://{store}/admin/{percorso}",
+            headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+            timeout=30, **kw,
+        )
+    except Exception as e:
+        return None, f"errore: {metodo} {percorso}, connessione fallita ({type(e).__name__}: {e})"
+    if r.status_code not in (200, 201):
+        return None, _diag_errore(f"{metodo} {percorso}", r)
+    try:
+        return r.json(), None
+    except Exception:
+        return None, f"errore: {metodo} {percorso}, risposta non JSON (HTTP {r.status_code})"
+
+
+def _shopify_tema_principale(store, token):
+    """(tema_dict, None) oppure (None, errore)."""
+    dati, errore = _shopify_rest(store, token, "GET", f"api/{_SHOPIFY_API_VERSION}/themes.json")
+    if errore:
+        return None, errore
+    for t in dati.get("themes") or []:
+        if t.get("role") == "main":
+            return {"id": t.get("id"), "nome": t.get("name"), "ruolo": "main"}, None
+    return None, "errore: nessun tema con role=main"
+
+
+def _shopify_leggi_asset(store, token, tema_id, chiave_asset=_WIDGET_ASSET):
+    """(testo, None) oppure (None, errore). Il testo del tema non esce mai
+    intero da un endpoint: chi lo chiama ne riporta solo l'esito."""
+    dati, errore = _shopify_rest(
+        store, token, "GET", f"api/{_SHOPIFY_API_VERSION}/themes/{tema_id}/assets.json",
+        params={"asset[key]": chiave_asset},
+    )
+    if errore:
+        return None, errore
+    valore = (dati.get("asset") or {}).get("value")
+    if valore is None:
+        return None, "errore: asset letto ma senza 'value' (file binario o vuoto?)"
+    return valore, None
+
+
+def _shopify_stato_riga(testo: str, host: str) -> dict:
+    """Dice se in theme.liquid c'e' gia' una riga del NOSTRO widget e come e'."""
+    righe = [r.strip() for r in (testo or "").splitlines() if f"{host}/static/widget.js" in r]
+    return {
+        "riga_presente": bool(righe),
+        "righe_trovate": [_shopify_maschera_chiave(r)[:300] for r in righe],
+        "body_chiuso": "</body>" in (testo or ""),
+    }
+
+
+@app.get("/shopify-tema", dependencies=SOLO_ADMIN)
+def shopify_tema(host: str = _WIDGET_HOST_DEFAULT):
+    """Solo lettura: scope dell'app (c'e' write_themes?), domini del negozio,
+    tema principale e se in layout/theme.liquid la riga del widget c'e' gia'."""
+    store, token, errore = _shopify_sessione()
+    if errore:
+        return errore
+    esito = {"letto_il": datetime.now(timezone.utc).isoformat(), "negozio_interrogato": store,
+             "versione_api": _SHOPIFY_API_VERSION}
+
+    dati, err = _shopify_rest(store, token, "GET", "oauth/access_scopes.json")
+    if err:
+        esito["scope"] = {"esito": err}
+    else:
+        nomi = sorted(x.get("handle") for x in (dati.get("access_scopes") or []) if x.get("handle"))
+        esito["scope"] = {"esito": "ok", "elenco": nomi,
+                          "write_themes": "write_themes" in nomi,
+                          "read_themes": "read_themes" in nomi or "write_themes" in nomi}
+
+    dati, err = _shopify_rest(store, token, "GET", f"api/{_SHOPIFY_API_VERSION}/shop.json")
+    if err:
+        esito["negozio"] = {"esito": err}
+    else:
+        shop = dati.get("shop") or {}
+        esito["negozio"] = {"esito": "ok", "nome": shop.get("name"), "domain": shop.get("domain"),
+                            "myshopify_domain": shop.get("myshopify_domain"),
+                            "lingua_principale": shop.get("primary_locale")}
+
+    tema, err = _shopify_tema_principale(store, token)
+    if err:
+        esito["tema"] = {"esito": err}
+        return esito
+    esito["tema"] = dict(tema, esito="ok")
+
+    testo, err = _shopify_leggi_asset(store, token, tema["id"])
+    if err:
+        esito["theme_liquid"] = {"esito": err}
+    else:
+        esito["theme_liquid"] = dict(_shopify_stato_riga(testo, host.rstrip("/")),
+                                     esito="ok", caratteri=len(testo))
+    return esito
+
+
+class InstallaWidgetRequest(BaseModel):
+    chiave: str
+    host: str = _WIDGET_HOST_DEFAULT
+    conferma: bool = False
+
+
+@app.post("/shopify-tema/installa", dependencies=SOLO_ADMIN)
+def shopify_tema_installa(req: InstallaWidgetRequest):
+    """Inserisce la riga del widget in layout/theme.liquid del tema principale,
+    prima di </body>, SOLO se non c'e' gia'. Rilegge e conferma. Se Shopify
+    rifiuta la scrittura non si tenta nessun'altra strada: l'esito lo dice."""
+    if not req.conferma:
+        return {"esito": "niente fatto: serve conferma=true"}
+    chiave = (req.chiave or "").strip()
+    if not chiave or any(c in chiave for c in '"<>\n\r '):
+        return {"esito": "niente fatto: chiave assente o con caratteri non ammessi"}
+    host = req.host.rstrip("/")
+    store, token, errore = _shopify_sessione()
+    if errore:
+        return errore
+    tema, err = _shopify_tema_principale(store, token)
+    if err:
+        return {"esito": err}
+    testo, err = _shopify_leggi_asset(store, token, tema["id"])
+    if err:
+        return {"esito": f"lettura rifiutata: {err}", "tema": tema}
+    stato = _shopify_stato_riga(testo, host)
+    if stato["riga_presente"]:
+        return {"esito": "gia' presente, nessuna scrittura", "tema": tema, "theme_liquid": stato}
+    if not stato["body_chiuso"]:
+        return {"esito": "niente fatto: in theme.liquid manca </body>", "tema": tema, "theme_liquid": stato}
+
+    riga = _shopify_riga_widget(host, chiave)
+    posizione = testo.rfind("</body>")
+    nuovo = testo[:posizione] + "    " + riga + "\n" + testo[posizione:]
+    _dati, err = _shopify_rest(
+        store, token, "PUT", f"api/{_SHOPIFY_API_VERSION}/themes/{tema['id']}/assets.json",
+        json={"asset": {"key": _WIDGET_ASSET, "value": nuovo}},
+    )
+    if err:
+        return {"esito": f"scrittura rifiutata: {err}", "tema": tema,
+                "riga_da_incollare": _shopify_maschera_chiave(riga)}
+    print(f"[SHOPIFY-TEMA] riga del widget scritta in {_WIDGET_ASSET} del tema {tema['id']}")
+
+    riletto, err = _shopify_leggi_asset(store, token, tema["id"])
+    if err:
+        return {"esito": f"scritta, ma rilettura fallita: {err}", "tema": tema}
+    dopo = _shopify_stato_riga(riletto, host)
+    confermata = any(f'data-key="{chiave}"' in r for r in riletto.splitlines()
+                     if f"{host}/static/widget.js" in r)
+    return {
+        "esito": "installata e confermata" if confermata else "scritta ma NON ritrovata alla rilettura",
+        "tema": tema,
+        "theme_liquid": dopo,
+        "caratteri_prima": len(testo),
+        "caratteri_dopo": len(riletto),
+    }
 
 
 @app.get("/diagnostica-collegamenti", dependencies=SOLO_ADMIN)

@@ -8,6 +8,11 @@
   e non manda nessuna chiave: e' il caso della pagina locale di collaudo, che
   aggiunge la chiave lei stessa.
   Servito su /webchat SENZA configurazione resta volutamente inerte (401).
+  Modalita' INCORPORATA (dal 21/09/2026): aperta da static/widget.js dentro un
+  iframe con ?embed=1&key=<chiave>&lang=it|en la chiave e la lingua arrivano
+  dall'indirizzo, la base e' l'origine della pagina stessa (il bot), e in alto
+  compare una X che chiede al genitore di chiudere (postMessage
+  {type:"kano-chat-close"}). Tutto il resto e' identico.
 -->
 <html lang="it">
 <head>
@@ -49,6 +54,11 @@
     button.operatore-btn { margin-top: 8px; padding: 10px 14px; font-size: 14px; border: 1px solid var(--operatore-bordo); background: var(--operatore);
                            color: #5a4300; border-radius: 6px; cursor: pointer; align-self: flex-start; }
     button.operatore-btn:disabled { opacity: .55; cursor: default; }
+    .chiudi { display: none; width: 32px; height: 32px; border: 0; border-radius: 16px; background: transparent;
+              color: var(--grigio); font-size: 22px; line-height: 32px; cursor: pointer; padding: 0; flex: 0 0 auto; }
+    .chiudi:hover { background: var(--bot); color: var(--testo); }
+    body.incorporata .chiudi { display: inline-block; }
+    body.incorporata .kano-chat { min-height: 100vh; padding-top: 8px; }
   </style>
 </head>
 <body>
@@ -58,6 +68,7 @@
       <span class="lingua">
         <button type="button" data-lingua="it">IT</button>
         <button type="button" data-lingua="en">EN</button>
+        <button type="button" id="chiudi" class="chiudi" aria-label="Chiudi">&times;</button>
       </span>
     </div>
     <div id="storico" class="storico" aria-live="polite"></div>
@@ -72,8 +83,20 @@
 <script>
 (function () {
   var CONF = window.KANO_CHAT || {};
-  var BASE = (CONF.base || "").replace(/\/+$/, "");
-  var KEY = CONF.key || null;
+  var PARAMI = null;
+  try { PARAMI = new URLSearchParams(location.search); } catch (e) {}
+  var INCORPORATA = !!(PARAMI && PARAMI.get("embed") === "1");
+  var BASE, KEY;
+  if (INCORPORATA) {
+    // Dentro l'iframe del widget: chiave e lingua dall'indirizzo, base = questa
+    // stessa origine (il bot). window.KANO_CHAT non viene letto.
+    BASE = location.origin;
+    KEY = PARAMI.get("key") || null;
+    document.body.classList.add("incorporata");
+  } else {
+    BASE = (CONF.base || "").replace(/\/+$/, "");
+    KEY = CONF.key || null;
+  }
   var OGNI_MS = 15000;
 
   var T = {
@@ -116,6 +139,11 @@
     scrivi("kano_chat_id", chatId);
   }
   var lingua = leggi("kano_chat_lingua") || ((navigator.language || "it").toLowerCase().indexOf("it") === 0 ? "it" : "en");
+  if (INCORPORATA) {
+    // La lingua della pagina del negozio vince: e' quella che il cliente sta leggendo.
+    var lang = (PARAMI.get("lang") || "").toLowerCase().slice(0, 2);
+    if (lang === "it" || lang === "en") lingua = lang;
+  }
 
   var storico = document.getElementById("storico");
   var stato = document.getElementById("stato");
@@ -253,6 +281,10 @@
         aggiornaStato(d.richiesta_aperta);
       })
       .catch(function () { bolla("bot", t("errore_rete")); opBtn.disabled = false; });
+  });
+
+  document.getElementById("chiudi").addEventListener("click", function () {
+    if (window.parent && window.parent !== window) window.parent.postMessage({ type: "kano-chat-close" }, "*");
   });
 
   applicaLingua();
