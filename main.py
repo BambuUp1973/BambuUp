@@ -98,18 +98,30 @@ BOT_ADMIN_KEY = os.getenv("BOT_ADMIN_KEY")
 # tecnici nella risposta: quelli restano nei log). Lista di coppie e non dict
 # perché più chiavi possono dare lo stesso ruolo: mini-sito e script di
 # diagnosi sono entrambe staff (la seconda esiste perché senza una chiave
-# nostra, dopo i rifiuti, le prove live non sarebbero più possibili). La
-# chiave del widget Shopify (static/widget.js sul nuovo sito) e' stata
-# generata il 21/09/2026 e va valorizzata su Render come
-# BOT_CLIENT_KEY_WIDGET_SHOPIFY: finche' manca, il widget riceve 401.
-# Ogni voce porta anche il NOME della variabile: senza, una diagnosi puo' dire
-# "una chiave retail manca" ma non QUALE, ed e' proprio quello che serve sapere
-# quando un frontend riceve 401.
+# nostra, dopo i rifiuti, le prove live non sarebbero più possibili). Le voci
+# non arrivano tutte dall'ambiente: quella del widget Shopify sta nel codice,
+# qui sotto, e il perche' e' spiegato li'.
+# La chiave del widget Shopify NON e' un segreto e non sta fra le variabili
+# d'ambiente: vive nel JavaScript pubblico del negozio, cioe' in chiaro dentro
+# layout/theme.liquid, e chiunque apra il sito la legge. Tenerla su Render dava
+# solo l'illusione di un segreto, e in cambio due copie da tenere allineate a
+# mano: il 21/09/2026 le due copie sono rimaste diverse per tre giri di
+# salvataggi e il widget ha continuato a prendere 401. Qui sta la copia sola,
+# accanto al codice che la controlla. Si RUOTA cambiando INSIEME questa
+# costante e la riga del tema Shopify (chiave_widget_riga_tema.txt): se si
+# cambia una sola delle due, il widget riceve 401.
+# La variabile d'ambiente BOT_CLIENT_KEY_WIDGET_SHOPIFY non viene piu' letta:
+# se e' rimasta valorizzata su Render non ha alcun effetto e si puo' cancellare.
+CHIAVE_WIDGET_SHOPIFY = "47ip7qXL7wVyo5zIdeAV_DnV3Y1MwNF2GlXZvJApEjk"
+
+# Ogni voce porta il NOME della chiave, il ruolo, il valore e da DOVE arriva:
+# senza il nome una diagnosi puo' dire "una chiave retail manca" ma non QUALE,
+# ed e' proprio quello che serve sapere quando un frontend riceve 401.
 BOT_CLIENT_KEYS = [
-    ("BOT_CLIENT_KEY_MINISITO", "staff", os.getenv("BOT_CLIENT_KEY_MINISITO")),
-    ("BOT_CLIENT_KEY_DIAGNOSI", "staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI")),
-    ("BOT_CLIENT_KEY_WIDGET_SHOPIFY", "retail", os.getenv("BOT_CLIENT_KEY_WIDGET_SHOPIFY")),
-    ("BOT_CLIENT_KEY_DIAGNOSI_RETAIL", "retail", os.getenv("BOT_CLIENT_KEY_DIAGNOSI_RETAIL")),
+    ("BOT_CLIENT_KEY_MINISITO", "staff", os.getenv("BOT_CLIENT_KEY_MINISITO"), "variabile d'ambiente"),
+    ("BOT_CLIENT_KEY_DIAGNOSI", "staff", os.getenv("BOT_CLIENT_KEY_DIAGNOSI"), "variabile d'ambiente"),
+    ("CHIAVE_WIDGET_SHOPIFY", "retail", CHIAVE_WIDGET_SHOPIFY, "codice"),
+    ("BOT_CLIENT_KEY_DIAGNOSI_RETAIL", "retail", os.getenv("BOT_CLIENT_KEY_DIAGNOSI_RETAIL"), "variabile d'ambiente"),
 ]
 
 # Ora di avvio del processo. Su Render un salvataggio delle variabili d'ambiente
@@ -6899,7 +6911,7 @@ def ruolo_da_chiave_client(chiave_fornita):
     if not chiave_fornita:
         return None
     fornita = chiave_fornita.encode("utf-8")
-    for _nome, ruolo, attesa in BOT_CLIENT_KEYS:
+    for _nome, ruolo, attesa, _origine in BOT_CLIENT_KEYS:
         if attesa and hmac.compare_digest(fornita, attesa.encode("utf-8")):
             return ruolo
     return None
@@ -6923,7 +6935,7 @@ def esito_chiave_client(chiave_fornita, ruolo):
 # il problema è nostro); si risponde 503, fail closed come richiedi_chiave_admin
 # ma distinguibile nei fatti da una chiave errata.
 def rifiuta_chiave_client():
-    if not any(attesa for _nome, _ruolo, attesa in BOT_CLIENT_KEYS):
+    if not any(attesa for _nome, _ruolo, attesa, _origine in BOT_CLIENT_KEYS):
         raise HTTPException(
             status_code=503,
             detail="Servizio momentaneamente non disponibile.",
@@ -8569,7 +8581,8 @@ def _diag_nomi_variabili() -> list:
 
 def _diag_chiavi_client() -> list:
     """Stato delle chiavi di /chat SENZA mai restituirne il valore, nemmeno
-    troncato. Per ognuna: nome della variabile, ruolo che assegna, presenza,
+    troncato. Per ognuna: nome, da dove arriva ('variabile d'ambiente' oppure
+    'codice', per la chiave pubblica del widget), ruolo che assegna, presenza,
     lunghezza, e i difetti tipici di un incolla sbagliato su Render (spazi o
     a capo ai bordi, virgolette rimaste attorno al valore).
 
@@ -8579,10 +8592,11 @@ def _diag_chiavi_client() -> list:
     valore, e comunque il confronto vero delle chiavi resta hmac.compare_digest.
     """
     voci = []
-    for nome, ruolo, valore in BOT_CLIENT_KEYS:
+    for nome, ruolo, valore, origine in BOT_CLIENT_KEYS:
         if not valore:
             voci.append({
-                "variabile": nome,
+                "nome": nome,
+                "origine": origine,
                 "ruolo": ruolo,
                 "presente": False,
                 "nota": "non valorizzata nel processo",
@@ -8590,7 +8604,8 @@ def _diag_chiavi_client() -> list:
             continue
         pulito = valore.strip()
         voci.append({
-            "variabile": nome,
+            "nome": nome,
+            "origine": origine,
             "ruolo": ruolo,
             "presente": True,
             "lunghezza": len(valore),
