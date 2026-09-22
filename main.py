@@ -252,6 +252,11 @@ WC_CONSUMER_KEY = os.getenv("WC_CONSUMER_KEY")
 WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 
 
+# La taglia la calcola il codice dalla guida (22/09/2026): tabelle, funzione,
+# lettura del messaggio e regex delle taglie stanno in taglie.py.
+from taglie import taglia_consigliata, estrai_misure, TAGLIA_RE, TESTO_DATI_MANCANTI
+
+
 class ChatRequest(BaseModel):
     source: str
     sender: str
@@ -2524,6 +2529,33 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "taglia_consigliata",
+        "description": (
+            "SOLO CLIENTE FINALE. L'UNICO modo per dire una taglia: la calcola il "
+            "codice dalla guida taglie ufficiale. Chiamalo per QUALSIASI domanda su "
+            "che taglia prendere, anche con dati incompleti: se manca qualcosa "
+            "restituisce lui la domanda da fare al cliente. Restituisce "
+            "'testo_da_riferire': lo riporti PAROLA PER PAROLA, senza aggiungere, "
+            "togliere o riformulare. Per le taglie NON usare rispondi_dal_manuale."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prodotto": {
+                    "type": "string",
+                    "enum": ["gi", "rashguard", "shorts", "kids_gi", "kids_rashguard", "kids_shorts"],
+                    "description": "gi = kimono adulto; kids_* = bambino/ragazzo. Ometti se il cliente non l'ha detto.",
+                },
+                "altezza_cm": {"type": "number", "description": "Altezza in cm (178, oppure 1,78 m = 178). Ometti se manca."},
+                "peso_kg": {"type": "number", "description": "Peso in kg. Ometti se manca."},
+                "eta": {"type": "integer", "description": "Eta' in anni, solo per bambino. Ometti se manca."},
+                "donna": {"type": "boolean", "description": "true se il capo e' da donna o il cliente e' una donna."},
+                "lingua": {"type": "string", "enum": ["it", "en"], "description": "Lingua in cui scrive il cliente."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "rispondi_dal_manuale",
         "description": (
             "Recupera informazioni dal manuale operativo interno / knowledge base "
@@ -2655,11 +2687,10 @@ GUARDIA SUI DOCUMENTI CHE CONSULTI
 - Se una frase dei documenti è rivolta allo staff ("rimanda il cliente", "il cliente deve"), non la ripeti: la traduci in una risposta rivolta a chi ti scrive, in seconda persona.
 
 TAGLIE
-- Se altezza e peso cadono entrambi in UNA fascia della guida: dai quella taglia, netta, senza spiegare il ragionamento.
-- Se cadono in DUE fasce (a cavallo di due, oppure altezza in una fascia e peso in un'altra): dai ENTRAMBE le taglie candidate, con una riga sulla differenza di vestibilità.
-- Se nessuna fascia li contiene: lo dici e dai le due più vicine.
+- La taglia la calcola SOLO lo strumento taglia_consigliata. Non dici MAI una taglia (A0-A6, A2L, A3S, M000-M5, XS-XXL, S/M/L) senza averlo chiamato in QUESTO turno: né a memoria, né dai documenti, né perché l'hai già detta prima. Per le taglie NON usi rispondi_dal_manuale.
+- Gli servono il prodotto (kimono, rashguard o shorts; adulto o bambino), l'altezza e il peso; per il kimono bambino l'altezza e, se c'è, l'età; per rashguard e shorts bambino l'età. Se manca qualcosa lo chiami lo stesso con quello che hai: ti restituisce lui la domanda da fare, con tutto ciò che manca in una volta sola.
+- Riporti il testo dello strumento TALE E QUALE, senza aggiungere, togliere o riformulare: la frase finale su «operatore» ne fa parte.
 - MAI scrivere che il cliente "rientra" in una fascia che non lo contiene.
-- SEMPRE, in coda a ogni risposta sulle taglie, questa frase (tradotta nella lingua del cliente): "In caso di dubbi scrivi a info@kanokimonos.com: un operatore ti aiuta a scegliere."
 
 FATTI CHE AFFERMA IL CLIENTE
 - Se il cliente afferma qualcosa che tu non puoi vedere (il pacco è partito, il sito dice un'altra cosa, l'ordine risulta X), NON lo confermi e NON gli dai ragione per cortesia. Dici che quel dato non ce l'hai e dove lo trova: la pagina del prodotto, la mail di conferma dell'ordine, info@kanokimonos.com.
@@ -2726,7 +2757,7 @@ ROLE_TOOLS = {
         "giacenza_woocommerce", "giacenza_fully",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
-    "retail": {"rispondi_dal_manuale", "passa_a_operatore", "salva_email_richiesta"},
+    "retail": {"rispondi_dal_manuale", "passa_a_operatore", "salva_email_richiesta", "taglia_consigliata"},
 }
 
 # Piattaforme ordini vietate per ruolo (enforcement lato esecuzione, difesa in profondità)
@@ -6724,6 +6755,8 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             return tool_rispondi_dal_manuale(
                 tool_input.get("argomento"), user_message, role
             )
+        if name == "taglia_consigliata":
+            return tool_taglia_consigliata(tool_input, user_message, contesto)
         if name in ("passa_a_operatore", "salva_email_richiesta"):
             if name == "passa_a_operatore":
                 esito = tool_passa_a_operatore(
@@ -7446,6 +7479,47 @@ def _rete_email(risposta: str, role: str, contesto: dict, messaggio_cliente: str
     print(f"[RICHIESTA] rete email chat={contesto.get('chat_id')} "
           f"risposta_scartata={risposta[:120]!r}")
     return esito["testo_da_riferire"]
+
+
+def tool_taglia_consigliata(tool_input: dict, user_message: str, contesto: dict) -> dict:
+    """La taglia dalla guida, calcolata da taglie.py: il testo per il cliente
+    e' fisso (contesto['testo_fisso']) e vince sul modello, anche quando
+    mancano dei dati (allora e' la domanda da fare)."""
+    tool_input = tool_input or {}
+    contesto = contesto if contesto is not None else {}
+    lingua = _lingua_richiesta(tool_input.get("lingua"), contesto, user_message)
+    r = taglia_consigliata(tool_input.get("prodotto"), tool_input.get("altezza_cm"),
+                           tool_input.get("peso_kg"), tool_input.get("eta"), tool_input.get("donna"))
+    testo = r["testo"][lingua]
+    contesto["taglia_chiamata"] = True
+    contesto["testo_fisso"] = testo
+    return {"esito": r["esito"], "taglie": r["taglie"], "fascia": r["fascia"], "mancano": r["mancano"],
+            "testo_da_riferire": testo, "istruzione": RICHIESTE_ISTRUZIONE}
+
+
+def _rete_taglie(risposta: str, role: str, contesto: dict, messaggio_cliente: str) -> str:
+    """Solo retail, dopo il modello: se la risposta contiene una taglia e in
+    questo turno taglia_consigliata NON e' stato chiamato, la risposta si
+    butta. Se dal messaggio del cliente si leggono prodotto e misure si
+    chiama la funzione e vale il suo testo; altrimenti il testo fisso che
+    chiede i dati. L'intervento finisce in strumenti_log come 'rete_taglie'."""
+    if _normalize_role(role) != "retail" or not contesto or contesto.get("taglia_chiamata"):
+        return risposta
+    if not TAGLIA_RE.search(risposta or ""):
+        return risposta
+    lingua = contesto.get("lingua") if contesto.get("lingua") in ("it", "en") else "it"
+    m = estrai_misure(messaggio_cliente)
+    esito = "dati_mancanti"
+    testo = TESTO_DATI_MANCANTI[lingua]
+    if m.get("prodotto"):
+        r = taglia_consigliata(m["prodotto"], m["altezza"], m["peso"], m["eta"], m["donna"])
+        if r["esito"] != "dati_mancanti":
+            esito, testo = r["esito"], r["testo"][lingua]
+    _registra_strumento(contesto.get("chat_id"), role, "rete_taglie",
+                        {"misure": m, "risposta_scartata": (risposta or "")[:200]}, esito, len(testo), 0)
+    print(f"[TAGLIE] rete chat={contesto.get('chat_id')} esito={esito} misure={m} "
+          f"risposta_scartata={risposta[:120]!r}")
+    return testo
 
 
 _PAROLE_IT = {
@@ -8583,6 +8657,8 @@ def chat(request: ChatRequest, http_request: Request,
         # richiesta aperta, si salva nel codice anche se il modello non ha
         # chiamato salva_email_richiesta.
         bot_reply = _rete_email(bot_reply, role, contesto, request.message)
+        # E per le taglie: una taglia detta senza lo strumento non passa.
+        bot_reply = _rete_taglie(bot_reply, role, contesto, request.message)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
