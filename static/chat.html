@@ -20,6 +20,10 @@
   referrer: Safari puo' lasciarlo vuoto); senza origine non parte niente e lo
   si scrive in console. Il localStorage dell'iframe resta come seconda copia.
   Tutto il resto e' identico.
+  Dal 22/09/2026 non c'e' piu' il bottone "Parla con un operatore": il cliente
+  scrive «operatore» in chat e il server fa il resto (conferma, apertura,
+  inoltro dei messaggi successivi, chiusura). Il widget manda anche la lingua
+  dell'interfaccia, per i testi fissi.
 -->
 <html lang="it">
 <head>
@@ -71,9 +75,6 @@
     input[type=text] { flex: 1; min-width: 0; padding: 11px; font-size: 16px; border: 1px solid #bbb; border-radius: 6px; }
     button.invia { padding: 11px 18px; font-size: 16px; border: 0; border-radius: 6px; background: var(--azione); color: #fff; cursor: pointer; flex: 0 0 auto; }
     button.invia:disabled { background: #999; }
-    button.operatore-btn { flex: 0 0 auto; margin-top: 8px; padding: 10px 14px; font-size: 14px; border: 1px solid var(--operatore-bordo); background: var(--operatore);
-                           color: #5a4300; border-radius: 6px; cursor: pointer; align-self: flex-start; }
-    button.operatore-btn:disabled { opacity: .55; cursor: default; }
     /* 44x44: la misura minima toccabile con il dito. */
     .chiudi { display: none; width: 44px; height: 44px; border: 0; border-radius: 22px; background: transparent;
               color: var(--testo); font-size: 28px; line-height: 44px; cursor: pointer; padding: 0; flex: 0 0 auto; }
@@ -97,7 +98,6 @@
       <input id="testo" type="text" autocomplete="off" />
       <button id="invia" class="invia" type="submit"></button>
     </form>
-    <button id="operatoreBtn" class="operatore-btn" type="button"></button>
   </div>
 
 <script>
@@ -127,12 +127,11 @@
 
   var T = {
     it: {
-      fissa: "Assistente automatico di Kano Kimonos. Per parlare con una persona usa il bottone qui sotto.",
+      fissa: "Chat gestita da intelligenza artificiale. Per parlare con un operatore scrivi «operatore».",
       benvenuto: "Ciao, sono Adelpina, il risponditore AI di Kano Kimonos. {saluto}, come posso aiutarti?",
       mattina: "Buongiorno", sera: "Buonasera",
       scrivi: "Scrivi qui il tuo messaggio",
       invia: "Invia",
-      operatore: "Parla con un operatore",
       tu: "Tu", bot: "Assistente", op: "Operatore Kano",
       attesa: "Un operatore ti risponderà qui in chat: puoi chiudere e tornare più tardi, la conversazione resta.",
       nuovo: "Nuovo messaggio dell'operatore",
@@ -140,12 +139,11 @@
       nessuna_risposta: "Non ho ricevuto una risposta: riprova fra poco."
     },
     en: {
-      fissa: "Kano Kimonos automated assistant. To talk to a person use the button below.",
+      fissa: "This chat is handled by artificial intelligence. To talk to a person, write «operator».",
       benvenuto: "Hi, I'm Adelpina, Kano Kimonos' AI assistant. {saluto}, how can I help you?",
       mattina: "Good morning", sera: "Good evening",
       scrivi: "Type your message here",
       invia: "Send",
-      operatore: "Talk to an operator",
       tu: "You", bot: "Assistant", op: "Kano operator",
       attesa: "An operator will reply here in the chat: you can close this and come back later, the conversation stays.",
       nuovo: "New message from the operator",
@@ -187,7 +185,6 @@
   var stato = document.getElementById("stato");
   var testo = document.getElementById("testo");
   var invia = document.getElementById("invia");
-  var opBtn = document.getElementById("operatoreBtn");
   var ultimoId = 0;
   var lettoIlServer = false;
   var aperta = false;
@@ -219,7 +216,6 @@
     mostraBenvenuto();
     testo.placeholder = t("scrivi");
     invia.textContent = t("invia");
-    opBtn.textContent = t("operatore");
     var bottoni = document.querySelectorAll(".lingua button");
     for (var i = 0; i < bottoni.length; i++) bottoni[i].classList.toggle("attiva", bottoni[i].getAttribute("data-lingua") === lingua);
     var etichette = storico.querySelectorAll(".m");
@@ -274,9 +270,10 @@
     }
   }
 
+  // 'aperta' = conversazione con l'operatore in corso (richiesta aperta O
+  // risposta, lo decide il server): si legge ogni 15 s finche' non e' chiusa.
   function aggiornaStato(nuovaAperta) {
     aperta = !!nuovaAperta;
-    opBtn.disabled = aperta;
     stato.textContent = aperta ? t("attesa") : "";
     if (aperta && !timer) timer = setInterval(sincronizza, OGNI_MS);
     if (!aperta && timer) { clearInterval(timer); timer = null; }
@@ -312,7 +309,7 @@
     var puntini = bolla("bot", "…", "puntini");
     fetch(BASE + "/chat", {
       method: "POST", headers: intestazioni(true),
-      body: JSON.stringify({ source: "web", sender: "Cliente", chat_id: chatId, message: msg, role: "retail" })
+      body: JSON.stringify({ source: "web", sender: "Cliente", chat_id: chatId, message: msg, role: "retail", lingua: lingua })
     }).then(function (r) {
       return r.json().then(function (d) { return { ok: r.ok, d: d }; });
     }).then(function (x) {
@@ -327,22 +324,6 @@
       mia.classList.remove("in-attesa"); mia.classList.add("non-inviato");
       bolla("bot", t("errore_rete"));
     }).then(function () { invia.disabled = false; testo.focus(); });
-  });
-
-  opBtn.addEventListener("click", function () {
-    opBtn.disabled = true;
-    fetch(BASE + "/richieste/apri", {
-      method: "POST", headers: intestazioni(true),
-      body: JSON.stringify({ chat_id: chatId, tipo: "cliente_chiede", lingua: lingua })
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.esito === "aperta") {
-          return sincronizza(false).then(function () { aggiornaStato(true); });
-        }
-        if (d.testo) bolla("bot", d.testo);
-        aggiornaStato(d.richiesta_aperta);
-      })
-      .catch(function () { bolla("bot", t("errore_rete")); opBtn.disabled = false; });
   });
 
   document.getElementById("chiudi").addEventListener("click", function () {
