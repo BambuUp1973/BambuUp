@@ -254,7 +254,8 @@ WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 
 # La taglia la calcola il codice dalla guida (22/09/2026): tabelle, funzione,
 # lettura del messaggio e regex delle taglie stanno in taglie.py.
-from taglie import taglia_consigliata, estrai_misure, TAGLIA_RE, TESTO_DATI_MANCANTI
+from taglie import (taglia_consigliata, estrai_misure, decidi_taglia, TAGLIA_RE,
+                    TESTO_DATI_MANCANTI)
 
 
 class ChatRequest(BaseModel):
@@ -7505,7 +7506,11 @@ def _rete_taglie(risposta: str, role: str, contesto: dict, messaggio_cliente: st
     chiede i dati. L'intervento finisce in strumenti_log come 'rete_taglie'."""
     if _normalize_role(role) != "retail" or not contesto or contesto.get("taglia_chiamata"):
         return risposta
-    if not TAGLIA_RE.search(risposta or ""):
+    nel_messaggio = set(TAGLIA_RE.findall(messaggio_cliente or ""))
+    nuove = [t for t in TAGLIA_RE.findall(risposta or "") if t not in nel_messaggio]
+    if not nuove:
+        # Nessuna taglia, o solo quelle che ha scritto il cliente ("la A2 e'
+        # disponibile in blu?"): non e' un consiglio di taglia, si lascia stare.
         return risposta
     lingua = contesto.get("lingua") if contesto.get("lingua") in ("it", "en") else "it"
     m = estrai_misure(messaggio_cliente)
@@ -8635,6 +8640,23 @@ def chat(request: ChatRequest, http_request: Request,
                 return {"reply": fissa["testo"], "chat_id": request.chat_id, "status": "saved",
                         "stop_reason": None, "rete": fissa["rete"],
                         "richiesta_id": fissa.get("richiesta_id")}
+            # Taglie (fase 2): "che taglia prendo?" non passa dal modello. Con
+            # prodotto e misure risponde la guida, altrimenti si chiede in una
+            # volta sola tutto quello che manca. Il peso non si deduce mai.
+            t = decidi_taglia(request.message, _lingua_fissa(lingua_hint, request.message))
+            if t:
+                _registra_strumento(request.chat_id, role, t["rete"],
+                                    {"misure": t["misure"]}, t["esito"], len(t["testo"]), 0)
+                print(f"[TAGLIE] {t['rete']} chat={request.chat_id} esito={t['esito']} "
+                      f"taglie={t['taglie']} misure={t['misure']}")
+                conn = psycopg2.connect(DATABASE_URL)
+                cur = conn.cursor()
+                _messaggio_in_chat(cur, request.chat_id, t["testo"], False, request.source)
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"reply": t["testo"], "chat_id": request.chat_id, "status": "saved",
+                        "stop_reason": None, "rete": t["rete"], "taglie": t["taglie"]}
 
         # Routing via tool use: Haiku decide quale strumento chiamare e con
         # quali parametri (sostituisce la vecchia cascata di regex).

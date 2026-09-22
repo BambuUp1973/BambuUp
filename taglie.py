@@ -166,6 +166,14 @@ def _adulto_peso(altezza, peso):
 
 
 def _kids_gi(altezza, eta):
+    if altezza is None:
+        # Solo l'eta': la guida da' la sigla anche cosi' (M2 = 130 cm / 7-8 anni).
+        idx, come = _compatibili(eta, [(emin, emax) for _, _, emin, emax in KIDS_GI])
+        if not idx:
+            return [], "fuori_tabella", f"eta' {_num(eta)} anni fuori dalla guida bambino (2-12 anni)"
+        taglie = _ordina([KIDS_GI[i][0] for i in idx])
+        fascia = "eta' " + "/".join(f"{KIDS_GI[i][2]}-{KIDS_GI[i][3]} anni" for i in idx)
+        return taglie, ("unica" if len(taglie) == 1 else "doppia"), fascia
     idx, come = _compatibili(altezza, [(h, h) for _, h, _, _ in KIDS_GI])
     if not idx:
         return [], "fuori_tabella", f"altezza {_num(altezza)} cm fuori dalla guida bambino (90-160 cm)"
@@ -230,12 +238,27 @@ def _misura(lingua, altezza, peso, eta):
     return (" e " if lingua == "it" else " and ").join(parti)
 
 
+def _base_di_variante_L(taglie):
+    """'A2' se le due taglie sono A2 e A2L (stessa taglia, variante lunga);
+    None per le coppie normali (XL/XXL, A2/A3, A3S/A3)."""
+    if len(taglie) != 2:
+        return None
+    corta, lunga = sorted(taglie, key=len)
+    return corta if lunga == corta + "L" else None
+
+
 def _testo(lingua, esito, taglie, altezza, peso, eta, donna, prodotto):
     m = _misura(lingua, altezza, peso, eta)
     if esito == "unica":
         t = taglie[0]
         frase = (f"Per {m} la taglia consigliata è {t}." if lingua == "it"
                  else f"For {m} the recommended size is {t}.")
+    elif esito == "doppia" and _base_di_variante_L(taglie):
+        # A2 e A2L non sono due corporature: e' la stessa taglia piu' lunga.
+        t = _base_di_variante_L(taglie)
+        frase = (f"Per {m} puoi prendere {t}: {t} è la taglia standard, {t}L è più lunga, per chi è più alto."
+                 if lingua == "it"
+                 else f"For {m} you can take {t}: {t} is the standard size, {t}L is longer, for taller people.")
     elif esito == "doppia":
         t1, t2 = taglie[0], taglie[-1]
         frase = (f"Per {m} sei tra {t1} e {t2}: {t1} calza più aderente, {t2} più comodo." if lingua == "it"
@@ -295,7 +318,7 @@ def taglia_consigliata(prodotto, altezza_cm=None, peso_kg=None, eta=None, donna=
             return esito_mancanti(mancano)
         taglie, esito, fascia = _gi_adulto(altezza, peso) if prodotto == "gi" else _adulto_peso(altezza, peso)
     elif prodotto == "kids_gi":
-        if altezza is None:
+        if altezza is None and eta_n is None:
             return esito_mancanti(["altezza"])
         taglie, esito, fascia = _kids_gi(altezza, eta_n)
     else:  # kids_rashguard, kids_shorts
@@ -313,6 +336,7 @@ _H_UNITA_RE = re.compile(r"\b(\d)[,.](\d{2})\s*m(?:etri)?\b|\b(\d{2,3})\s*cm\b|\
 _P_UNITA_RE = re.compile(r"\b(\d{2,3})(?:[,.]\d)?\s*(?:kg|chil[io]|kil[io]|chilogrammi)\b|\bpes[oa]\s+(\d{2,3})\b", re.IGNORECASE)
 _ETA_RE = re.compile(r"\b(\d{1,2})\s*(?:anni|anno|years?|y\.?o\.?)\b", re.IGNORECASE)
 _NUMERO_RE = re.compile(r"\b\d{2,3}\b")
+_NON_MISURA_RE = re.compile(r"\s*(euro|eur\b|€|%|\$|£|giorn|day|ore\b|hours?\b)", re.IGNORECASE)
 _KIDS_RE = re.compile(r"bambin|bimb|figli[oa]|ragazzin|junior|kids?\b|child|\bson\b|daughter", re.IGNORECASE)
 _DONNA_RE = re.compile(r"\bdonna\b|femminil|\bwomen|\bwoman\b|\bfemale\b|\bragazza\b|\blady\b|\bsignora\b", re.IGNORECASE)
 _PRODOTTO_RE = [
@@ -328,7 +352,8 @@ def estrai_misure(messaggio):
     poi i numeri nudi: un 3 cifre fra 100 e 220 e' l'altezza, un 2-3 cifre
     fra 20 e 200 il peso."""
     testo = messaggio or ""
-    out = {"altezza": None, "peso": None, "eta": None, "prodotto": None, "donna": bool(_DONNA_RE.search(testo))}
+    out = {"altezza": None, "peso": None, "eta": None, "prodotto": None,
+           "donna": bool(_DONNA_RE.search(testo)), "sicure": []}
     resto = testo
     m = _H_UNITA_RE.search(resto)
     if m:
@@ -336,17 +361,22 @@ def estrai_misure(messaggio):
             out["altezza"] = float(f"{m.group(1)}{m.group(2)}")
         else:
             out["altezza"] = float(m.group(3) or m.group(4))
+        out["sicure"].append("altezza")
         resto = resto[:m.start()] + " " + resto[m.end():]
     m = _P_UNITA_RE.search(resto)
     if m:
         out["peso"] = float(m.group(1) or m.group(2))
+        out["sicure"].append("peso")
         resto = resto[:m.start()] + " " + resto[m.end():]
     m = _ETA_RE.search(resto)
     if m:
         out["eta"] = float(m.group(1))
+        out["sicure"].append("eta")
         resto = resto[:m.start()] + " " + resto[m.end():]
-    for n in _NUMERO_RE.findall(resto):
-        v = float(n)
+    for m in _NUMERO_RE.finditer(resto):
+        if _NON_MISURA_RE.match(resto[m.end():]):     # 189 euro, 25%, ...
+            continue
+        v = float(m.group(0))
         if out["altezza"] is None and 100 <= v <= 220:
             out["altezza"] = v
         elif out["peso"] is None and 20 <= v <= 200:
@@ -355,3 +385,41 @@ def estrai_misure(messaggio):
     kids = bool(_KIDS_RE.search(testo)) or (out["eta"] is not None and out["eta"] <= 14)
     out["prodotto"] = (f"kids_{base}" if kids else base) if base else None
     return out
+
+
+# --- il turno e' una domanda "che taglia prendo?" ------------------------------
+# Serve alla rete in main.py, PRIMA del modello. Due porte: il cliente nomina
+# la taglia/misura/fit, oppure nomina un prodotto insieme a una misura scritta
+# con l'unita' ("kimono, peso 80"). Restano fuori le domande che nominano una
+# taglia ma chiedono altro (disponibilita', prezzo, cambio taglia, reso): li'
+# risponde Adelpina come prima.
+_CHIEDE_TAGLIA_RE = re.compile(
+    r"\btagli[ae]\b|\bmisur[ae]\b|\bsizes?\b|\bvestibilit|\bfit\b|\bmi sta\b"
+    r"|\bche\b[^.?!]{0,30}\bprend[oa]\b|\bwh(ich|at) size\b",
+    re.IGNORECASE,
+)
+_ALTRA_DOMANDA_RE = re.compile(
+    r"\bcambi|\bres[oi]\b|\brimbors|\breturn|\bexchange|\bdisponibil|\bavailab"
+    r"|\bin stock\b|\bcost[aoi]\b|\bprezz|\bpric|\bspedi|\bship",
+    re.IGNORECASE,
+)
+
+
+def decidi_taglia(messaggio, lingua="it"):
+    """None se il turno non e' una domanda di taglia (ci pensa il modello).
+    Altrimenti {'rete': 'rete_taglie_diretta'|'rete_taglie_dati_mancanti',
+    'testo', 'esito', 'taglie', 'misure'}: il testo e' gia' quello per il
+    cliente. Il peso non si deduce mai: se manca, si chiede."""
+    testo = messaggio or ""
+    lingua = lingua if lingua in ("it", "en") else "it"
+    if _ALTRA_DOMANDA_RE.search(testo):
+        return None
+    m = estrai_misure(testo)
+    chiede = bool(_CHIEDE_TAGLIA_RE.search(testo))
+    con_unita = bool(m["sicure"])
+    if not chiede and not (m["prodotto"] and con_unita):
+        return None
+    r = taglia_consigliata(m["prodotto"], m["altezza"], m["peso"], m["eta"], m["donna"])
+    rete = "rete_taglie_dati_mancanti" if r["esito"] == "dati_mancanti" else "rete_taglie_diretta"
+    return {"rete": rete, "testo": r["testo"][lingua], "esito": r["esito"],
+            "taglie": r["taglie"], "misure": m}

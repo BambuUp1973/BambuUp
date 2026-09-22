@@ -9,7 +9,7 @@ import re
 import unittest
 
 import taglie
-from taglie import taglia_consigliata, estrai_misure, TAGLIA_RE
+from taglie import taglia_consigliata, estrai_misure, decidi_taglia, TAGLIA_RE
 
 QUI = os.path.dirname(os.path.abspath(__file__))
 
@@ -101,11 +101,30 @@ class Funzione(unittest.TestCase):
         e, t, _, _ = self.esito("gi", 174, 60)
         self.assertEqual((e, t), ("unica", ["A1L"]))
 
-    def test_gi_doppia_confine_altezza(self):
-        # 178 cm sta fra la riga 170-175 (A2 a 80 kg) e la riga 180 (A2L a 80 kg)
-        e, t, it, _ = self.esito("gi", 178, 80)
+    def test_gi_doppia_variante_L(self):
+        # 178 cm sta fra la riga 170-175 (A2 a 80 kg) e la riga 180 (A2L a 80 kg):
+        # non sono due corporature, e' la stessa taglia piu' lunga.
+        e, t, it, en = self.esito("gi", 178, 80)
         self.assertEqual((e, t), ("doppia", ["A2", "A2L"]))
-        self.assertTrue(it.startswith("Per 178 cm e 80 kg sei tra A2 e A2L: A2 calza più aderente, A2L più comodo."))
+        self.assertEqual(it, "Per 178 cm e 80 kg puoi prendere A2: A2 è la taglia standard, A2L è più lunga, "
+                             "per chi è più alto. In caso di dubbi scrivi «operatore» e ti aiutiamo a scegliere.")
+        self.assertEqual(en, "For 178 cm and 80 kg you can take A2: A2 is the standard size, A2L is longer, "
+                             "for taller people. If in doubt, write «operator» and we'll help you choose.")
+
+    def test_gi_doppia_A1_A1L(self):
+        # 167 cm, 65 kg: riga 165 (A1) e riga 170-175 (A1L)
+        e, t, it, _ = self.esito("gi", 167, 65)
+        self.assertEqual((e, t), ("doppia", ["A1", "A1L"]))
+        self.assertIn("puoi prendere A1: A1 è la taglia standard, A1L è più lunga", it)
+
+    def test_doppia_normale_resta_aderente_comodo(self):
+        # coppie che NON sono variante L: A3S/A3 e XL/XXL
+        _, t, it, _ = self.esito("gi", 182, 110)
+        self.assertEqual(t, ["A3S", "A3"])
+        self.assertIn("calza più aderente", it)
+        _, t, it, _ = self.esito("shorts", 190, 95)
+        self.assertEqual(t, ["XL", "XXL"])
+        self.assertIn("XL calza più aderente, XXL più comodo", it)
 
     def test_gi_doppia_confine_peso(self):
         # 165 cm, 72 kg: fra "A1 fino a 70" e "A2 75-90"
@@ -194,6 +213,76 @@ class Funzione(unittest.TestCase):
         self.assertEqual(r["mancano"], ["eta"])
 
 
+class DatiMancanti(unittest.TestCase):
+
+    def test_solo_altezza(self):
+        r = taglia_consigliata(None, 178)
+        self.assertEqual((r["esito"], r["mancano"]), ("dati_mancanti", ["prodotto", "peso"]))
+        self.assertEqual(r["testo"]["it"], "Per consigliarti la taglia mi serve ancora il prodotto "
+                                           "(kimono, rashguard o shorts) e il peso.")
+
+    def test_solo_peso(self):
+        r = taglia_consigliata("gi", None, 80)
+        self.assertEqual((r["esito"], r["mancano"]), ("dati_mancanti", ["altezza"]))
+        self.assertEqual(r["testo"]["it"], "Per consigliarti la taglia mi serve ancora l'altezza.")
+        self.assertEqual(r["testo"]["en"], "To recommend a size I still need your height.")
+
+    def test_solo_prodotto(self):
+        r = taglia_consigliata("gi")
+        self.assertEqual((r["esito"], r["mancano"]), ("dati_mancanti", ["altezza", "peso"]))
+        self.assertEqual(r["testo"]["it"], "Per consigliarti la taglia mi serve ancora l'altezza e il peso.")
+
+    def test_niente(self):
+        r = taglia_consigliata(None)
+        self.assertEqual(r["mancano"], ["prodotto", "altezza", "peso"])
+
+    def test_kids_gi_solo_eta(self):
+        r = taglia_consigliata("kids_gi", None, None, eta=8)
+        self.assertEqual((r["esito"], r["taglie"]), ("unica", ["M2"]))
+        r = taglia_consigliata("kids_gi", None, None, eta=5)
+        self.assertEqual((r["esito"], r["taglie"]), ("doppia", ["M1", "M0"][::-1]))
+
+
+class DecisioneDelTurno(unittest.TestCase):
+    """decidi_taglia: quando il turno NON passa dal modello."""
+
+    def test_chiede_senza_dati(self):
+        d = decidi_taglia("sono alto 178, che taglia?")
+        self.assertEqual(d["rete"], "rete_taglie_dati_mancanti")
+        self.assertEqual(d["testo"], "Per consigliarti la taglia mi serve ancora il prodotto "
+                                     "(kimono, rashguard o shorts) e il peso.")
+
+    def test_peso_non_si_deduce(self):
+        d = decidi_taglia("sono alto 1,78 m, che kimono prendo?")
+        self.assertEqual(d["rete"], "rete_taglie_dati_mancanti")
+        self.assertIn("il peso", d["testo"])
+
+    def test_prodotto_e_peso_senza_parola_taglia(self):
+        d = decidi_taglia("kimono, peso 80")
+        self.assertEqual(d["rete"], "rete_taglie_dati_mancanti")
+        self.assertEqual(d["testo"], "Per consigliarti la taglia mi serve ancora l'altezza.")
+
+    def test_diretta(self):
+        d = decidi_taglia("178 cm 80 kg kimono")
+        self.assertEqual((d["rete"], d["esito"], d["taglie"]), ("rete_taglie_diretta", "doppia", ["A2", "A2L"]))
+        self.assertIn("A2 è la taglia standard", d["testo"])
+        d = decidi_taglia("rashguard 165 cm 62 kg")
+        self.assertEqual((d["rete"], d["esito"], d["taglie"]), ("rete_taglie_diretta", "unica", ["XS"]))
+
+    def test_inglese(self):
+        d = decidi_taglia("what size for 178 cm and 80 kg gi?", "en")
+        self.assertEqual(d["esito"], "doppia")
+        self.assertIn("A2 is the standard size", d["testo"])
+
+    def test_domande_che_restano_al_modello(self):
+        for msg in ("la A2 è disponibile in blu?",
+                    "posso cambiare taglia dopo l'acquisto?",
+                    "quanto costa la spedizione in Italia?",
+                    "il kimono blu costa 189 euro?",
+                    "che colori avete?"):
+            self.assertIsNone(decidi_taglia(msg), msg)
+
+
 class LetturaMessaggio(unittest.TestCase):
 
     def test_misure(self):
@@ -211,6 +300,13 @@ class LetturaMessaggio(unittest.TestCase):
         self.assertEqual((m["altezza"], m["peso"], m["prodotto"], m["donna"]), (168, 60, "gi", True))
         m = estrai_misure("178 80 chili kimono")
         self.assertEqual((m["altezza"], m["peso"]), (178, 80))
+
+    def test_taglia_del_cliente_non_e_un_consiglio(self):
+        messaggio = "la A2 è disponibile in blu?"
+        risposta = "La disponibilità della A2 in blu è sulla pagina del prodotto."
+        nel_messaggio = set(TAGLIA_RE.findall(messaggio))
+        nuove = [t for t in TAGLIA_RE.findall(risposta) if t not in nel_messaggio]
+        self.assertEqual(nuove, [])
 
     def test_regex_taglia(self):
         self.assertTrue(TAGLIA_RE.search("la taglia è A2L"))
