@@ -15,8 +15,11 @@
   {type:"kano-chat-close"}). Dal 22/09/2026 il chat_id lo custodisce la
   pagina del negozio (widget.js): se arriva ?chat=<id> si usa quello e non se
   ne genera un altro; se manca, l'id (nuovo o dalla copia locale) si rimanda al
-  genitore con postMessage {type:"kano-chat-id", id}. Il localStorage
-  dell'iframe resta come seconda copia. Tutto il resto e' identico.
+  genitore con postMessage {type:"kano-chat-id", id}, indirizzato SOLO a
+  &origine=<origine del negozio> che widget.js mette nell'URL (mai "*", mai il
+  referrer: Safari puo' lasciarlo vuoto); senza origine non parte niente e lo
+  si scrive in console. Il localStorage dell'iframe resta come seconda copia.
+  Tutto il resto e' identico.
 -->
 <html lang="it">
 <head>
@@ -99,12 +102,18 @@
   var PARAMI = null;
   try { PARAMI = new URLSearchParams(location.search); } catch (e) {}
   var INCORPORATA = !!(PARAMI && PARAMI.get("embed") === "1");
-  var BASE, KEY;
+  var BASE, KEY, ORIGINE = null;
   if (INCORPORATA) {
     // Dentro l'iframe del widget: chiave e lingua dall'indirizzo, base = questa
     // stessa origine (il bot). window.KANO_CHAT non viene letto.
     BASE = location.origin;
     KEY = PARAMI.get("key") || null;
+    // Origine del negozio che ci incorpora: destinatario dei postMessage.
+    // Vale solo se e' un'origine pulita (schema://host[:porta], niente percorso).
+    try {
+      var o = PARAMI.get("origine");
+      if (o && new URL(o).origin === o) ORIGINE = o;
+    } catch (e) {}
     document.body.classList.add("incorporata");
   } else {
     BASE = (CONF.base || "").replace(/\/+$/, "");
@@ -155,10 +164,9 @@
   if (INCORPORATA && !daUrl && window.parent && window.parent !== window) {
     // Il genitore non lo conosceva: glielo si consegna perche' lo custodisca
     // lui (storage di prima parte) e lo rimandi come ?chat= alla prossima
-    // apertura. Destinatario: l'origine che ci ha incorporato, se nota.
-    var genitore = "*";
-    try { genitore = new URL(document.referrer).origin; } catch (e) {}
-    window.parent.postMessage({ type: "kano-chat-id", id: chatId }, genitore);
+    // apertura. Solo all'origine dichiarata nell'URL: senza, niente.
+    if (ORIGINE) window.parent.postMessage({ type: "kano-chat-id", id: chatId }, ORIGINE);
+    else console.warn("kano chat: origine del negozio assente nell'URL, chat_id non consegnato al genitore");
   }
   var lingua = leggi("kano_chat_lingua") || ((navigator.language || "it").toLowerCase().indexOf("it") === 0 ? "it" : "en");
   if (INCORPORATA) {
@@ -306,7 +314,7 @@
   });
 
   document.getElementById("chiudi").addEventListener("click", function () {
-    if (window.parent && window.parent !== window) window.parent.postMessage({ type: "kano-chat-close" }, "*");
+    if (window.parent && window.parent !== window) window.parent.postMessage({ type: "kano-chat-close" }, ORIGINE || "*");
   });
 
   applicaLingua();

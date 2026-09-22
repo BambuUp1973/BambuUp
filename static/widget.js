@@ -20,6 +20,10 @@
   se c'e' si passa all'iframe come &chat=<id>; se non c'e' la chat ne crea uno
   e lo rimanda con postMessage {type:"kano-chat-id", id}, che viene salvato.
   Se anche questo localStorage e' bloccato si va avanti lo stesso.
+  L'iframe riceve anche &origine=<origine di questa pagina>: e' il destinatario
+  esatto dei suoi postMessage (mai "*"), senza dipendere dal referrer, che
+  Safari o una Referrer-Policy restrittiva possono lasciare vuoto.
+  In console: "kano chat: id ripreso" / "kano chat: id nuovo" (diagnosi).
 */
 (function () {
   if (window.__kanoChatWidget) return;
@@ -94,7 +98,9 @@
     iframe.title = lang === "it" ? "Chat Kano Kimonos" : "Kano Kimonos chat";
     iframe.setAttribute("allow", "clipboard-write");
     var chatId = leggiId();
+    if (chatId) console.log("kano chat: id ripreso", chatId);
     iframe.src = base + "/static/chat.html?embed=1&key=" + encodeURIComponent(key) + "&lang=" + encodeURIComponent(lang) +
+      "&origine=" + encodeURIComponent(location.origin) +
       (chatId ? "&chat=" + encodeURIComponent(chatId) : "");
     document.body.appendChild(iframe);
     window.addEventListener("resize", posiziona);
@@ -115,7 +121,10 @@
     if (ev.origin !== base) return;
     if (!ev.data) return;
     if (ev.data.type === "kano-chat-close") mostra(false);
-    if (ev.data.type === "kano-chat-id" && typeof ev.data.id === "string" && ID_VALIDO.test(ev.data.id)) salvaId(ev.data.id);
+    if (ev.data.type === "kano-chat-id" && typeof ev.data.id === "string" && ID_VALIDO.test(ev.data.id)) {
+      if (ev.data.id !== leggiId()) console.log("kano chat: id nuovo", ev.data.id);
+      salvaId(ev.data.id);
+    }
   });
   window.addEventListener("resize", function () {
     if (!apertaChat) return;
