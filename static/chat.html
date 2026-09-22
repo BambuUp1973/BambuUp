@@ -45,6 +45,10 @@
                           calc(8px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px)); }
     .avviso { flex: 0 0 auto; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px;
               padding: 8px 8px 8px 12px; font-size: 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .avviso .testo { flex: 1 1 auto; min-width: 0; }
+    /* Ultime 6 cifre del chat_id: serve a Bambu per capire dal telefono se la
+       conversazione e' la stessa fra una visita e l'altra. */
+    .avviso .codice { font-size: 12px; color: var(--grigio); white-space: nowrap; }
     .avviso .lingua { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
     .avviso .lingua button { font-size: 12px; padding: 4px 8px; border: 1px solid var(--bordo); background: var(--carta); border-radius: 6px; cursor: pointer; color: var(--grigio); }
     .avviso .lingua button.attiva { background: var(--testo); color: #fff; border-color: var(--testo); }
@@ -80,7 +84,7 @@
 <body>
   <div class="kano-chat">
     <div class="avviso">
-      <span id="rigaFissa"></span>
+      <span class="testo"><span id="rigaFissa"></span> <span id="codiceChat" class="codice"></span></span>
       <span class="lingua">
         <button type="button" data-lingua="it">IT</button>
         <button type="button" data-lingua="en">EN</button>
@@ -187,9 +191,15 @@
 
   function t(k) { return T[lingua][k]; }
 
+  function mostraCodice() {
+    var e = document.getElementById("codiceChat");
+    if (e) e.textContent = chatId ? "#" + chatId.slice(-6) : "";
+  }
+
   function applicaLingua() {
     document.documentElement.lang = lingua;
     document.getElementById("rigaFissa").textContent = t("fissa");
+    mostraCodice();
     testo.placeholder = t("scrivi");
     invia.textContent = t("invia");
     opBtn.textContent = t("operatore");
@@ -265,6 +275,7 @@
         for (var i = 0; i < pendenti.length; i++) pendenti[i].remove();
         mostraMessaggi(d.messaggi || [], evidenzia !== false);
         aggiornaStato(d.richiesta_aperta);
+        mostraCodice();
         return d;
       })
       .catch(function () { return null; });
