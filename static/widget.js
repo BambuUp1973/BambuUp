@@ -8,6 +8,13 @@
   Prima del click non carica niente: solo il bottone. Al primo click apre un
   iframe su /static/chat.html?embed=1&key=...&lang=...; i click successivi
   aprono/chiudono; la X dentro la chat manda {type:"kano-chat-close"}.
+  Il chat_id lo custodisce QUESTA pagina (dal 22/09/2026): il localStorage
+  dell'iframe e' storage di terza parte, che Safari iOS partiziona e cancella
+  alla chiusura delle schede, e la conversazione andava persa fra una visita e
+  l'altra. Qui e' storage di prima parte del negozio: si legge kano_chat_id,
+  se c'e' si passa all'iframe come &chat=<id>; se non c'e' la chat ne crea uno
+  e lo rimanda con postMessage {type:"kano-chat-id", id}, che viene salvato.
+  Se anche questo localStorage e' bloccato si va avanti lo stesso.
 */
 (function () {
   if (window.__kanoChatWidget) return;
@@ -29,6 +36,14 @@
   }
   var base;
   try { base = new URL(script.src, location.href).origin; } catch (e) { return; }
+
+  var CHIAVE_ID = "kano_chat_id";
+  var ID_VALIDO = /^[A-Za-z0-9._:-]{4,120}$/;     // lo stesso filtro di chat.html
+  function leggiId() {
+    try { var v = localStorage.getItem(CHIAVE_ID); return (v && ID_VALIDO.test(v)) ? v : null; }
+    catch (e) { return null; }
+  }
+  function salvaId(v) { try { localStorage.setItem(CHIAVE_ID, v); } catch (e) {} }
 
   var Z = 2147483000;
   var apertaChat = false;
@@ -69,7 +84,9 @@
     iframe = document.createElement("iframe");
     iframe.title = lang === "it" ? "Chat Kano Kimonos" : "Kano Kimonos chat";
     iframe.setAttribute("allow", "clipboard-write");
-    iframe.src = base + "/static/chat.html?embed=1&key=" + encodeURIComponent(key) + "&lang=" + encodeURIComponent(lang);
+    var chatId = leggiId();
+    iframe.src = base + "/static/chat.html?embed=1&key=" + encodeURIComponent(key) + "&lang=" + encodeURIComponent(lang) +
+      (chatId ? "&chat=" + encodeURIComponent(chatId) : "");
     document.body.appendChild(iframe);
     window.addEventListener("resize", posiziona);
   }
@@ -87,7 +104,9 @@
 
   window.addEventListener("message", function (ev) {
     if (ev.origin !== base) return;
-    if (ev.data && ev.data.type === "kano-chat-close") mostra(false);
+    if (!ev.data) return;
+    if (ev.data.type === "kano-chat-close") mostra(false);
+    if (ev.data.type === "kano-chat-id" && typeof ev.data.id === "string" && ID_VALIDO.test(ev.data.id)) salvaId(ev.data.id);
   });
   window.addEventListener("resize", function () {
     if (!apertaChat) return;

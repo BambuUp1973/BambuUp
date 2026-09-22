@@ -12,7 +12,11 @@
   iframe con ?embed=1&key=<chiave>&lang=it|en la chiave e la lingua arrivano
   dall'indirizzo, la base e' l'origine della pagina stessa (il bot), e in alto
   compare una X che chiede al genitore di chiudere (postMessage
-  {type:"kano-chat-close"}). Tutto il resto e' identico.
+  {type:"kano-chat-close"}). Dal 22/09/2026 il chat_id lo custodisce la
+  pagina del negozio (widget.js): se arriva ?chat=<id> si usa quello e non se
+  ne genera un altro; se manca, l'id (nuovo o dalla copia locale) si rimanda al
+  genitore con postMessage {type:"kano-chat-id", id}. Il localStorage
+  dell'iframe resta come seconda copia. Tutto il resto e' identico.
 -->
 <html lang="it">
 <head>
@@ -131,12 +135,21 @@
   // collaudo): viene salvata e da li' in poi vale come le altre.
   var daUrl = null;
   try { daUrl = new URLSearchParams(location.search).get("chat"); } catch (e) {}
-  if (daUrl && /^[A-Za-z0-9._:-]{4,120}$/.test(daUrl)) scrivi("kano_chat_id", daUrl);
-  var chatId = leggi("kano_chat_id");
+  if (daUrl && !/^[A-Za-z0-9._:-]{4,120}$/.test(daUrl)) daUrl = null;
+  if (daUrl) scrivi("kano_chat_id", daUrl);
+  var chatId = daUrl || leggi("kano_chat_id");
   if (!chatId) {
     var r = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
     chatId = "WEB-" + r;
     scrivi("kano_chat_id", chatId);
+  }
+  if (INCORPORATA && !daUrl && window.parent && window.parent !== window) {
+    // Il genitore non lo conosceva: glielo si consegna perche' lo custodisca
+    // lui (storage di prima parte) e lo rimandi come ?chat= alla prossima
+    // apertura. Destinatario: l'origine che ci ha incorporato, se nota.
+    var genitore = "*";
+    try { genitore = new URL(document.referrer).origin; } catch (e) {}
+    window.parent.postMessage({ type: "kano-chat-id", id: chatId }, genitore);
   }
   var lingua = leggi("kano_chat_lingua") || ((navigator.language || "it").toLowerCase().indexOf("it") === 0 ? "it" : "en");
   if (INCORPORATA) {
