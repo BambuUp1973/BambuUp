@@ -4,7 +4,12 @@
     <script src="https://<host-del-bot>/static/widget.js" data-key="<chiave>" data-lang="it" defer></script>
   - data-key: chiave client del widget (ruolo retail, pubblica per natura).
   - data-lang: "it" o "en"; se manca si legge <html lang>.
+  - data-bottom: distanza in px del bottone dal fondo (default 16), per i temi
+    che hanno una barra fissa in basso (Dawn: carrello/annuncio).
   - base: l'origine da cui e' stato caricato questo file (il bot).
+  Sul telefono (sotto 640px) l'iframe copre lo schermo VISIBILE: inset:0 e
+  100dvh (100vh di riserva), non 100%, perche' su iOS 100% di un elemento
+  fisso e' l'altezza con la barra di Safari nascosta e il fondo usciva.
   Prima del click non carica niente: solo il bottone. Al primo click apre un
   iframe su /static/chat.html?embed=1&key=...&lang=...; i click successivi
   aprono/chiudono; la X dentro la chat manda {type:"kano-chat-close"}.
@@ -36,6 +41,8 @@
   }
   var base;
   try { base = new URL(script.src, location.href).origin; } catch (e) { return; }
+  var distanzaFondo = parseInt(script.getAttribute("data-bottom"), 10);
+  if (!(distanzaFondo >= 0 && distanzaFondo <= 400)) distanzaFondo = 16;
 
   var CHIAVE_ID = "kano_chat_id";
   var ID_VALIDO = /^[A-Za-z0-9._:-]{4,120}$/;     // lo stesso filtro di chat.html
@@ -54,7 +61,8 @@
   bottone.setAttribute("aria-label", "Chat");
   bottone.setAttribute("aria-expanded", "false");
   bottone.style.cssText = [
-    "position:fixed", "right:20px", "bottom:20px", "width:56px", "height:56px",
+    "position:fixed", "right:max(16px, env(safe-area-inset-right, 0px))",
+    "bottom:calc(" + distanzaFondo + "px + env(safe-area-inset-bottom, 0px))", "width:56px", "height:56px",
     "border-radius:50%", "border:0", "background:#111", "color:#fff", "cursor:pointer",
     "box-shadow:0 4px 14px rgba(0,0,0,.28)", "display:flex", "align-items:center",
     "justify-content:center", "padding:0", "margin:0", "z-index:" + Z, "outline-offset:3px"
@@ -71,10 +79,11 @@
   function posiziona() {
     if (!iframe) return;
     if (stretto()) {
-      iframe.style.cssText = "position:fixed;left:0;top:0;width:100%;height:100%;border:0;border-radius:0;" +
+      iframe.style.cssText = "position:fixed;inset:0;width:100%;height:100vh;height:100dvh;max-width:100vw;border:0;border-radius:0;" +
         "box-shadow:none;background:#f6f6f4;z-index:" + (Z + 1) + ";";
     } else {
-      iframe.style.cssText = "position:fixed;right:20px;bottom:88px;width:380px;height:600px;max-height:calc(100vh - 108px);" +
+      iframe.style.cssText = "position:fixed;right:20px;bottom:" + (distanzaFondo + 72) + "px;width:380px;height:600px;" +
+        "max-height:calc(100vh - " + (distanzaFondo + 92) + "px);max-height:calc(100dvh - " + (distanzaFondo + 92) + "px);" +
         "border:0;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.3);background:#f6f6f4;z-index:" + (Z + 1) + ";";
     }
     iframe.style.display = apertaChat ? "block" : "none";

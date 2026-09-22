@@ -21,7 +21,7 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Chat Kano Kimonos</title>
   <style>
     :root {
@@ -29,18 +29,26 @@
       --cliente: #e3efff; --bot: #f0f0ee; --operatore: #fff4d6; --operatore-bordo: #e0a800;
       --azione: #2b5fb3;
     }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, "Segoe UI", Arial, sans-serif; background: var(--sfondo); color: var(--testo); }
-    .kano-chat { max-width: 720px; margin: 0 auto; padding: 12px 16px 16px; display: flex; flex-direction: column; min-height: 100vh; }
-    .avviso { position: sticky; top: 0; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px;
-              padding: 10px 12px; font-size: 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; z-index: 2; }
-    .avviso .lingua { display: flex; gap: 4px; }
+    * { box-sizing: border-box; min-width: 0; }
+    /* iOS (22/09/2026): la pagina e' una colonna alta quanto lo schermo VISIBILE
+       (100dvh, con 100vh di riserva), il body non scorre, scorre solo la lista
+       dei messaggi; barra di scrittura e X restano cosi' sempre in vista, anche
+       con la tastiera aperta. Niente piu' largo dello schermo (overflow-x). */
+    html, body { height: 100%; overflow: hidden; }
+    body { margin: 0; font-family: system-ui, "Segoe UI", Arial, sans-serif; background: var(--sfondo); color: var(--testo); overflow-x: hidden; }
+    .kano-chat { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden;
+                 height: 100vh; height: 100dvh;
+                 padding: calc(8px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
+                          calc(8px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px)); }
+    .avviso { flex: 0 0 auto; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px;
+              padding: 8px 8px 8px 12px; font-size: 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .avviso .lingua { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
     .avviso .lingua button { font-size: 12px; padding: 4px 8px; border: 1px solid var(--bordo); background: var(--carta); border-radius: 6px; cursor: pointer; color: var(--grigio); }
     .avviso .lingua button.attiva { background: var(--testo); color: #fff; border-color: var(--testo); }
-    .stato { font-size: 13px; color: var(--grigio); margin: 8px 2px 0; min-height: 18px; }
-    .storico { flex: 1; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px; padding: 12px; margin-top: 8px;
-               overflow-y: auto; max-height: 62vh; min-height: 300px; }
-    .m { margin: 8px 0; padding: 9px 11px; border-radius: 8px; white-space: pre-wrap; line-height: 1.45; max-width: 88%; font-size: 15px; }
+    .stato { flex: 0 0 auto; font-size: 13px; color: var(--grigio); margin: 6px 2px 0; min-height: 18px; }
+    .storico { flex: 1 1 auto; min-height: 0; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px; padding: 12px; margin-top: 8px;
+               overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+    .m { margin: 8px 0; padding: 9px 11px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; max-width: 88%; font-size: 15px; }
     .m .chi { font-size: 11px; color: var(--grigio); margin-bottom: 3px; letter-spacing: .02em; }
     .cliente { background: var(--cliente); margin-left: auto; }
     .cliente.in-attesa { opacity: .6; }
@@ -51,18 +59,19 @@
     .operatore.nuovo { animation: lampeggia 1.2s ease-in-out 3; }
     @keyframes lampeggia { 50% { background: #ffe9a8; } }
     .puntini { color: var(--grigio); }
-    form { display: flex; gap: 8px; margin-top: 10px; }
-    input[type=text] { flex: 1; padding: 11px; font-size: 15px; border: 1px solid #bbb; border-radius: 6px; }
-    button.invia { padding: 11px 18px; font-size: 15px; border: 0; border-radius: 6px; background: var(--azione); color: #fff; cursor: pointer; }
+    form { flex: 0 0 auto; display: flex; gap: 8px; margin-top: 8px; }
+    /* 16px nel campo: sotto quella misura Safari iOS ingrandisce la pagina al fuoco. */
+    input[type=text] { flex: 1; min-width: 0; padding: 11px; font-size: 16px; border: 1px solid #bbb; border-radius: 6px; }
+    button.invia { padding: 11px 18px; font-size: 16px; border: 0; border-radius: 6px; background: var(--azione); color: #fff; cursor: pointer; flex: 0 0 auto; }
     button.invia:disabled { background: #999; }
-    button.operatore-btn { margin-top: 8px; padding: 10px 14px; font-size: 14px; border: 1px solid var(--operatore-bordo); background: var(--operatore);
+    button.operatore-btn { flex: 0 0 auto; margin-top: 8px; padding: 10px 14px; font-size: 14px; border: 1px solid var(--operatore-bordo); background: var(--operatore);
                            color: #5a4300; border-radius: 6px; cursor: pointer; align-self: flex-start; }
     button.operatore-btn:disabled { opacity: .55; cursor: default; }
-    .chiudi { display: none; width: 32px; height: 32px; border: 0; border-radius: 16px; background: transparent;
-              color: var(--grigio); font-size: 22px; line-height: 32px; cursor: pointer; padding: 0; flex: 0 0 auto; }
-    .chiudi:hover { background: var(--bot); color: var(--testo); }
+    /* 44x44: la misura minima toccabile con il dito. */
+    .chiudi { display: none; width: 44px; height: 44px; border: 0; border-radius: 22px; background: transparent;
+              color: var(--testo); font-size: 28px; line-height: 44px; cursor: pointer; padding: 0; flex: 0 0 auto; }
+    .chiudi:hover { background: var(--bot); }
     body.incorporata .chiudi { display: inline-block; }
-    body.incorporata .kano-chat { min-height: 100vh; padding-top: 8px; }
   </style>
 </head>
 <body>
