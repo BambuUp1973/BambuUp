@@ -128,6 +128,8 @@
   var T = {
     it: {
       fissa: "Assistente automatico di Kano Kimonos. Per parlare con una persona usa il bottone qui sotto.",
+      benvenuto: "Ciao, sono Adelpina, il risponditore AI di Kano Kimonos. {saluto}, come posso aiutarti?",
+      mattina: "Buongiorno", sera: "Buonasera",
       scrivi: "Scrivi qui il tuo messaggio",
       invia: "Invia",
       operatore: "Parla con un operatore",
@@ -139,6 +141,8 @@
     },
     en: {
       fissa: "Kano Kimonos automated assistant. To talk to a person use the button below.",
+      benvenuto: "Hi, I'm Adelpina, Kano Kimonos' AI assistant. {saluto}, how can I help you?",
+      mattina: "Good morning", sera: "Good evening",
       scrivi: "Type your message here",
       invia: "Send",
       operatore: "Talk to an operator",
@@ -185,11 +189,23 @@
   var invia = document.getElementById("invia");
   var opBtn = document.getElementById("operatoreBtn");
   var ultimoId = 0;
+  var lettoIlServer = false;
   var aperta = false;
   var timer = null;
   var titoloBase = document.title;
 
   function t(k) { return T[lingua][k]; }
+
+  // Benvenuto: bolla SOLO visiva (non sta nel server, non va al bot) che
+  // compare a chat vuota e sparisce appena c'e' un messaggio vero. Il saluto
+  // segue l'ora del telefono del cliente: fino alle 17 e' ancora giorno.
+  function mostraBenvenuto() {
+    var vecchia = storico.querySelector(".benvenuto");
+    if (vecchia) vecchia.remove();
+    if (!lettoIlServer || ultimoId > 0 || storico.querySelector(".m")) return;
+    var saluto = (new Date().getHours() < 17) ? t("mattina") : t("sera");
+    bolla("bot", t("benvenuto").replace("{saluto}", saluto), "benvenuto");
+  }
 
   function mostraCodice() {
     var e = document.getElementById("codiceChat");
@@ -200,6 +216,7 @@
     document.documentElement.lang = lingua;
     document.getElementById("rigaFissa").textContent = t("fissa");
     mostraCodice();
+    mostraBenvenuto();
     testo.placeholder = t("scrivi");
     invia.textContent = t("invia");
     opBtn.textContent = t("operatore");
@@ -273,9 +290,11 @@
         if (!d) return null;
         var pendenti = storico.querySelectorAll(".in-attesa");
         for (var i = 0; i < pendenti.length; i++) pendenti[i].remove();
+        lettoIlServer = true;
         mostraMessaggi(d.messaggi || [], evidenzia !== false);
         aggiornaStato(d.richiesta_aperta);
         mostraCodice();
+        mostraBenvenuto();
         return d;
       })
       .catch(function () { return null; });
@@ -287,6 +306,8 @@
     if (!msg) return;
     testo.value = "";
     invia.disabled = true;
+    var benvenuto = storico.querySelector(".benvenuto");
+    if (benvenuto) benvenuto.remove();
     var mia = bolla("cliente", msg, "in-attesa");
     var puntini = bolla("bot", "…", "puntini");
     fetch(BASE + "/chat", {
