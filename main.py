@@ -7385,8 +7385,6 @@ RICHIESTE_TESTI = {
     ),
     ("conferma_no", "it"): "Va bene, dimmi pure.",
     ("conferma_no", "en"): "All right, go ahead.",
-    ("inoltrato", "it"): "Inoltrato all'operatore.",
-    ("inoltrato", "en"): "Forwarded to the operator.",
     ("chiusura", "it"): "L'operatore ha chiuso la conversazione. Se hai altre domande sono qui.",
     ("chiusura", "en"): "The operator has closed the conversation. If you have any other questions, I'm here.",
     ("limite", "it"): (
@@ -7787,7 +7785,10 @@ def tool_salva_email_richiesta(email, user_message, contesto: dict) -> dict:
 # Tutto deterministico, solo profilo retail, PRIMA del modello:
 #  1. richiesta 'aperta' o 'risposta' per la chat -> il messaggio va
 #     all'operatore (contesto aggiornato, stato di nuovo 'aperta', avviso
-#     email al massimo ogni 10 minuti) e il cliente legge "Inoltrato".
+#     email al massimo ogni 10 minuti) e il bot TACE: nessuna risposta,
+#     nessun messaggio salvato (fase 2, 22/09/2026). /chat torna reply
+#     vuota e stato_conversazione 'operatore'; il widget mostra una riga di
+#     stato, non una bolla.
 #  2. la chat e' in 'conferma_operatore' -> si' apre, no lascia, altro
 #     prosegue con Adelpina.
 #  3. il messaggio chiede una persona -> testo di conferma, chat in
@@ -7864,8 +7865,9 @@ def _metti_in_conferma(chat_id: str, lingua: str, messaggio: str) -> str:
 
 def _rete_operatore(chat_id: str, messaggio: str, ip_hash, lingua_hint) -> dict:
     """La catena 1-2-3 del commento sopra. Torna None se il turno va al
-    modello, altrimenti {'testo', 'rete', 'richiesta_id'} gia' pronto per il
-    cliente. Il messaggio del cliente e' GIA' in messages."""
+    modello, altrimenti {'testo', 'rete', 'richiesta_id'}: 'testo' None
+    significa che il bot tace (conversazione con l'operatore in corso). Il
+    messaggio del cliente e' GIA' in messages."""
     lingua = _lingua_fissa(lingua_hint, messaggio)
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -7894,8 +7896,8 @@ def _rete_operatore(chat_id: str, messaggio: str, ip_hash, lingua_hint) -> dict:
                 target=_notifica_staff_richiesta,
                 args=(rid, AVVISO_STAFF_OGNI_MINUTI, f"[Staff] Nuovo messaggio del cliente - richiesta {rid}"),
                 daemon=True).start()
-            return {"testo": _testo_richiesta("inoltrato", lingua), "rete": "inoltrato",
-                    "richiesta_id": rid}
+            # Testo None = il bot non dice niente: parla solo l'operatore.
+            return {"testo": None, "rete": "operatore", "richiesta_id": rid}
         # 2. conferma in attesa
         cur.execute(
             "SELECT lingua, domanda, scade_il < NOW() FROM chat_stato "
@@ -8630,6 +8632,13 @@ def chat(request: ChatRequest, http_request: Request,
             # testo fisso entra in messages come risposta del bot, senza token.
             _chiusura_automatica(request.chat_id)
             fissa = _rete_operatore(request.chat_id, request.message, ip_hash, lingua_hint)
+            if fissa and fissa["testo"] is None:
+                # Conversazione con l'operatore: il messaggio e' gia' salvato e
+                # in coda alla richiesta, il bot non aggiunge niente.
+                return {"reply": "", "chat_id": request.chat_id, "status": "saved",
+                        "stop_reason": None, "rete": fissa["rete"],
+                        "richiesta_id": fissa.get("richiesta_id"),
+                        "stato_conversazione": "operatore"}
             if fissa:
                 conn = psycopg2.connect(DATABASE_URL)
                 cur = conn.cursor()

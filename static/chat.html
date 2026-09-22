@@ -56,7 +56,9 @@
     .avviso .lingua { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
     .avviso .lingua button { font-size: 12px; padding: 4px 8px; border: 1px solid var(--bordo); background: var(--carta); border-radius: 6px; cursor: pointer; color: var(--grigio); }
     .avviso .lingua button.attiva { background: var(--testo); color: #fff; border-color: var(--testo); }
-    .stato { flex: 0 0 auto; font-size: 13px; color: var(--grigio); margin: 6px 2px 0; min-height: 18px; }
+    /* Riga di stato sotto l'avviso: piccola e grigia, dice solo se la
+       conversazione e' in mano all'operatore. */
+    .stato { flex: 0 0 auto; font-size: 12px; color: var(--grigio); margin: 6px 2px 0; min-height: 16px; }
     .storico { flex: 1 1 auto; min-height: 0; background: var(--carta); border: 1px solid var(--bordo); border-radius: 8px; padding: 12px; margin-top: 8px;
                overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
     .m { margin: 8px 0; padding: 9px 11px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; max-width: 88%; font-size: 15px; }
@@ -92,8 +94,8 @@
         <button type="button" id="chiudi" class="chiudi" aria-label="Chiudi">&times;</button>
       </span>
     </div>
-    <div id="storico" class="storico" aria-live="polite"></div>
     <div id="stato" class="stato"></div>
+    <div id="storico" class="storico" aria-live="polite"></div>
     <form id="modulo">
       <input id="testo" type="text" autocomplete="off" />
       <button id="invia" class="invia" type="submit"></button>
@@ -133,7 +135,7 @@
       scrivi: "Scrivi qui il tuo messaggio",
       invia: "Invia",
       tu: "Tu", bot: "Assistente", op: "Operatore Kano",
-      attesa: "Un operatore ti risponderà qui in chat: puoi chiudere e tornare più tardi, la conversazione resta.",
+      attesa: "In conversazione con l'operatore",
       nuovo: "Nuovo messaggio dell'operatore",
       errore_rete: "Non riesco a collegarmi in questo momento: riprova fra poco.",
       nessuna_risposta: "Non ho ricevuto una risposta: riprova fra poco."
@@ -145,7 +147,7 @@
       scrivi: "Type your message here",
       invia: "Send",
       tu: "You", bot: "Assistant", op: "Kano operator",
-      attesa: "An operator will reply here in the chat: you can close this and come back later, the conversation stays.",
+      attesa: "In conversation with the operator",
       nuovo: "New message from the operator",
       errore_rete: "I can't connect right now: please try again in a moment.",
       nessuna_risposta: "I didn't get a reply: please try again in a moment."
@@ -271,7 +273,9 @@
   }
 
   // 'aperta' = conversazione con l'operatore in corso (richiesta aperta O
-  // risposta, lo decide il server): si legge ogni 15 s finche' non e' chiusa.
+  // risposta, lo decide il server): si legge ogni 15 s finche' non e' chiusa,
+  // e sotto l'avviso resta la riga "In conversazione con l'operatore". Finche'
+  // dura, il bot non scrive: le bolle sono solo del cliente e dell'operatore.
   function aggiornaStato(nuovaAperta) {
     aperta = !!nuovaAperta;
     stato.textContent = aperta ? t("attesa") : "";
@@ -314,6 +318,12 @@
       return r.json().then(function (d) { return { ok: r.ok, d: d }; });
     }).then(function (x) {
       puntini.remove();
+      if (x.ok && x.d && x.d.stato_conversazione === "operatore") {
+        // Il bot tace: niente bolla, solo la riga di stato, e la cronologia
+        // si ricarica dal server (il messaggio del cliente e' gia' li').
+        aggiornaStato(true);
+        return sincronizza(false);
+      }
       if (x.ok && x.d && x.d.status === "saved") {
         return sincronizza(true);
       }
