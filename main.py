@@ -256,6 +256,9 @@ WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 # lettura del messaggio e regex delle taglie stanno in taglie.py.
 from taglie import (taglia_consigliata, estrai_misure, decidi_taglia, TAGLIA_RE,
                     TESTO_DATI_MANCANTI)
+# Ultima rete prima del cliente finale: coordinate bancarie, nomi delle persone
+# e sistemi interni non escono, qualunque cosa abbia scritto il modello.
+from blocco_uscita import blocco_uscita_retail
 
 
 class ChatRequest(BaseModel):
@@ -7480,6 +7483,44 @@ def _rete_email(risposta: str, role: str, contesto: dict, messaggio_cliente: str
     return esito["testo_da_riferire"]
 
 
+def _messaggi_cliente_chat(chat_id: str, limite: int = 50):
+    """Funzione pigra: legge i messaggi scritti DAL CLIENTE in questa chat solo
+    se la rete di uscita ne ha bisogno (cioe' solo quando trova un nome)."""
+    def leggi():
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT content FROM messages WHERE chat_id = %s AND role = 'user' "
+                "ORDER BY id DESC LIMIT %s", (chat_id, limite))
+            righe = [r[0] for r in cur.fetchall()]
+            cur.close()
+            conn.close()
+            return righe
+        except Exception as e:
+            # Nel dubbio si blocca: meglio una risposta in meno che un nome in piu'.
+            print(f"[BLOCCO] messaggi del cliente non letti chat={chat_id}: {type(e).__name__}")
+            return []
+    return leggi
+
+
+def _uscita_retail(testo, role, chat_id):
+    """L'ULTIMO passaggio di ogni testo diretto a un cliente finale. Fuori dal
+    profilo retail non fa niente; non passa di qui quello che scrive
+    l'operatore umano (arriva da /richieste/{id}/rispondi)."""
+    if _normalize_role(role) != "retail" or not testo:
+        return testo
+    esito = blocco_uscita_retail(testo, _messaggi_cliente_chat(chat_id))
+    if esito["bloccato"]:
+        _registra_strumento(chat_id, role, "blocco_uscita",
+                            {"categoria": esito["categoria"], "termine": esito["termine"],
+                             "testo_originale": esito["originale"][:1000]},
+                            esito["categoria"], len(esito["testo"]), 0)
+        print(f"[BLOCCO] uscita retail chat={chat_id} categoria={esito['categoria']} "
+              f"termine={esito['termine']!r} scartata={esito['originale'][:160]!r}")
+    return esito["testo"]
+
+
 def tool_taglia_consigliata(tool_input: dict, user_message: str, contesto: dict) -> dict:
     """La taglia dalla guida, calcolata da taglie.py: il testo per il cliente
     e' fisso (contesto['testo_fisso']) e vince sul modello, anche quando
@@ -8041,6 +8082,7 @@ def richieste_apri(body: RichiestaApriRequest, http_request: Request):
     lingua = body.lingua if body.lingua in ("it", "en") else "it"
     ip_hash = _impronta_ip(ip_del_chiamante(http_request))
     out = apri_richiesta_operatore(body.chat_id, tipo, lingua, ip_hash)
+    out["testo_da_riferire"] = _uscita_retail(out["testo_da_riferire"], "retail", body.chat_id)
     if out["esito"] == "aperta":
         # Il testo detto al cliente entra nella sua chat come messaggio del
         # bot: cosi' ricaricando il widget la storia e' completa (lotto 2).
@@ -8602,6 +8644,7 @@ def chat(request: ChatRequest, http_request: Request,
         if blocco:
             print(f"[LIMITE] rifiutata profilo={role} ip_impronta={_impronta_ip(ip)} "
                   f"stato={stato_limite_clienti()}")
+            blocco = _uscita_retail(blocco, role, request.chat_id)
             return JSONResponse(
                 status_code=429,
                 content={"detail": blocco, "reply": blocco, "status": "limite"},
@@ -8640,6 +8683,7 @@ def chat(request: ChatRequest, http_request: Request,
                         "richiesta_id": fissa.get("richiesta_id"),
                         "stato_conversazione": "operatore"}
             if fissa:
+                fissa["testo"] = _uscita_retail(fissa["testo"], role, request.chat_id)
                 conn = psycopg2.connect(DATABASE_URL)
                 cur = conn.cursor()
                 _messaggio_in_chat(cur, request.chat_id, fissa["testo"], False, request.source)
@@ -8654,6 +8698,7 @@ def chat(request: ChatRequest, http_request: Request,
             # volta sola tutto quello che manca. Il peso non si deduce mai.
             t = decidi_taglia(request.message, _lingua_fissa(lingua_hint, request.message))
             if t:
+                t["testo"] = _uscita_retail(t["testo"], role, request.chat_id)
                 _registra_strumento(request.chat_id, role, t["rete"],
                                     {"misure": t["misure"]}, t["esito"], len(t["testo"]), 0)
                 print(f"[TAGLIE] {t['rete']} chat={request.chat_id} esito={t['esito']} "
@@ -8690,6 +8735,9 @@ def chat(request: ChatRequest, http_request: Request,
         bot_reply = _rete_email(bot_reply, role, contesto, request.message)
         # E per le taglie: una taglia detta senza lo strumento non passa.
         bot_reply = _rete_taglie(bot_reply, role, contesto, request.message)
+        # ULTIMA rete: quello che non deve uscire non esce, e quello che esce
+        # e' esattamente quello che viene anche salvato in chat.
+        bot_reply = _uscita_retail(bot_reply, role, request.chat_id)
 
         conn = psycopg2.connect(DATABASE_URL)
         cur = conn.cursor()
