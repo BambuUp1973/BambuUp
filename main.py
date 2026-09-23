@@ -1245,15 +1245,53 @@ def _sezioni_somiglianti(a: dict, b: dict) -> bool:
     return inter / union >= 0.6
 
 
-def get_knowledge_context(query: str, max_matches: int = 20) -> str:
+# Sezioni del manuale che il cliente finale non deve ricevere: i termini delle
+# palestre (2,00 a capo, coupon, ripristino) e gli indirizzi interni. Si
+# riconoscono dal titolo, che nel docx comincia proprio cosi'.
+SEZIONI_ESCLUSE_RETAIL = ("TERMINI B2B", "USO INTERNO")
+_INDICI_FILTRATI = {}
+
+
+def sezioni_escluse(role) -> tuple:
+    """Prefissi di titolo da togliere dal manuale per questo profilo. Staff e
+    b2b ricevono tutto, come prima."""
+    return SEZIONI_ESCLUSE_RETAIL if _normalize_role(role) == "retail" else ()
+
+
+def _indice_senza(indice: dict, prefissi: tuple) -> dict:
+    """Lo stesso indice senza le sezioni i cui titoli cominciano con i
+    prefissi, e senza le loro righe nel retrieval sparso: altrimenti le cifre
+    delle sezioni tolte rientrerebbero dall'appendice. In cache finche' il
+    manuale non cambia."""
+    if not prefissi or not indice:
+        return indice
+    chiave = (indice.get("firma"), prefissi)
+    if chiave in _INDICI_FILTRATI:
+        return _INDICI_FILTRATI[chiave]
+    via = [s for s in indice["sezioni"] if s["titolo"].startswith(prefissi)]
+    righe_via = {r for s in via for r in s["righe"]}
+    tenute = [i for i, r in enumerate(indice["righe"]) if r not in righe_via]
+    filtrato = {
+        "firma": indice.get("firma"),
+        "righe": [indice["righe"][i] for i in tenute],
+        "stems": [indice["stems"][i] for i in tenute],
+        "sezioni": [s for s in indice["sezioni"] if s not in via],
+    }
+    _INDICI_FILTRATI.clear()
+    _INDICI_FILTRATI[chiave] = filtrato
+    return filtrato
+
+
+def get_knowledge_context(query: str, max_matches: int = 20, escludi: tuple = ()) -> str:
     """Consegna del manuale al modello (lotto B): 1-2 sezioni INTERE col loro
     titolo + appendice con le righe del retrieval per-riga non gia' comprese.
     L'appendice e' la rete di sicurezza PER COSTRUZIONE: senza, la misura dava
     7 regressioni su 26 (una sezione sbagliata puo' vincere con punteggio
     alto); con l'appendice tutto cio' che il vecchio retrieval consegnava
     continua ad arrivare. Sotto SOGLIA_SEZIONI restano solo le righe. Ogni
-    troncamento e' dichiarato al modello, mai silenzioso."""
-    indice = _carica_indice()
+    troncamento e' dichiarato al modello, mai silenzioso. 'escludi': prefissi
+    di titolo delle sezioni da non consegnare (vedi sezioni_escluse)."""
+    indice = _indice_senza(_carica_indice(), escludi)
     if not indice:
         return ""
     righe20 = _cerca_righe(indice, query, max_matches)
@@ -3232,9 +3270,9 @@ def tool_rispondi_dal_manuale(argomento: str = None, user_message: str = "",
     if _is_size_query(f"{argomento or ''} {user_message or ''}"):
         guide = get_size_guide_block()
         if guide:
-            extra = get_knowledge_context(query)
+            extra = get_knowledge_context(query, escludi=sezioni_escluse(role))
             return _consegna(guide + (("\n\n" + extra) if extra else ""))
-    context = get_knowledge_context(query)
+    context = get_knowledge_context(query, escludi=sezioni_escluse(role))
     if not context:
         return ("NESSUN_CONTENUTO: il manuale non contiene informazioni su questo argomento."
                 + _NOTA_RETAIL_DATO_MANCANTE(role))
@@ -8952,15 +8990,18 @@ def import_knowledge():
 
 
 @app.get("/search-knowledge", dependencies=SOLO_ADMIN)
-def search_knowledge(q: str, limit: int = 10, consegna: int = 0):
+def search_knowledge(q: str, limit: int = 10, consegna: int = 0, profilo: str = None):
     """Sonda di verifica del retrieval: CHIAMA la stessa cerca_righe_manuale
     del bot (prima aveva l'algoritmo ricopiato dentro, e le due copie erano
     gia' divergenti: taglio a 10 contro 20). Il taglio e' un parametro.
     Con consegna=1 restituisce la CONSEGNA COMPLETA di get_knowledge_context
-    (sezioni + appendice), cioe' esattamente cio' che il modello riceve."""
+    (sezioni + appendice), cioe' esattamente cio' che il modello riceve.
+    Con profilo=retail la consegna e' quella del cliente finale (senza le
+    sezioni di SEZIONI_ESCLUSE_RETAIL); senza profilo, quella dello staff."""
     try:
         if consegna:
-            return {"query": q, "consegna": get_knowledge_context(q)}
+            return {"query": q, "profilo": profilo or "staff",
+                    "consegna": get_knowledge_context(q, escludi=sezioni_escluse(profilo))}
         righe = cerca_righe_manuale(q, max_matches=max(1, min(limit, 50)))
         if not righe and _INDICE_MANUALE["firma"] is None:
             return {"result": "no knowledge"}
