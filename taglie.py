@@ -400,7 +400,8 @@ _CHIEDE_TAGLIA_RE = re.compile(
 )
 _ALTRA_DOMANDA_RE = re.compile(
     r"\bcambi|\bres[oi]\b|\brimbors|\breturn|\bexchange|\bdisponibil|\bavailab"
-    r"|\bin stock\b|\bcost[aoi]\b|\bprezz|\bpric|\bspedi|\bship",
+    r"|\bin stock\b|\bcost[aoi]\b|\bprezz|\bpric|\bspedi|\bship"
+    r"|\bsbagliat|\bwrong\b",
     re.IGNORECASE,
 )
 
