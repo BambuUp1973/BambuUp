@@ -9082,6 +9082,121 @@ def search_knowledge(q: str, limit: int = 10, consegna: int = 0, profilo: str = 
         return {"error": str(e)}
 
 
+# --- PULIZIA DEI DATI DI PROVA (24/09/2026) ----------------------------------
+# Prima del lancio del sito si tolgono dal database le prove: SOLO le chat con
+# chat_id che comincia per "TEST-" (maiuscolo, con il trattino), con tutto cio'
+# che le riguarda: messaggi (compresi quelli dell'operatore), richieste
+# all'operatore (la risposta sta nella stessa riga), righe di strumenti_log e
+# lo stato transitorio in chat_stato. Nient'altro: feedback e manuale non
+# hanno un chat_id e non si toccano.
+# Di default e' SOLO ANTEPRIMA. Cancella solo con conferma=CANCELLA-PROVE, e
+# cancella esattamente le chat elencate dall'anteprima, in una transazione.
+# Il prefisso si controlla con substr(...) = 'TEST-' e non con LIKE: e' esatto
+# sulle maiuscole in Postgres e in SQLite (il test gira su SQLite).
+PULIZIA_PREFISSO = "TEST-"
+PULIZIA_CONFERMA = "CANCELLA-PROVE"
+_PULIZIA_TABELLE = ("messages", "richieste_operatore", "strumenti_log", "chat_stato")
+
+
+def _pulizia_connessione():
+    """(connessione, segnaposto). Il test la sostituisce con SQLite."""
+    return psycopg2.connect(DATABASE_URL), "%s"
+
+
+def _pulizia_candidati(cur, ph):
+    """Gli id delle chat di prova, da tutte le tabelle che hanno un chat_id."""
+    ids = set()
+    for tabella in _PULIZIA_TABELLE:
+        cur.execute(f"SELECT DISTINCT chat_id FROM {tabella} WHERE substr(chat_id, 1, {ph}) = {ph}",
+                    (len(PULIZIA_PREFISSO), PULIZIA_PREFISSO))
+        ids.update(r[0] for r in cur.fetchall() if r[0] is not None)
+    return sorted(ids)
+
+
+def _pulizia_inventario(cur, ph, chat_ids):
+    """Cosa verrebbe cancellato per queste chat, tabella per tabella."""
+    if not chat_ids:
+        return {"chat": 0, "chat_id": [], "messaggi": 0, "messaggi_operatore": 0,
+                "richieste": [], "righe_strumenti_log": 0, "righe_chat_stato": 0}
+    lista = ", ".join([ph] * len(chat_ids))
+    cur.execute(f"SELECT COUNT(*) FROM messages WHERE chat_id IN ({lista})", chat_ids)
+    messaggi = cur.fetchone()[0]
+    cur.execute(f"SELECT COUNT(*) FROM messages WHERE chat_id IN ({lista}) AND sender = {ph}",
+                list(chat_ids) + ["operatore"])
+    messaggi_operatore = cur.fetchone()[0]
+    cur.execute(f"SELECT id, chat_id, stato, tipo, operatore FROM richieste_operatore "
+                f"WHERE chat_id IN ({lista}) ORDER BY id", chat_ids)
+    richieste = [{"id": r[0], "chat_id": r[1], "stato": r[2], "tipo": r[3], "operatore": r[4]}
+                 for r in cur.fetchall()]
+    cur.execute(f"SELECT COUNT(*) FROM strumenti_log WHERE chat_id IN ({lista})", chat_ids)
+    log = cur.fetchone()[0]
+    cur.execute(f"SELECT COUNT(*) FROM chat_stato WHERE chat_id IN ({lista})", chat_ids)
+    stato = cur.fetchone()[0]
+    return {"chat": len(chat_ids), "chat_id": list(chat_ids), "messaggi": messaggi,
+            "messaggi_operatore": messaggi_operatore, "richieste": richieste,
+            "righe_strumenti_log": log, "righe_chat_stato": stato}
+
+
+def _pulizia_da_guardare(cur, ph):
+    """Solo informazione, MAI cancellate: richieste con operatore 'prova...'
+    su chat che NON cominciano per TEST- (una prova fatta su una chat vera o
+    con un altro nome)."""
+    cur.execute(f"SELECT id, chat_id, stato, operatore FROM richieste_operatore "
+                f"WHERE substr(chat_id, 1, {ph}) <> {ph} AND lower(coalesce(operatore, '')) LIKE {ph} "
+                f"ORDER BY id", (len(PULIZIA_PREFISSO), PULIZIA_PREFISSO, "prova%"))
+    return [{"id": r[0], "chat_id": r[1], "stato": r[2], "operatore": r[3]} for r in cur.fetchall()]
+
+
+def pulizia_prove(conferma: str = None, candidati=None) -> dict:
+    """Anteprima (default) o cancellazione delle chat di prova. 'candidati'
+    serve solo ai test, per provare la guardia sul prefisso."""
+    cancella = conferma == PULIZIA_CONFERMA
+    conn, ph = _pulizia_connessione()
+    try:
+        cur = conn.cursor()
+        chat_ids = sorted(candidati) if candidati is not None else _pulizia_candidati(cur, ph)
+        estranee = [c for c in chat_ids if not str(c).startswith(PULIZIA_PREFISSO)]
+        inventario = _pulizia_inventario(cur, ph, chat_ids)
+        esito = {"modalita": "cancellazione" if cancella else "anteprima",
+                 "prefisso": PULIZIA_PREFISSO, **inventario,
+                 "da_guardare_non_cancellate": _pulizia_da_guardare(cur, ph)}
+        if conferma and not cancella:
+            esito["nota"] = f"conferma diversa da {PULIZIA_CONFERMA}: solo anteprima"
+        if estranee:
+            esito["esito"] = "BLOCCATA: fra i candidati ci sono chat che non cominciano per " \
+                             f"{PULIZIA_PREFISSO}; non e' stato cancellato niente"
+            esito["chat_estranee"] = estranee
+            return esito
+        if not cancella or not chat_ids:
+            esito["esito"] = "anteprima: niente cancellato" if not cancella else "niente da cancellare"
+            return esito
+        lista = ", ".join([ph] * len(chat_ids))
+        cancellate = {}
+        for tabella in _PULIZIA_TABELLE:
+            cur.execute(f"DELETE FROM {tabella} WHERE chat_id IN ({lista})", chat_ids)
+            cancellate[tabella] = cur.rowcount
+        conn.commit()
+        esito["esito"] = "cancellato"
+        esito["righe_cancellate"] = cancellate
+        print(f"[PULIZIA] cancellate le chat di prova: {len(chat_ids)} chat, {cancellate}")
+        return esito
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.post("/admin/pulizia-prove", dependencies=SOLO_ADMIN)
+def admin_pulizia_prove(conferma: str = None):
+    """Senza parametri: SOLO anteprima. Con ?conferma=CANCELLA-PROVE cancella
+    le chat TEST- elencate dall'anteprima, e dice cosa ha cancellato."""
+    try:
+        return pulizia_prove(conferma)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"esito": f"errore, niente cancellato: {type(e).__name__}: {e}"})
+
+
 # --- DIAGNOSTICA DEI COLLEGAMENTI ESTERNI ------------------------------------
 # Endpoint di SOLA LETTURA, aggiunto per la migrazione: dice quali canali
 # rispondono davvero e con quale dato vero. Non tocca niente di quello che il
