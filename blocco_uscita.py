@@ -48,6 +48,34 @@ _PAROLE_BANCA_RE = re.compile(
     r"\bcoordinate banc\w*\b|\bbank account details\b",
     re.IGNORECASE,
 )
+# Link di pagamento (24/09/2026: il 16/09 era uscito un link Revolut con commissione).
+# Si guardano solo gli URL, anche senza http ("revolut.me/..."): "carta o PayPal"
+# in una frase resta ammesso. Il dominio del negozio passa sempre, checkout
+# compreso: e' li' che il cliente paga. Un indirizzo email (info@...) non e' un
+# URL: il (?<![@\w.-]) lo esclude.
+_PAROLE_LINK_PAGAMENTO_RE = re.compile(
+    r"\blink di pagamento\b|\bpayment link\b|\bpay by link\b", re.IGNORECASE)
+_URL_RE = re.compile(
+    r"(?<![@\w.-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s<>()\[\]\"']*)?",
+    re.IGNORECASE,
+)
+_NOMI_PAGAMENTO = ("revolut", "paypal", "paypal.me", "stripe", "sumup", "satispay",
+                   "wise.com", "nexi", "checkout.com", "mollie", "klarna")
+_PERCORSI_PAGAMENTO = ("/pay", "/checkout/pay", "/invoice")
+_DOMINIO_NEGOZIO = "kanokimonos.com"
+
+
+def _link_di_pagamento(testo):
+    """Il primo URL di pagamento nel testo, o None."""
+    for m in _URL_RE.finditer(testo):
+        host = m.group(1).lower()
+        percorso = (m.group(2) or "").lower()
+        if host == _DOMINIO_NEGOZIO or host.endswith("." + _DOMINIO_NEGOZIO):
+            continue
+        url = (host + percorso)
+        if any(n in url for n in _NOMI_PAGAMENTO) or any(p in percorso for p in _PERCORSI_PAGAMENTO):
+            return m.group(0).rstrip(".,;:!?")
+    return None
 
 # --- persone -------------------------------------------------------------------
 # Nomi propri: si bloccano, ma NON se e' il cliente stesso ad averli scritti in
@@ -113,10 +141,13 @@ def blocco_uscita_retail(testo, messaggi_cliente=None, lingua=None):
         return esito
 
     # 1. pagamenti
-    for rx in (_PAROLE_BANCA_RE, _IBAN_RE, _BIC_RE):
+    for rx in (_PAROLE_BANCA_RE, _IBAN_RE, _BIC_RE, _PAROLE_LINK_PAGAMENTO_RE):
         m = rx.search(originale)
         if m:
             return blocca("pagamenti", m.group(0))
+    link = _link_di_pagamento(originale)
+    if link:
+        return blocca("pagamenti", link)
     # 2. persone
     m = _COGNOMI_RE.search(originale)
     if m:

@@ -124,6 +124,66 @@ class Piattaforme(unittest.TestCase):
         self.assertEqual(blocco_uscita_retail(testo)["testo"], testo)
 
 
+class LinkPagamento(unittest.TestCase):
+
+    def assertBloccato(self, testo, termine=None):
+        r = blocco_uscita_retail(testo)
+        self.assertEqual((r["bloccato"], r["categoria"]), (True, "pagamenti"), testo)
+        self.assertIn(r["testo"], (TESTO_PAGAMENTI["it"], TESTO_PAGAMENTI["en"]))
+        if termine:
+            self.assertEqual(r["termine"], termine)
+
+    def assertPassa(self, testo):
+        r = blocco_uscita_retail(testo)
+        self.assertFalse(r["bloccato"], f"BLOCCATA per {r['categoria']}/{r['termine']}: {testo}")
+        self.assertEqual(r["testo"], testo)
+
+    def test_revolut_con_commissione(self):
+        # la forma della fuga vera del 16/09
+        self.assertBloccato("Puoi pagare con Revolut a questo link: https://revolut.me/kanokimonos "
+                            "(commissione del 2%).", "https://revolut.me/kanokimonos")
+        self.assertBloccato("Paga qui: checkout.revolut.com/pay/1a2b3c, la commissione è a tuo carico.")
+
+    def test_paypal(self):
+        self.assertBloccato("Puoi pagare su paypal.me/kanokimonos/80.", "paypal.me/kanokimonos/80")
+        self.assertBloccato("Pay here: https://www.paypal.com/invoice/p/#ABC123")
+
+    def test_altri_nomi(self):
+        for url in ("https://buy.stripe.com/abc", "https://pay.sumup.com/b2c/X1", "https://satispay.com/app/x",
+                    "https://wise.com/pay/r/abc", "https://xpay.nexigroup.com/x", "https://checkout.com/x",
+                    "https://www.mollie.com/checkout/x", "https://klarna.com/x", "https://REVOLUT.ME/Kano"):
+            self.assertBloccato(f"Ecco il link: {url}")
+
+    def test_parole(self):
+        self.assertBloccato("Ti mando il link di pagamento appena possibile.", "link di pagamento")
+        self.assertBloccato("I will send you a Payment Link by email.", "Payment Link")
+        self.assertBloccato("We can offer pay by link for this order.")
+
+    def test_percorsi(self):
+        self.assertBloccato("Vai su https://esempio.it/pay per completare.")
+        self.assertBloccato("Vai su https://esempio.it/checkout/pay/123.")
+        self.assertBloccato("La fattura è su https://esempio.it/invoice/77.")
+
+    def test_negozio_e_testi_ammessi_passano(self):
+        for testo in (
+            "Puoi pagare dal checkout del sito.",
+            "Trovi il kimono su https://kanokimonos.com/products/kimono-a2.",
+            "Completa l'ordine su https://www.kanokimonos.com/checkouts/cn/abc/pay.",
+            "Per esigenze particolari scrivi a info@kanokimonos.com.",
+            "Il costo della spedizione in Italia è di 5,90 euro, con consegna in 2-3 giorni lavorativi.",
+            "Shipping to Germany usually takes 3-5 business days. Write to info@kanokimonos.com for details.",
+            "Si paga completando l'ordine su kanokimonos.com con carta o PayPal.",
+            TESTO_PAGAMENTI["it"], TESTO_PAGAMENTI["en"],
+        ):
+            self.assertPassa(testo)
+
+    def test_testo_fisso_nella_lingua(self):
+        r = blocco_uscita_retail("You can pay with this link: https://paypal.me/kano/50")
+        self.assertEqual(r["testo"], TESTO_PAGAMENTI["en"])
+        r = blocco_uscita_retail("Puoi pagare con questo link: https://paypal.me/kano/50")
+        self.assertEqual(r["testo"], TESTO_PAGAMENTI["it"])
+
+
 class RisposteNormali(unittest.TestCase):
     """Il grosso del lavoro: non rompere niente."""
 
