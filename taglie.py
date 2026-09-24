@@ -240,11 +240,20 @@ def _misura(lingua, altezza, peso, eta):
 
 def _base_di_variante_L(taglie):
     """'A2' se le due taglie sono A2 e A2L (stessa taglia, variante lunga);
-    None per le coppie normali (XL/XXL, A2/A3, A3S/A3)."""
+    None per le altre coppie (XL/XXL, A2/A3, A3S/A3)."""
     if len(taglie) != 2:
         return None
     corta, lunga = sorted(taglie, key=len)
     return corta if lunga == corta + "L" else None
+
+
+def _base_di_variante_S(taglie):
+    """'A3' se le due taglie sono A3S e A3 (stessa taglia, variante corta);
+    None per le altre coppie."""
+    if len(taglie) != 2:
+        return None
+    base, corta = sorted(taglie, key=len)
+    return base if corta == base + "S" else None
 
 
 def _testo(lingua, esito, taglie, altezza, peso, eta, donna, prodotto):
@@ -259,6 +268,12 @@ def _testo(lingua, esito, taglie, altezza, peso, eta, donna, prodotto):
         frase = (f"Per {m} puoi prendere {t}: {t} è la taglia standard, {t}L è più lunga, per chi è più alto."
                  if lingua == "it"
                  else f"For {m} you can take {t}: {t} is the standard size, {t}L is longer, for taller people.")
+    elif esito == "doppia" and _base_di_variante_S(taglie):
+        # A3S e A3: stessa taglia, la S e' piu' corta (24/09/2026).
+        t = _base_di_variante_S(taglie)
+        frase = (f"Per {m} puoi prendere {t}: {t} è la taglia standard, {t}S è più corta, per chi è meno alto."
+                 if lingua == "it"
+                 else f"For {m} you can take {t}: {t} is the standard size, {t}S is shorter, for someone less tall.")
     elif esito == "doppia":
         t1, t2 = taglie[0], taglie[-1]
         frase = (f"Per {m} sei tra {t1} e {t2}: {t1} calza più aderente, {t2} più comodo." if lingua == "it"

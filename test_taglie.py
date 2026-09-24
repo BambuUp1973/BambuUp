@@ -117,11 +117,22 @@ class Funzione(unittest.TestCase):
         self.assertEqual((e, t), ("doppia", ["A1", "A1L"]))
         self.assertIn("puoi prendere A1: A1 è la taglia standard, A1L è più lunga", it)
 
+    def test_gi_doppia_variante_S(self):
+        # A3S e A3: stessa taglia, la S e' piu' corta (24/09/2026, prima
+        # diceva "A3S calza piu' aderente, A3 piu' comodo").
+        e, t, it, en = self.esito("gi", 182, 110)
+        self.assertEqual((e, t), ("doppia", ["A3S", "A3"]))
+        self.assertEqual(it, "Per 182 cm e 110 kg puoi prendere A3: A3 è la taglia standard, A3S è più corta, "
+                             "per chi è meno alto. In caso di dubbi scrivi «operatore» e ti aiutiamo a scegliere.")
+        self.assertEqual(en, "For 182 cm and 110 kg you can take A3: A3 is the standard size, A3S is shorter, "
+                             "for someone less tall. If in doubt, write «operator» and we'll help you choose.")
+        for parola in ("aderente", "comodo"):
+            self.assertNotIn(parola, it)
+        for parola in ("tighter", "comfortable"):
+            self.assertNotIn(parola, en)
+
     def test_doppia_normale_resta_aderente_comodo(self):
-        # coppie che NON sono variante L: A3S/A3 e XL/XXL
-        _, t, it, _ = self.esito("gi", 182, 110)
-        self.assertEqual(t, ["A3S", "A3"])
-        self.assertIn("calza più aderente", it)
+        # coppie che NON sono varianti L o S: XL/XXL
         _, t, it, _ = self.esito("shorts", 190, 95)
         self.assertEqual(t, ["XL", "XXL"])
         self.assertIn("XL calza più aderente, XXL più comodo", it)
