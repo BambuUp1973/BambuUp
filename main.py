@@ -11236,7 +11236,7 @@ _SHOPIFY_SPEDIZIONI_QUERY = """
                   ... on DeliveryRateDefinition { price { amount currencyCode } }
                   ... on DeliveryParticipant {
                     fixedFee { amount currencyCode } percentageOfRateFee
-                    participantService { name }
+                    carrierService { name }
                   }
                 }
                 methodConditions {
@@ -11288,8 +11288,8 @@ def _spedizioni_tariffa(m: dict) -> dict:
         tipo, importo, valuta = "fissa", prezzo.get("amount"), prezzo.get("currencyCode")
     else:
         fisso = rp.get("fixedFee") or {}
-        tipo = "calcolata dal corriere" + (f" ({(rp.get('participantService') or {}).get('name')})"
-                                            if rp.get("participantService") else "")
+        tipo = "calcolata dal corriere" + (f" ({(rp.get('carrierService') or {}).get('name')})"
+                                            if rp.get("carrierService") else "")
         importo, valuta = fisso.get("amount"), fisso.get("currencyCode")
     condizioni = []
     for c in m.get("methodConditions") or []:
