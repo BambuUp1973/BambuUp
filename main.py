@@ -11209,6 +11209,142 @@ def shopify_tema(host: str = _WIDGET_HOST_DEFAULT):
     return esito
 
 
+# --- TARIFFE DI SPEDIZIONE (24/09/2026, sola lettura, scope read_shipping) ----
+# La tabella vera delle spedizioni del negozio: profili di consegna, zone,
+# paesi, tariffe e condizioni (peso o importo), piu' i due flag del negozio che
+# dicono se i prezzi e la spedizione includono le tasse. Solo una query GraphQL
+# in lettura: nessuna mutation, nessuna scrittura verso Shopify.
+_SHOPIFY_SPEDIZIONI_QUERY = """
+{
+  shop { name currencyCode taxesIncluded taxShipping }
+  deliveryProfiles(first: 20) {
+    nodes {
+      id name default
+      productVariantsCount { count }
+      profileLocationGroups {
+        locationGroupZones(first: 100) {
+          nodes {
+            zone {
+              name
+              countries { name code { countryCode restOfWorld } provinces { name code } }
+            }
+            methodDefinitions(first: 50) {
+              nodes {
+                name active description
+                rateProvider {
+                  __typename
+                  ... on DeliveryRateDefinition { price { amount currencyCode } }
+                  ... on DeliveryParticipant {
+                    fixedFee { amount currencyCode } percentageOfRateFee
+                    participantService { name }
+                  }
+                }
+                methodConditions {
+                  field operator
+                  conditionCriteria {
+                    __typename
+                    ... on MoneyV2 { amount currencyCode }
+                    ... on Weight { unit value }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _shopify_graphql(store, token, query):
+    """(data, None) oppure (None, errore). Solo query di lettura."""
+    try:
+        r = requests.post(
+            f"https://{store}/admin/api/{_SHOPIFY_API_VERSION}/graphql.json",
+            headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+            json={"query": query}, timeout=60,
+        )
+    except Exception as e:
+        return None, f"errore: GraphQL, connessione fallita ({type(e).__name__}: {e})"
+    if r.status_code != 200:
+        return None, _diag_errore("GraphQL Admin API", r)
+    try:
+        dati = r.json()
+    except Exception:
+        return None, f"errore: GraphQL, risposta non JSON (HTTP {r.status_code})"
+    if dati.get("errors"):
+        return None, ("errore: GraphQL HTTP 200 con 'errors' - "
+                      + json.dumps(dati["errors"], ensure_ascii=False)[:_DIAG_MAX_TESTO])
+    return dati.get("data") or {}, None
+
+
+def _spedizioni_tariffa(m: dict) -> dict:
+    """Una tariffa in forma leggibile: nome, prezzo, condizioni."""
+    rp = m.get("rateProvider") or {}
+    if rp.get("__typename") == "DeliveryRateDefinition":
+        prezzo = rp.get("price") or {}
+        tipo, importo, valuta = "fissa", prezzo.get("amount"), prezzo.get("currencyCode")
+    else:
+        fisso = rp.get("fixedFee") or {}
+        tipo = "calcolata dal corriere" + (f" ({(rp.get('participantService') or {}).get('name')})"
+                                            if rp.get("participantService") else "")
+        importo, valuta = fisso.get("amount"), fisso.get("currencyCode")
+    condizioni = []
+    for c in m.get("methodConditions") or []:
+        crit = c.get("conditionCriteria") or {}
+        if crit.get("__typename") == "Weight":
+            valore = f"{crit.get('value')} {crit.get('unit')}"
+        else:
+            valore = f"{crit.get('amount')} {crit.get('currencyCode')}"
+        condizioni.append(f"{c.get('field')} {c.get('operator')} {valore}")
+    return {"nome": m.get("name"), "attiva": m.get("active"), "tipo": tipo,
+            "prezzo": importo, "valuta": valuta, "condizioni": condizioni,
+            "descrizione": m.get("description") or None}
+
+
+@app.get("/shopify-spedizioni", dependencies=SOLO_ADMIN)
+def shopify_spedizioni():
+    """Solo lettura: la tabella spedizioni del negozio da Shopify, un profilo
+    di consegna alla volta, una riga per zona con paesi e tariffe."""
+    store, token, errore = _shopify_sessione()
+    if errore:
+        return errore
+    esito = {"letto_il": datetime.now(timezone.utc).isoformat(), "negozio_interrogato": store,
+             "versione_api": _SHOPIFY_API_VERSION}
+    dati, err = _shopify_graphql(store, token, _SHOPIFY_SPEDIZIONI_QUERY)
+    if err:
+        esito["esito"] = err
+        return esito
+    shop = dati.get("shop") or {}
+    esito["negozio"] = {"nome": shop.get("name"), "valuta": shop.get("currencyCode"),
+                        "prezzi_con_tasse_incluse": shop.get("taxesIncluded"),
+                        "tasse_sulla_spedizione": shop.get("taxShipping")}
+    profili = []
+    for p in ((dati.get("deliveryProfiles") or {}).get("nodes") or []):
+        zone = []
+        for gruppo in p.get("profileLocationGroups") or []:
+            for z in ((gruppo.get("locationGroupZones") or {}).get("nodes") or []):
+                zona = z.get("zone") or {}
+                paesi = []
+                for c in zona.get("countries") or []:
+                    codice = c.get("code") or {}
+                    sigla = "RESTO DEL MONDO" if codice.get("restOfWorld") else codice.get("countryCode")
+                    province = [x.get("code") or x.get("name") for x in c.get("provinces") or []]
+                    paesi.append(f"{sigla} {c.get('name')}" + (f" (solo {', '.join(province)})"
+                                                                if province else ""))
+                tariffe = [_spedizioni_tariffa(m) for m in
+                           ((z.get("methodDefinitions") or {}).get("nodes") or [])]
+                zone.append({"zona": zona.get("name"), "paesi": paesi, "tariffe": tariffe})
+        profili.append({"profilo": p.get("name"), "predefinito": p.get("default"),
+                        "varianti_assegnate": (p.get("productVariantsCount") or {}).get("count"),
+                        "zone": zone})
+    esito["esito"] = "ok"
+    esito["profili"] = profili
+    return esito
+
+
 class InstallaWidgetRequest(BaseModel):
     chiave: str
     host: str = _WIDGET_HOST_DEFAULT
