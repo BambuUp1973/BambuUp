@@ -256,6 +256,8 @@ WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 # lettura del messaggio e regex delle taglie stanno in taglie.py.
 from taglie import (taglia_consigliata, estrai_misure, decidi_taglia, TAGLIA_RE,
                     TESTO_DATI_MANCANTI)
+# Costo di spedizione per il cliente finale, dalla tabella vera di Shopify.
+from spedizioni import costo_spedizione, CacheTabella
 # Ultima rete prima del cliente finale: coordinate bancarie, nomi delle persone
 # e sistemi interni non escono, qualunque cosa abbia scritto il modello.
 from blocco_uscita import blocco_uscita_retail
@@ -2598,6 +2600,27 @@ CHAT_TOOLS = [
         },
     },
     {
+        "name": "costo_spedizione",
+        "description": (
+            "SOLO CLIENTE FINALE. L'UNICO modo per dire quanto costa la spedizione: "
+            "legge le tariffe vere del negozio. Chiamalo per QUALSIASI domanda sul "
+            "costo della spedizione, con il paese di destinazione. Restituisce "
+            "'testo_da_riferire' con prezzo e soglia di gratuita': li riporti TALI E "
+            "QUALI, senza cambiare cifre o condizioni. NON da' i tempi di consegna."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "paese": {"type": "string",
+                          "description": "Il paese come l'ha scritto il cliente (es. Grecia, UK, Germany)."},
+                "codice_paese": {"type": "string",
+                                 "description": "Codice ISO 3166 a 2 lettere del paese (GR, GB, DE...)."},
+                "lingua": {"type": "string", "enum": ["it", "en"], "description": "Lingua in cui scrive il cliente."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "rispondi_dal_manuale",
         "description": (
             "Recupera informazioni dal manuale operativo interno / knowledge base "
@@ -2710,6 +2733,9 @@ PAGAMENTI
 
 SPEDIZIONI
 - Dai il costo e i tempi per la destinazione chiesta, e basta.
+- Il COSTO lo dai SOLO con lo strumento costo_spedizione, chiamato in QUESTO turno con il paese di destinazione: mai con rispondi_dal_manuale, mai a memoria, mai dai documenti. Qui vale questo, non la regola generale su rispondi_dal_manuale. Riporti prezzo e soglia di gratuità del suo testo tali e quali.
+- Se il cliente non ha detto il paese, chiedi solo quello, in una frase, e nient'altro.
+- I TEMPI di consegna li prendi dal manuale con rispondi_dal_manuale, come sempre.
 - Non chiedi MAI se l'ordine è custom o da catalogo e non nomini MAI gli ordini custom o personalizzati: chi ti scrive compra solo dal catalogo di kanokimonos.com.
 
 RECLAMI (prodotto rotto, sbagliato, danneggiato)
@@ -2802,7 +2828,8 @@ ROLE_TOOLS = {
         "giacenza_woocommerce", "giacenza_fully",
     },
     "b2b": {"cerca_ordine_per_numero", "rispondi_dal_manuale"},
-    "retail": {"rispondi_dal_manuale", "passa_a_operatore", "salva_email_richiesta", "taglia_consigliata"},
+    "retail": {"rispondi_dal_manuale", "passa_a_operatore", "salva_email_richiesta", "taglia_consigliata",
+               "costo_spedizione"},
 }
 
 # Piattaforme ordini vietate per ruolo (enforcement lato esecuzione, difesa in profondità)
@@ -6802,6 +6829,8 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         if name == "taglia_consigliata":
             return tool_taglia_consigliata(tool_input, user_message, contesto)
+        if name == "costo_spedizione":
+            return tool_costo_spedizione(tool_input, user_message, contesto)
         if name in ("passa_a_operatore", "salva_email_richiesta"):
             if name == "passa_a_operatore":
                 esito = tool_passa_a_operatore(
@@ -7576,6 +7605,24 @@ def tool_taglia_consigliata(tool_input: dict, user_message: str, contesto: dict)
     contesto["testo_fisso"] = testo
     return {"esito": r["esito"], "taglie": r["taglie"], "fascia": r["fascia"], "mancano": r["mancano"],
             "testo_da_riferire": testo, "istruzione": RICHIESTE_ISTRUZIONE}
+
+
+def tool_costo_spedizione(tool_input: dict, user_message: str, contesto: dict) -> dict:
+    """Costo di spedizione per il cliente finale, dalla tabella di Shopify
+    (in memoria un'ora). Il testo per il cliente lo decide spedizioni.py."""
+    tool_input = tool_input or {}
+    lingua = _lingua_richiesta(tool_input.get("lingua"), contesto, user_message)
+    r = costo_spedizione(tool_input.get("paese"), tool_input.get("codice_paese"), lingua,
+                         _TABELLA_SPEDIZIONI)
+    if r["esito"] == "non_disponibile":
+        print(f"[SPEDIZIONI] costo non disponibile: {r.get('motivo')}")
+    esito = {k: v for k, v in r.items() if k not in ("testo", "motivo")}
+    esito["testo_da_riferire"] = r["testo"]
+    esito["istruzione"] = (
+        "Riporta 'testo_da_riferire' con le stesse cifre e condizioni, senza cambiarle ne' "
+        "aggiungerne. Se il cliente ha chiesto anche i tempi di consegna, aggiungili dal manuale."
+    )
+    return esito
 
 
 def _rete_taglie(risposta: str, role: str, contesto: dict, messaggio_cliente: str) -> str:
@@ -11302,7 +11349,7 @@ def _spedizioni_tariffa(m: dict) -> dict:
         tipo = "calcolata dal corriere" + (f" ({(rp.get('carrierService') or {}).get('name')})"
                                             if rp.get("carrierService") else "")
         importo, valuta = fisso.get("amount"), fisso.get("currencyCode")
-    condizioni = []
+    condizioni, dati = [], []
     for c in m.get("methodConditions") or []:
         crit = c.get("conditionCriteria") or {}
         if crit.get("__typename") == "Weight":
@@ -11310,21 +11357,25 @@ def _spedizioni_tariffa(m: dict) -> dict:
         else:
             valore = f"{crit.get('amount')} {crit.get('currencyCode')}"
         condizioni.append(f"{c.get('field')} {c.get('operator')} {valore}")
+        dati.append({"campo": c.get("field"), "operatore": c.get("operator"),
+                     "valore": crit.get("value") if crit.get("__typename") == "Weight" else crit.get("amount"),
+                     "unita": crit.get("unit") if crit.get("__typename") == "Weight" else crit.get("currencyCode")})
     return {"nome": m.get("name"), "attiva": m.get("active"), "tipo": tipo,
             "prezzo": importo, "valuta": valuta, "condizioni": condizioni,
-            "descrizione": m.get("description") or None}
+            "condizioni_dati": dati, "descrizione": m.get("description") or None}
 
 
 def _spedizioni_zona(z: dict) -> dict:
     zona = z.get("zone") or {}
-    paesi = []
+    paesi, codici = [], []
     for c in zona.get("countries") or []:
         codice = c.get("code") or {}
         sigla = "RESTO DEL MONDO" if codice.get("restOfWorld") else codice.get("countryCode")
+        codici.append("RESTO_DEL_MONDO" if codice.get("restOfWorld") else codice.get("countryCode"))
         province = [x.get("code") or x.get("name") for x in c.get("provinces") or []]
         paesi.append(f"{sigla} {c.get('name')}" + (f" (solo {', '.join(province)})" if province else ""))
     tariffe = [_spedizioni_tariffa(m) for m in ((z.get("methodDefinitions") or {}).get("nodes") or [])]
-    return {"zona": zona.get("name"), "paesi": paesi, "tariffe": tariffe}
+    return {"zona": zona.get("name"), "paesi": paesi, "codici": codici, "tariffe": tariffe}
 
 
 def _spedizioni_zone_del_gruppo(store, token, profilo_id, gruppo_id):
@@ -11351,6 +11402,24 @@ def _spedizioni_zone_del_gruppo(store, token, profilo_id, gruppo_id):
 def shopify_spedizioni():
     """Solo lettura: la tabella spedizioni del negozio da Shopify, un profilo
     di consegna alla volta, una riga per zona con paesi e tariffe."""
+    return _shopify_tabella_spedizioni()
+
+
+def _tabella_per_strumento():
+    """(tabella, None) solo se la lettura e' completa; una tabella parziale
+    potrebbe far dire "non spediamo" a un paese che sta nella zona non letta."""
+    t = _shopify_tabella_spedizioni()
+    if t.get("esito") != "ok":
+        return None, t.get("esito") or "lettura non riuscita"
+    return t, None
+
+
+_TABELLA_SPEDIZIONI = CacheTabella(_tabella_per_strumento)
+
+
+def _shopify_tabella_spedizioni() -> dict:
+    """La tabella spedizioni letta da Shopify; esito 'ok', 'parziale' o il
+    testo dell'errore. La usano la rotta admin e lo strumento del retail."""
     store, token, errore = _shopify_sessione()
     if errore:
         return errore
