@@ -6,7 +6,8 @@ di Shopify (24/09/2026).
 La tabella la legge main.py (GET /shopify-spedizioni, stessa funzione); qui si
 decide soltanto:
 - a quale paese si riferisce il cliente (nome italiano o inglese, o codice ISO);
-- in quale zona sta quel paese;
+- in quale zona sta quel paese (fuori da tutte le zone si spedisce lo
+  stesso, con un preventivo caso per caso: 25/09/2026);
 - quale tariffa vede un cliente del negozio: le "Spedizione B2B" non escono
   MAI, come fa kano-shipping-filter sul checkout;
 - il testo per il cliente.
@@ -25,7 +26,7 @@ DURATA_CACHE_SECONDI = 3600
 
 # --- paesi ---------------------------------------------------------------------
 # Tutti i codici ISO 3166-1 alpha-2, piu' XK (Kosovo, usato da Shopify): un
-# codice valido fuori da tutte le zone e' "non spediamo", un codice inventato
+# codice valido fuori da tutte le zone va a preventivo, un codice inventato
 # e' "paese non riconosciuto".
 CODICI_ISO = set((
     "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ "
@@ -221,7 +222,9 @@ TESTI = {
     "it": {
         "manca_paese": "In quale paese va spedito l'ordine?",
         "non_riconosciuto": "Non ho capito in quale paese va spedito l'ordine: me lo scrivi?",
-        "fuori_zona": "Non spediamo in quel paese, scrivi a info@kanokimonos.com.",
+        "fuori_zona": ("Spediamo anche lì, ma per questo paese il costo lo calcoliamo caso per "
+                       "caso. Scrivi a info@kanokimonos.com dicendo cosa vuoi ordinare e in che "
+                       "paese, e ti mandiamo un preventivo."),
         "non_disponibile": ("In questo momento il costo della spedizione non è disponibile: "
                             "scrivi a info@kanokimonos.com."),
         "costo": "{paese}: la spedizione costa {prezzo}.",
@@ -230,7 +233,9 @@ TESTI = {
     "en": {
         "manca_paese": "Which country should the order be shipped to?",
         "non_riconosciuto": "I didn't understand which country the order goes to: could you tell me?",
-        "fuori_zona": "We don't ship to that country, write to info@kanokimonos.com.",
+        "fuori_zona": ("We do ship there, but for this country we calculate the cost case by "
+                       "case. Write to info@kanokimonos.com telling us what you'd like to order "
+                       "and your country, and we'll send you a quote."),
         "non_disponibile": ("Shipping costs aren't available right now: "
                             "write to info@kanokimonos.com."),
         "costo": "Shipping to {paese} costs {prezzo}.",

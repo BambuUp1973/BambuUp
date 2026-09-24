@@ -11407,7 +11407,7 @@ def shopify_spedizioni():
 
 def _tabella_per_strumento():
     """(tabella, None) solo se la lettura e' completa; una tabella parziale
-    potrebbe far dire "non spediamo" a un paese che sta nella zona non letta."""
+    potrebbe mandare a preventivo un paese che sta nella zona non letta."""
     t = _shopify_tabella_spedizioni()
     if t.get("esito") != "ok":
         return None, t.get("esito") or "lettura non riuscita"

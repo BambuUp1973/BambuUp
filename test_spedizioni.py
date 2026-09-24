@@ -45,6 +45,14 @@ TABELLA = {"esito": "ok", "profili": [{"profilo": "General profile", "predefinit
 ]}]}
 
 
+FUORI_ZONA_IT = ("Spediamo anche lì, ma per questo paese il costo lo calcoliamo caso per caso. "
+                 "Scrivi a info@kanokimonos.com dicendo cosa vuoi ordinare e in che paese, "
+                 "e ti mandiamo un preventivo.")
+FUORI_ZONA_EN = ("We do ship there, but for this country we calculate the cost case by case. "
+                 "Write to info@kanokimonos.com telling us what you'd like to order and your "
+                 "country, and we'll send you a quote.")
+
+
 def leggi_ok():
     return TABELLA, None
 
@@ -112,10 +120,21 @@ class Paesi(unittest.TestCase):
                              (None, "UY"), ("Giappone", None)):
             r = costo(nome, codice)
             self.assertEqual(r["esito"], "fuori_zona", nome or codice)
-            self.assertEqual(r["testo"], "Non spediamo in quel paese, scrivi a info@kanokimonos.com.")
+            self.assertEqual(r["testo"], FUORI_ZONA_IT)
             self.assertNotIn("prezzo", r)
-        self.assertEqual(costo("Brazil", lingua="en")["testo"],
-                         "We don't ship to that country, write to info@kanokimonos.com.")
+            self.assertIsNone(re.search(r"\d", r["testo"]), r["testo"])
+        self.assertEqual(costo("Brazil", lingua="en")["testo"], FUORI_ZONA_EN)
+
+    def test_fuori_zona_non_dice_mai_non_spediamo(self):
+        # Kano spedisce in tutto il mondo: fuori zona c'e' il preventivo.
+        for codice in ("BR", "AU", "US", "JP", "UY", "CA", "ZA"):
+            for lingua in ("it", "en"):
+                r = costo(codice=codice, lingua=lingua)
+                self.assertEqual(r["esito"], "fuori_zona", codice)
+                testo = r["testo"].lower()
+                for vietata in ("non spediamo", "don't ship", "do not ship", "not ship"):
+                    self.assertNotIn(vietata, testo, (codice, lingua))
+                self.assertIn("info@kanokimonos.com", r["testo"])
 
     def test_manca_il_paese(self):
         r = costo()
@@ -234,8 +253,9 @@ class StrumentoInMain(unittest.TestCase):
             self.assertEqual(r["testo_da_riferire"],
                              "Grecia: la spedizione costa 9,90 €. È gratuita per ordini da 100 € in su.")
             self.assertNotIn("motivo", r)
-            fuori = main.tool_costo_spedizione({"paese": "Brasile"}, "e in Brasile?", {})
+            fuori = main.tool_costo_spedizione({"paese": "Brasile", "lingua": "it"}, "e in Brasile?", {})
             self.assertEqual(fuori["esito"], "fuori_zona")
+            self.assertEqual(fuori["testo_da_riferire"], FUORI_ZONA_IT)
 
     def test_shopify_giu_nello_strumento(self):
         import main
