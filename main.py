@@ -11212,40 +11212,50 @@ def shopify_tema(host: str = _WIDGET_HOST_DEFAULT):
 # --- TARIFFE DI SPEDIZIONE (24/09/2026, sola lettura, scope read_shipping) ----
 # La tabella vera delle spedizioni del negozio: profili di consegna, zone,
 # paesi, tariffe e condizioni (peso o importo), piu' i due flag del negozio che
-# dicono se i prezzi e la spedizione includono le tasse. Solo una query GraphQL
-# in lettura: nessuna mutation, nessuna scrittura verso Shopify.
-_SHOPIFY_SPEDIZIONI_QUERY = """
+# dicono se i prezzi e la spedizione includono le tasse. Solo query GraphQL in
+# lettura: nessuna mutation, nessuna scrittura verso Shopify.
+# Due passi perche' una query unica costa ~2000 punti e Shopify ne ammette
+# 1000: prima i profili, poi le zone di ogni gruppo di magazzini, 10 per pagina.
+_SHOPIFY_PROFILI_QUERY = """
 {
   shop { name currencyCode taxesIncluded taxShipping }
   deliveryProfiles(first: 20) {
     nodes {
       id name default
       productVariantsCount { count }
-      profileLocationGroups {
-        locationGroupZones(first: 100) {
-          nodes {
-            zone {
-              name
-              countries { name code { countryCode restOfWorld } provinces { name code } }
-            }
-            methodDefinitions(first: 50) {
-              nodes {
-                name active description
-                rateProvider {
-                  __typename
-                  ... on DeliveryRateDefinition { price { amount currencyCode } }
-                  ... on DeliveryParticipant {
-                    fixedFee { amount currencyCode } percentageOfRateFee
-                    carrierService { name }
-                  }
+      profileLocationGroups { locationGroup { id } }
+    }
+  }
+}
+"""
+_SHOPIFY_ZONE_QUERY = """
+query($id: ID!, $gid: ID!, $after: String) {
+  deliveryProfile(id: $id) {
+    profileLocationGroups(locationGroupId: $gid) {
+      locationGroupZones(first: 10, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          zone {
+            name
+            countries { name code { countryCode restOfWorld } provinces { name code } }
+          }
+          methodDefinitions(first: 10) {
+            nodes {
+              name active description
+              rateProvider {
+                __typename
+                ... on DeliveryRateDefinition { price { amount currencyCode } }
+                ... on DeliveryParticipant {
+                  fixedFee { amount currencyCode } percentageOfRateFee
+                  carrierService { name }
                 }
-                methodConditions {
-                  field operator
-                  conditionCriteria {
-                    __typename
-                    ... on MoneyV2 { amount currencyCode }
-                    ... on Weight { unit value }
-                  }
+              }
+              methodConditions {
+                field operator
+                conditionCriteria {
+                  __typename
+                  ... on MoneyV2 { amount currencyCode }
+                  ... on Weight { unit value }
                 }
               }
             }
@@ -11256,15 +11266,16 @@ _SHOPIFY_SPEDIZIONI_QUERY = """
   }
 }
 """
+_SHOPIFY_ZONE_MAX_PAGINE = 40
 
 
-def _shopify_graphql(store, token, query):
+def _shopify_graphql(store, token, query, variabili=None):
     """(data, None) oppure (None, errore). Solo query di lettura."""
     try:
         r = requests.post(
             f"https://{store}/admin/api/{_SHOPIFY_API_VERSION}/graphql.json",
             headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
-            json={"query": query}, timeout=60,
+            json={"query": query, "variables": variabili or {}}, timeout=60,
         )
     except Exception as e:
         return None, f"errore: GraphQL, connessione fallita ({type(e).__name__}: {e})"
@@ -11304,6 +11315,38 @@ def _spedizioni_tariffa(m: dict) -> dict:
             "descrizione": m.get("description") or None}
 
 
+def _spedizioni_zona(z: dict) -> dict:
+    zona = z.get("zone") or {}
+    paesi = []
+    for c in zona.get("countries") or []:
+        codice = c.get("code") or {}
+        sigla = "RESTO DEL MONDO" if codice.get("restOfWorld") else codice.get("countryCode")
+        province = [x.get("code") or x.get("name") for x in c.get("provinces") or []]
+        paesi.append(f"{sigla} {c.get('name')}" + (f" (solo {', '.join(province)})" if province else ""))
+    tariffe = [_spedizioni_tariffa(m) for m in ((z.get("methodDefinitions") or {}).get("nodes") or [])]
+    return {"zona": zona.get("name"), "paesi": paesi, "tariffe": tariffe}
+
+
+def _spedizioni_zone_del_gruppo(store, token, profilo_id, gruppo_id):
+    """(zone, None) oppure (zone lette fin li', errore)."""
+    zone, dopo = [], None
+    for _ in range(_SHOPIFY_ZONE_MAX_PAGINE):
+        dati, err = _shopify_graphql(store, token, _SHOPIFY_ZONE_QUERY,
+                                     {"id": profilo_id, "gid": gruppo_id, "after": dopo})
+        if err:
+            return zone, err
+        gruppi = (dati.get("deliveryProfile") or {}).get("profileLocationGroups") or []
+        if not gruppi:
+            return zone, None
+        pagina = gruppi[0].get("locationGroupZones") or {}
+        zone.extend(_spedizioni_zona(z) for z in pagina.get("nodes") or [])
+        info = pagina.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            return zone, None
+        dopo = info.get("endCursor")
+    return zone, f"errore: piu' di {_SHOPIFY_ZONE_MAX_PAGINE} pagine di zone, lettura interrotta"
+
+
 @app.get("/shopify-spedizioni", dependencies=SOLO_ADMIN)
 def shopify_spedizioni():
     """Solo lettura: la tabella spedizioni del negozio da Shopify, un profilo
@@ -11313,7 +11356,7 @@ def shopify_spedizioni():
         return errore
     esito = {"letto_il": datetime.now(timezone.utc).isoformat(), "negozio_interrogato": store,
              "versione_api": _SHOPIFY_API_VERSION}
-    dati, err = _shopify_graphql(store, token, _SHOPIFY_SPEDIZIONI_QUERY)
+    dati, err = _shopify_graphql(store, token, _SHOPIFY_PROFILI_QUERY)
     if err:
         esito["esito"] = err
         return esito
@@ -11321,26 +11364,23 @@ def shopify_spedizioni():
     esito["negozio"] = {"nome": shop.get("name"), "valuta": shop.get("currencyCode"),
                         "prezzi_con_tasse_incluse": shop.get("taxesIncluded"),
                         "tasse_sulla_spedizione": shop.get("taxShipping")}
-    profili = []
+    profili, errori = [], []
     for p in ((dati.get("deliveryProfiles") or {}).get("nodes") or []):
         zone = []
         for gruppo in p.get("profileLocationGroups") or []:
-            for z in ((gruppo.get("locationGroupZones") or {}).get("nodes") or []):
-                zona = z.get("zone") or {}
-                paesi = []
-                for c in zona.get("countries") or []:
-                    codice = c.get("code") or {}
-                    sigla = "RESTO DEL MONDO" if codice.get("restOfWorld") else codice.get("countryCode")
-                    province = [x.get("code") or x.get("name") for x in c.get("provinces") or []]
-                    paesi.append(f"{sigla} {c.get('name')}" + (f" (solo {', '.join(province)})"
-                                                                if province else ""))
-                tariffe = [_spedizioni_tariffa(m) for m in
-                           ((z.get("methodDefinitions") or {}).get("nodes") or [])]
-                zone.append({"zona": zona.get("name"), "paesi": paesi, "tariffe": tariffe})
+            gid = (gruppo.get("locationGroup") or {}).get("id")
+            if not gid:
+                continue
+            lette, err = _spedizioni_zone_del_gruppo(store, token, p.get("id"), gid)
+            zone.extend(lette)
+            if err:
+                errori.append(f"profilo {p.get('name')!r}: {err}")
         profili.append({"profilo": p.get("name"), "predefinito": p.get("default"),
                         "varianti_assegnate": (p.get("productVariantsCount") or {}).get("count"),
                         "zone": zone})
-    esito["esito"] = "ok"
+    esito["esito"] = "ok" if not errori else "parziale"
+    if errori:
+        esito["errori"] = errori
     esito["profili"] = profili
     return esito
 

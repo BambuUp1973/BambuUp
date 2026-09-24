@@ -10,11 +10,18 @@ from fastapi.testclient import TestClient
 import main
 
 CHIAVE = "chiave-di-prova"
-DATI_FINTI = {
+PROFILI_FINTI = {
     "shop": {"name": "Negozio", "currencyCode": "EUR", "taxesIncluded": True, "taxShipping": True},
     "deliveryProfiles": {"nodes": [{
-        "name": "General profile", "default": True, "productVariantsCount": {"count": 3},
-        "profileLocationGroups": [{"locationGroupZones": {"nodes": [{
+        "id": "gid://shopify/DeliveryProfile/1", "name": "General profile", "default": True,
+        "productVariantsCount": {"count": 3},
+        "profileLocationGroups": [{"locationGroup": {"id": "gid://shopify/DeliveryLocationGroup/9"}}],
+    }]},
+}
+ZONE_FINTE = {
+    "deliveryProfile": {"profileLocationGroups": [{"locationGroupZones": {
+        "pageInfo": {"hasNextPage": False, "endCursor": None},
+        "nodes": [{
             "zone": {"name": "Italia", "countries": [
                 {"name": "Italy", "code": {"countryCode": "IT", "restOfWorld": False}, "provinces": []}]},
             "methodDefinitions": {"nodes": [{
@@ -25,9 +32,13 @@ DATI_FINTI = {
                                       "conditionCriteria": {"__typename": "MoneyV2",
                                                             "amount": "99.99", "currencyCode": "EUR"}}],
             }]},
-        }]}}],
-    }]},
+        }],
+    }}]},
 }
+
+
+def _graphql_finto(store, token, query, variabili=None):
+    return (PROFILI_FINTI if "deliveryProfiles" in query else ZONE_FINTE), None
 
 
 class RottaSpedizioni(unittest.TestCase):
@@ -37,7 +48,7 @@ class RottaSpedizioni(unittest.TestCase):
         patch_chiave = mock.patch.object(main, "BOT_ADMIN_KEY", CHIAVE)
         patch_sessione = mock.patch.object(main, "_shopify_sessione",
                                            return_value=("negozio.myshopify.com", "token", None))
-        patch_graphql = mock.patch.object(main, "_shopify_graphql", return_value=(DATI_FINTI, None))
+        patch_graphql = mock.patch.object(main, "_shopify_graphql", side_effect=_graphql_finto)
         for p in (patch_chiave, patch_sessione, patch_graphql):
             p.start()
             self.addCleanup(p.stop)
