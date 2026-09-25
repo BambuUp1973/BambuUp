@@ -11591,6 +11591,66 @@ def _shopify_tabella_spedizioni() -> dict:
     return esito
 
 
+# Solo i campi che servono a dire "spedito / non spedito + tracking": niente
+# indirizzi, nomi, importi, order_status_url.
+_SHOPIFY_ORDINE_CAMPI = "id,name,order_number,email,cancelled_at,fulfillment_status,fulfillments"
+
+
+def _ordine_nome_pulito(testo: str) -> str:
+    """'#1001-w26 ' -> '1001-W26'."""
+    return re.sub(r"[\s#]", "", testo or "").upper()
+
+
+def _maschera_email(email: str) -> str:
+    utente, _, dominio = (email or "").partition("@")
+    tld = dominio.rsplit(".", 1)[-1] if "." in dominio else ""
+    return f"{utente[:1]}***@***.{tld}"
+
+
+def _ordine_per_stato(o: dict) -> dict:
+    stato = {None: "non spedito", "partial": "in parte", "fulfilled": "spedito"}
+    spedizioni = []
+    for f in o.get("fulfillments") or []:
+        if f.get("status") != "success":
+            continue
+        numeri = f.get("tracking_numbers") or ([f["tracking_number"]] if f.get("tracking_number") else [])
+        link = f.get("tracking_urls") or ([f["tracking_url"]] if f.get("tracking_url") else [])
+        spedizioni.append({"corriere": f.get("tracking_company"), "tracking": numeri, "link": link})
+    return {
+        "numero": o.get("name"),
+        "email_presente": bool(o.get("email")),
+        "email_oscurata": _maschera_email(o["email"]) if o.get("email") else None,
+        "annullato": bool(o.get("cancelled_at")),
+        "spedizione": stato.get(o.get("fulfillment_status"), o.get("fulfillment_status")),
+        "spedizioni": spedizioni,
+    }
+
+
+@app.get("/shopify-ordine", dependencies=SOLO_ADMIN)
+def shopify_ordine(numero: str):
+    """Solo lettura, con l'app del bot: lo stato di spedizione di un ordine
+    dal numero che vede il cliente. Shopify filtra 'name' anche in parte
+    ('100' trova 1001, 1002, ...), quindi si tengono solo le corrispondenze
+    esatte: il nome intero (1001-W26) oppure la sola cifra (1001)."""
+    cercato = _ordine_nome_pulito(numero)
+    if not cercato:
+        return {"esito": "numero mancante"}
+    store, token, errore = _shopify_sessione()
+    if errore:
+        return errore
+    dati, errore = _shopify_rest(
+        store, token, "GET", f"api/{_SHOPIFY_API_VERSION}/orders.json",
+        params={"name": cercato, "status": "any", "limit": 50, "fields": _SHOPIFY_ORDINE_CAMPI},
+    )
+    if errore:
+        return {"esito": errore}
+    esatti = [o for o in dati.get("orders") or []
+              if _ordine_nome_pulito(o.get("name")) == cercato or str(o.get("order_number")) == cercato]
+    if not esatti:
+        return {"esito": "non trovato", "cercato": cercato}
+    return {"esito": "ok", "cercato": cercato, "ordini": [_ordine_per_stato(o) for o in esatti]}
+
+
 class InstallaWidgetRequest(BaseModel):
     chiave: str
     host: str = _WIDGET_HOST_DEFAULT
