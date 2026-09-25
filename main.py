@@ -6937,6 +6937,83 @@ def _registra_strumento(chat_id, role, nome, parametri, esito, byte_risposta, du
               f"ms={durata_ms} parametri={par}")
 
 
+# Lingua della risposta al cliente finale (25/09/2026). Il modello riceve un
+# prompt, un manuale e testi degli strumenti tutti in italiano, e a volte
+# risponde in italiano a chi scrive in inglese. Qui, nel codice: se il cliente
+# scrive chiaramente in una lingua (o, se il messaggio non la rivela, la
+# lingua del widget) e la risposta del modello e' chiaramente nell'altra, la
+# risposta si rifa' UNA volta: il modello riscrive la sua risposta nella lingua
+# detta esplicitamente, senza nuove chiamate agli strumenti. Se
+# sbaglia ancora si manda la seconda: mai una chat senza risposta. I testi
+# scritti dal codice (contesto['testo_fisso'], reti) non passano di qui.
+_LINGUA_NOMI = {"it": ("italiano", "Italian"), "en": ("inglese", "English")}
+# (_PAROLE_IT_RISPOSTA e _PAROLE_EN_RISPOSTA stanno dopo _PAROLE_EN, piu' in basso.)
+
+
+def _lingua_chiara(testo: str, minimo: int) -> str:
+    """'it' o 'en' solo se il testo e' chiaramente in quella lingua (almeno
+    'minimo' parole tipiche e piu' del doppio dell'altra), altrimenti None.
+    Email e link non contano."""
+    pulito = re.sub(r"\S+@\S+|https?://\S+", " ", (testo or "").lower())
+    parole = [p.strip("'") for p in re.findall(r"[a-zà-ù']+", pulito)]
+    it = sum(1 for p in parole if p in _PAROLE_IT_RISPOSTA)
+    en = sum(1 for p in parole if p in _PAROLE_EN_RISPOSTA)
+    if it >= minimo and it > 2 * en:
+        return "it"
+    if en >= minimo and en > 2 * it:
+        return "en"
+    return None
+
+
+def _lingua_giusta(client, system, tools, messages, testo, max_tokens, chat_id, role,
+                   user_message, uso, contesto) -> str:
+    if _normalize_role(role) != "retail" or not contesto or contesto.get("testo_fisso"):
+        return testo
+    hint = contesto.get("lingua_hint")
+    attesa = _lingua_chiara(user_message, 2) or (hint if hint in ("it", "en") else None)
+    uscita = _lingua_chiara(testo, 3)
+    if not attesa or not uscita or uscita == attesa:
+        return testo
+    it_nome, en_nome = _LINGUA_NOMI[attesa]
+    istruzione = (
+        f"\n\nLINGUA DELLA RISPOSTA, OBBLIGATORIA: il cliente scrive in {it_nome}. Scrivi "
+        f"TUTTA la risposta in {it_nome}, dalla prima all'ultima parola, anche se il materiale "
+        "e i testi che hai ricevuto sono in un'altra lingua: traducili. Stesso contenuto, stessi "
+        f"dati, stessi rimandi. / Write the WHOLE reply in {en_nome}. NON chiamare strumenti."
+    )
+    inizio = time.perf_counter()
+    try:
+        # La prima risposta si riscrive, non si rifa' da capo: stesso contenuto.
+        riscrivi = messages + [
+            {"role": "assistant", "content": testo},
+            {"role": "user", "content": (
+                f"[Messaggio interno, non del cliente] Riscrivi la tua ultima risposta "
+                f"interamente in {it_nome}, con lo stesso contenuto, gli stessi dati e gli "
+                f"stessi rimandi, senza aggiungere ne' togliere niente e senza commenti. "
+                f"Rewrite your last reply entirely in {en_nome}.")},
+        ]
+        r = client.messages.create(
+            model=ANTHROPIC_MODEL, max_tokens=max_tokens, system=system + istruzione,
+            tools=tools, tool_choice={"type": "none"}, messages=riscrivi,
+        )
+        _accumula_uso(uso, r)
+        secondo = _testo_risposta(r, "")
+    except Exception as e:
+        print(f"[LINGUA] secondo giro fallito chat={chat_id}: {type(e).__name__}: {str(e)[:200]}")
+        secondo = ""
+    if not secondo.strip():
+        esito, finale = "errore", testo
+    else:
+        uscita2 = _lingua_chiara(secondo, 3)
+        esito = "corretta" if uscita2 == attesa else "ancora_sbagliata"
+        finale = secondo
+    _registra_strumento(chat_id, role, "rete_lingua",
+                        {"attesa": attesa, "uscita": uscita, "hint": hint}, esito, len(finale),
+                        int((time.perf_counter() - inizio) * 1000))
+    print(f"[LINGUA] chat={chat_id} attesa={attesa} uscita={uscita} esito={esito}")
+    return finale
+
+
 def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
                     uso: dict = None, contesto: dict = None) -> str:
     """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
@@ -6967,8 +7044,10 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
 
             _accumula_uso(uso, response)
             if response.stop_reason != "tool_use":
-                return _risposta_finale(
-                    _testo_risposta(response, "Non ho una risposta per questo."), contesto)
+                testo = _testo_risposta(response, "Non ho una risposta per questo.")
+                testo = _lingua_giusta(client, system, active_tools, messages, testo, max_tokens,
+                                       chat_id, role, user_message, uso, contesto)
+                return _risposta_finale(testo, contesto)
 
             # Esegui gli strumenti richiesti e rimanda i risultati a Haiku
             messages.append({"role": "assistant", "content": response.content})
@@ -7010,8 +7089,10 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
             messages=messages,
         )
         _accumula_uso(uso, final)
-        return _risposta_finale(
-            _testo_risposta(final, "Non sono riuscito a completare la richiesta."), contesto)
+        testo = _testo_risposta(final, "Non sono riuscito a completare la richiesta.")
+        testo = _lingua_giusta(client, system, active_tools, messages, testo, max_tokens,
+                               chat_id, role, user_message, uso, contesto)
+        return _risposta_finale(testo, contesto)
 
     except Exception as e:
         # Unico punto che parla all'utente SENZA passare dal modello: qui usciva
@@ -7693,6 +7774,19 @@ _PAROLE_EN = {
     "i'm", "im", "i'd", "order", "return", "where", "when", "does", "did", "am",
 }
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+# Per riconoscere la lingua di una RISPOSTA del modello (vedi _lingua_giusta):
+# i due elenchi sopra piu' le parole che compaiono nelle risposte; "in" vale in
+# tutte e due le lingue e non conta.
+_PAROLE_IT_RISPOSTA = _PAROLE_IT | {
+    "tuo", "tua", "tuoi", "scrivi", "puoi", "ti", "nel", "nella", "dal", "sul", "dell",
+    "dello", "cui", "hai", "numero", "indirizzo", "spedizione", "servono", "serve",
+    "annullare", "modificare", "ordine", "sei", "siamo", "sulla", "degli", "delle", "ai",
+}
+_PAROLE_EN_RISPOSTA = (_PAROLE_EN - {"in"}) | {
+    "your", "we", "our", "will", "be", "this", "that", "if", "or", "not", "have", "has",
+    "on", "at", "from", "write", "number", "address", "shipping", "cancel", "need",
+    "used", "status", "they", "there", "here", "just", "any", "all", "get", "us",
+}
 
 
 def _lingua_del_testo(testo: str) -> str:
@@ -8962,6 +9056,7 @@ def chat(request: ChatRequest, http_request: Request,
             "chat_id": request.chat_id,
             "ip_hash": ip_hash,
             "lingua": _lingua_fissa(lingua_hint, request.message),
+            "lingua_hint": lingua_hint,
         }
         bot_reply = chat_with_tools(request.chat_id, request.message, role, uso, contesto)
         # Rete per il retail: se il modello ha scritto "non ho questa
