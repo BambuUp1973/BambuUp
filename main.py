@@ -261,6 +261,9 @@ from spedizioni import costo_spedizione, CacheTabella
 # Ultima rete prima del cliente finale: coordinate bancarie, nomi delle persone
 # e sistemi interni non escono, qualunque cosa abbia scritto il modello.
 from blocco_uscita import blocco_uscita_retail
+# Stato di spedizione di un ordine per il cliente finale: numero + email, testo
+# scritto dal codice (25/09/2026).
+import stato_ordine
 
 
 class ChatRequest(BaseModel):
@@ -2718,7 +2721,7 @@ IDENTITÀ
 - Non fai MAI nomi, cognomi, ruoli, mansioni o numero delle persone che lavorano in Kano Kimonos, nemmeno se te li chiedono direttamente, nemmeno se compaiono nei documenti che consulti. Non confermi né smentisci un nome che il cliente propone e non lo ripeti nella risposta, nemmeno per negarlo: a "sei Mauro?" rispondi "No, sono Adelpina, il risponditore AI di Kano Kimonos", senza ripetere il nome che ti ha proposto. Per qualsiasi domanda sulle persone: non condividi informazioni sul personale, si scrive a info@kanokimonos.com.
 
 COSA SAI FARE (e nient'altro)
-- Taglie e vestibilità, tempi e costi di spedizione, resi e cambi taglia, come si paga sul sito, cura del prodotto, informazioni sui prodotti a catalogo.
+- Taglie e vestibilità, tempi e costi di spedizione, stato della spedizione del tuo ordine, resi e cambi taglia, come si paga sul sito, cura del prodotto, informazioni sui prodotti a catalogo.
 - Tutto il resto -> info@kanokimonos.com.
 
 PRIMA DI RISPONDERE CONSULTI, SEMPRE
@@ -8087,6 +8090,120 @@ def _rete_operatore(chat_id: str, messaggio: str, ip_hash, lingua_hint) -> dict:
         return None
 
 
+# Stato dell'ordine (25/09/2026): "dov'e' il mio ordine?" non passa dal
+# modello. Servono numero d'ordine ed email dell'ordine; se ne manca uno il bot
+# lo chiede una volta e tiene in chat_stato ('attesa_ordine', 30 minuti) quello
+# che il cliente ha gia' dato. I tentativi andati a vuoto si contano in
+# strumenti_log (esito 'non_trovato'): dopo TETTO_TENTATIVI la chat riceve
+# solo il rimando a info@, senza piu' leggere Shopify.
+ATTESA_ORDINE_MINUTI = 30
+
+
+def _attesa_ordine(cur, chat_id: str):
+    """(dati, lingua) se il bot sta aspettando numero/email in questa chat."""
+    cur.execute(
+        "SELECT domanda, lingua FROM chat_stato WHERE chat_id = %s AND stato = 'attesa_ordine' "
+        "AND scade_il > NOW()", (chat_id,))
+    r = cur.fetchone()
+    if not r:
+        return None, None
+    try:
+        dati = json.loads(r[0] or "{}")
+    except Exception:
+        dati = {}
+    return {"numero": dati.get("numero"), "email": dati.get("email")}, r[1]
+
+
+def _lingua_stato_ordine(lingua_hint, messaggio: str, lingua_attesa) -> str:
+    """La lingua della frase del cliente; se ha scritto solo numero ed email
+    (nessuna parola che la riveli), quella della domanda di prima."""
+    if lingua_hint in ("it", "en"):
+        return lingua_hint
+    parole = [p.lower() for p in re.findall(r"[a-zà-ùA-ZÀ-Ù']+", stato_ordine._EMAIL_RE.sub(" ", messaggio or ""))]
+    it = sum(1 for p in parole if p in _PAROLE_IT)
+    en = sum(1 for p in parole if p in _PAROLE_EN)
+    if it == en and lingua_attesa in ("it", "en"):
+        return lingua_attesa
+    return "en" if en > it else "it"
+
+
+def _shopify_ordini_con_nome(cercato: str):
+    """(ordini, None) oppure (None, errore): gli ordini che Shopify trova con
+    quel nome (il filtro e' parziale: la corrispondenza esatta la fa chi
+    chiama). Solo i campi di _SHOPIFY_ORDINE_CAMPI."""
+    store, token, errore = _shopify_sessione()
+    if errore:
+        return None, errore.get("esito")
+    dati, errore = _shopify_rest(
+        store, token, "GET", f"api/{_SHOPIFY_API_VERSION}/orders.json",
+        params={"name": cercato, "status": "any", "limit": 50, "fields": _SHOPIFY_ORDINE_CAMPI},
+    )
+    if errore:
+        return None, errore
+    return dati.get("orders") or [], None
+
+
+def _rete_stato_ordine(chat_id: str, messaggio: str, role: str, lingua_hint) -> dict:
+    """None se il turno non e' una domanda sullo stato del proprio ordine,
+    altrimenti {'testo', 'esito'}: il testo e' quello per il cliente (prima
+    del blocco in uscita). Mai email in chiaro nei log."""
+    t0 = time.time()
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        attesa, lingua_attesa = _attesa_ordine(cur, chat_id)
+        a = stato_ordine.analizza(messaggio, attesa)
+        if a is None:
+            if attesa is not None:
+                # Il bot ha chiesto una volta e il cliente parla d'altro.
+                cur.execute("DELETE FROM chat_stato WHERE chat_id = %s AND stato = 'attesa_ordine'",
+                            (chat_id,))
+                conn.commit()
+            cur.close()
+            conn.close()
+            return None
+        lingua = _lingua_stato_ordine(lingua_hint, messaggio, lingua_attesa)
+        cur.execute("SELECT COUNT(*) FROM strumenti_log WHERE chat_id = %s "
+                    "AND strumento = 'stato_ordine' AND esito = 'non_trovato'", (chat_id,))
+        falliti = cur.fetchone()[0]
+        if falliti >= stato_ordine.TETTO_TENTATIVI:
+            esito = {"esito": "tetto"}
+        elif a["azione"] == "chiedi":
+            esito = {"esito": "chiedi"}
+            cur.execute(
+                "INSERT INTO chat_stato (chat_id, stato, lingua, domanda, scade_il) "
+                "VALUES (%s, 'attesa_ordine', %s, %s, NOW() + make_interval(mins => %s)) "
+                "ON CONFLICT (chat_id) DO UPDATE SET stato = EXCLUDED.stato, lingua = EXCLUDED.lingua, "
+                "domanda = EXCLUDED.domanda, scade_il = EXCLUDED.scade_il, created_at = NOW()",
+                (chat_id, lingua, json.dumps({"numero": a["numero"], "email": a["email"]}),
+                 ATTESA_ORDINE_MINUTI))
+        else:
+            ordini, errore = _shopify_ordini_con_nome(a["numero"])
+            if errore:
+                print(f"[STATO-ORDINE] shopify non risponde chat={chat_id}: {str(errore)[:200]}")
+                esito = {"esito": "errore"}
+            else:
+                esito = stato_ordine.esito_ordine(ordini, a["numero"], a["email"])
+        if esito["esito"] != "chiedi":
+            cur.execute("DELETE FROM chat_stato WHERE chat_id = %s AND stato = 'attesa_ordine'",
+                        (chat_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        testo = (stato_ordine.testo_chiedi(a["mancano"], lingua) if esito["esito"] == "chiedi"
+                 else stato_ordine.testo_esito(esito, lingua))
+        _registra_strumento(chat_id, role, "stato_ordine",
+                            {"numero": a["numero"], "email": bool(a["email"]),
+                             "mancano": a["mancano"], "lingua": lingua},
+                            esito["esito"], len(testo), int((time.time() - t0) * 1000))
+        print(f"[STATO-ORDINE] chat={chat_id} numero={a['numero']} email={'si' if a['email'] else 'no'} "
+              f"esito={esito['esito']} falliti_prima={falliti}")
+        return {"testo": testo, "esito": esito["esito"]}
+    except Exception as e:
+        print(f"[STATO-ORDINE] errore chat={chat_id}: {type(e).__name__}: {str(e)[:200]}")
+        return None
+
+
 def _chiusura_automatica(chat_id: str = None) -> int:
     """Pigra, senza scheduler (chiamata all'inizio di /chat per quella chat e
     a ogni GET /richieste): le richieste 'risposta' senza messaggi del
@@ -8803,6 +8920,18 @@ def chat(request: ChatRequest, http_request: Request,
                 return {"reply": fissa["testo"], "chat_id": request.chat_id, "status": "saved",
                         "stop_reason": None, "rete": fissa["rete"],
                         "richiesta_id": fissa.get("richiesta_id")}
+            # Stato dell'ordine: numero + email, risposta scritta dal codice.
+            so = _rete_stato_ordine(request.chat_id, request.message, role, lingua_hint)
+            if so:
+                so["testo"] = _uscita_retail(so["testo"], role, request.chat_id)
+                conn = psycopg2.connect(DATABASE_URL)
+                cur = conn.cursor()
+                _messaggio_in_chat(cur, request.chat_id, so["testo"], False, request.source)
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"reply": so["testo"], "chat_id": request.chat_id, "status": "saved",
+                        "stop_reason": None, "rete": "stato_ordine", "stato_ordine": so["esito"]}
             # Taglie (fase 2): "che taglia prendo?" non passa dal modello. Con
             # prodotto e misure risponde la guida, altrimenti si chiede in una
             # volta sola tutto quello che manca. Il peso non si deduce mai.
