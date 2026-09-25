@@ -6965,6 +6965,18 @@ def _lingua_chiara(testo: str, minimo: int) -> str:
     return None
 
 
+def _altra_lingua(lingua: str) -> str:
+    return {"it": "en", "en": "it"}.get(lingua)
+
+
+def _blocco_altra_lingua(testo: str, attesa: str) -> bool:
+    """True se un blocco della risposta (paragrafi separati da righe vuote o
+    da '---') e' chiaramente nell'altra lingua rispetto a quella attesa."""
+    altra = _altra_lingua(attesa)
+    blocchi = re.split(r"\n\s*\n|\n\s*-{3,}\s*\n", testo or "")
+    return any(_lingua_chiara(b, 3) == altra for b in blocchi)
+
+
 def _lingua_giusta(client, system, tools, messages, testo, max_tokens, chat_id, role,
                    user_message, uso, contesto) -> str:
     if _normalize_role(role) != "retail" or not contesto or contesto.get("testo_fisso"):
@@ -6972,8 +6984,14 @@ def _lingua_giusta(client, system, tools, messages, testo, max_tokens, chat_id, 
     hint = contesto.get("lingua_hint")
     attesa = _lingua_chiara(user_message, 2) or (hint if hint in ("it", "en") else None)
     uscita = _lingua_chiara(testo, 3)
-    if not attesa or not uscita or uscita == attesa:
+    # 25/09/2026: anche la risposta BILINGUE (un blocco nella lingua giusta e
+    # uno nell'altra) si riscrive: nel complesso non e' "chiara", ma un suo
+    # blocco si'.
+    bilingue = bool(attesa) and uscita != _altra_lingua(attesa) and _blocco_altra_lingua(testo, attesa)
+    if not attesa or not (bilingue or (uscita and uscita != attesa)):
         return testo
+    if bilingue:
+        uscita = "bilingue"
     it_nome, en_nome = _LINGUA_NOMI[attesa]
     istruzione = (
         f"\n\nLINGUA DELLA RISPOSTA, OBBLIGATORIA: il cliente scrive in {it_nome}. Scrivi "
@@ -6990,6 +7008,8 @@ def _lingua_giusta(client, system, tools, messages, testo, max_tokens, chat_id, 
                 f"[Messaggio interno, non del cliente] Riscrivi la tua ultima risposta "
                 f"interamente in {it_nome}, con lo stesso contenuto, gli stessi dati e gli "
                 f"stessi rimandi, senza aggiungere ne' togliere niente e senza commenti. "
+                + (f"Una sola versione, solo in {it_nome}: niente parti ripetute in altre lingue. "
+                   if bilingue else "") +
                 f"Rewrite your last reply entirely in {en_nome}.")},
         ]
         r = client.messages.create(
@@ -7005,13 +7025,24 @@ def _lingua_giusta(client, system, tools, messages, testo, max_tokens, chat_id, 
         esito, finale = "errore", testo
     else:
         uscita2 = _lingua_chiara(secondo, 3)
-        esito = "corretta" if uscita2 == attesa else "ancora_sbagliata"
+        giusta = uscita2 == attesa and not _blocco_altra_lingua(secondo, attesa)
+        esito = "corretta" if giusta else "ancora_sbagliata"
         finale = secondo
     _registra_strumento(chat_id, role, "rete_lingua",
                         {"attesa": attesa, "uscita": uscita, "hint": hint}, esito, len(finale),
                         int((time.perf_counter() - inizio) * 1000))
     print(f"[LINGUA] chat={chat_id} attesa={attesa} uscita={uscita} esito={esito}")
     return finale
+
+
+# L'unico testo che chat_with_tools scrive senza il modello (errore del
+# servizio): nella lingua dei testi fissi, contesto['lingua'].
+_ERRORE_TECNICO = {
+    "it": ("Non riesco a rispondere in questo momento per un problema tecnico del "
+           "servizio. Non è una risposta sulla tua domanda: riprova fra poco."),
+    "en": ("I can't reply right now because of a technical problem with the service. "
+           "This is not an answer to your question: please try again shortly."),
+}
 
 
 def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
@@ -7098,10 +7129,9 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
         # Unico punto che parla all'utente SENZA passare dal modello: qui usciva
         # str(e) grezzo (chiavi, quote, stack del client). Dettaglio nel log.
         print(f"[AI] eccezione: {e}")
-        return (
-            "Non riesco a rispondere in questo momento per un problema tecnico del "
-            "servizio. Non è una risposta sulla tua domanda: riprova fra poco."
-        )
+        lingua = (contesto or {}).get("lingua")
+        lingua = lingua if lingua in ("it", "en") else _lingua_del_testo(user_message)
+        return _ERRORE_TECNICO[lingua]
 
 
 # --- CHIAVE AMMINISTRATIVA SUGLI ENDPOINT DI SERVIZIO ------------------------
@@ -7195,14 +7225,20 @@ _LIMITE_TETTO_DEFAULT = 300
 _LIMITE_LOCK = threading.Lock()
 _LIMITE_PER_IP = {}                      # impronta ip -> deque di timestamp
 _LIMITE_GIORNO = {"giorno": None, "conteggio": 0}
-_LIMITE_MESSAGGIO = (
-    "Hai inviato troppe richieste in poco tempo. Riprova fra qualche minuto, "
-    "oppure scrivi a info@kanokimonos.com."
-)
-_LIMITE_MESSAGGIO_TETTO = (
-    "Il servizio ha raggiunto il numero massimo di messaggi per oggi. Riprova "
-    "domani, oppure scrivi a info@kanokimonos.com."
-)
+# Dal 25/09/2026 in due lingue, scelte come gli altri testi fissi del codice
+# (_lingua_fissa: la lingua del widget, altrimenti quella del messaggio).
+_LIMITE_MESSAGGIO = {
+    "it": ("Hai inviato troppe richieste in poco tempo. Riprova fra qualche minuto, "
+           "oppure scrivi a info@kanokimonos.com."),
+    "en": ("You have sent too many requests in a short time. Please try again in a few "
+           "minutes, or write to info@kanokimonos.com."),
+}
+_LIMITE_MESSAGGIO_TETTO = {
+    "it": ("Il servizio ha raggiunto il numero massimo di messaggi per oggi. Riprova "
+           "domani, oppure scrivi a info@kanokimonos.com."),
+    "en": ("The service has reached the maximum number of messages for today. Please "
+           "try again tomorrow, or write to info@kanokimonos.com."),
+}
 
 
 def tetto_giornaliero_clienti() -> int:
@@ -7241,9 +7277,11 @@ def _impronta_ip(ip: str) -> str:
     return hashlib.sha256(ip.encode("utf-8")).hexdigest()[:12]
 
 
-def controlla_limite_clienti(ip: str):
+def controlla_limite_clienti(ip: str, lingua: str = "it"):
     """None se la richiesta passa (e viene contata), altrimenti il messaggio
-    gentile da restituire. Le richieste rifiutate NON vengono contate."""
+    gentile da restituire, nella lingua data. Le richieste rifiutate NON
+    vengono contate."""
+    lingua = lingua if lingua in ("it", "en") else "it"
     ora = time.time()
     giorno = time.strftime("%Y-%m-%d", time.gmtime(ora))
     k = _impronta_ip(ip)
@@ -7252,14 +7290,14 @@ def controlla_limite_clienti(ip: str):
             _LIMITE_GIORNO["giorno"] = giorno
             _LIMITE_GIORNO["conteggio"] = 0
         if _LIMITE_GIORNO["conteggio"] >= tetto_giornaliero_clienti():
-            return _LIMITE_MESSAGGIO_TETTO
+            return _LIMITE_MESSAGGIO_TETTO[lingua]
         dq = _LIMITE_PER_IP.setdefault(k, deque())
         while dq and ora - dq[0] > 3600:
             dq.popleft()
         if len(dq) >= _LIMITE_ORA:
-            return _LIMITE_MESSAGGIO
+            return _LIMITE_MESSAGGIO[lingua]
         if sum(1 for t in dq if ora - t <= 300) >= _LIMITE_5MIN:
-            return _LIMITE_MESSAGGIO
+            return _LIMITE_MESSAGGIO[lingua]
         dq.append(ora)
         _LIMITE_GIORNO["conteggio"] += 1
         if len(_LIMITE_PER_IP) > 5000:
@@ -8962,7 +9000,9 @@ def chat(request: ChatRequest, http_request: Request,
     # richiesta rifiutata non costa niente. L'IP non viene salvato.
     if role not in ROLES_INTERNI:
         ip = ip_del_chiamante(http_request)
-        blocco = controlla_limite_clienti(ip)
+        lingua_limite = _lingua_fissa(request.lingua if request.lingua in ("it", "en") else None,
+                                      request.message)
+        blocco = controlla_limite_clienti(ip, lingua_limite)
         if blocco:
             print(f"[LIMITE] rifiutata profilo={role} ip_impronta={_impronta_ip(ip)} "
                   f"stato={stato_limite_clienti()}")
