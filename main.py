@@ -2714,11 +2714,11 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 RETAIL_PROMPT = """Sei l'assistente automatico di Kano Kimonos e stai parlando con un cliente finale su kanokimonos.com.
 
 IDENTITÀ
-- Ti chiami Adelpina e sei il risponditore AI di Kano Kimonos. Se ti chiedono come ti chiami o chi sei: "Sono Adelpina, il risponditore AI di Kano Kimonos". Adelpina è il tuo nome, non una persona: non ti spacci MAI per umana, non firmi i messaggi, non ti dai un ruolo in azienda.
+- Sei il risponditore automatico di Kano Kimonos e non hai un nome proprio. Se ti chiedono come ti chiami o chi sei: "Sono il risponditore automatico di Kano Kimonos". Non ti spacci MAI per una persona, non firmi i messaggi, non ti dai un ruolo in azienda.
 - Rispondi nella lingua in cui ti scrive il cliente, per intero: se scrive in inglese, tutta la risposta è in inglese, rimandi compresi.
 - Non dici MAI in che modalità o profilo operi. Le parole "modalità", "profilo" e "retail" riferite a te non esistono.
 - Dai del tu, al singolare. Mai "voi", mai "vi consiglio".
-- Non fai MAI nomi, cognomi, ruoli, mansioni o numero delle persone che lavorano in Kano Kimonos, nemmeno se te li chiedono direttamente, nemmeno se compaiono nei documenti che consulti. Non confermi né smentisci un nome che il cliente propone e non lo ripeti nella risposta, nemmeno per negarlo: a "sei Mauro?" rispondi "No, sono Adelpina, il risponditore AI di Kano Kimonos", senza ripetere il nome che ti ha proposto. Per qualsiasi domanda sulle persone: non condividi informazioni sul personale, si scrive a info@kanokimonos.com.
+- Non fai MAI nomi, cognomi, ruoli, mansioni o numero delle persone che lavorano in Kano Kimonos, nemmeno se te li chiedono direttamente, nemmeno se compaiono nei documenti che consulti. Non confermi né smentisci un nome che il cliente propone e non lo ripeti nella risposta, nemmeno per negarlo: a "sei Mauro?" rispondi "No, sono il risponditore automatico di Kano Kimonos", senza ripetere il nome che ti ha proposto. Per qualsiasi domanda sulle persone: non condividi informazioni sul personale, si scrive a info@kanokimonos.com.
 
 COSA SAI FARE (e nient'altro)
 - Taglie e vestibilità, tempi e costi di spedizione, stato della spedizione del tuo ordine, resi e cambi taglia, come si paga sul sito, cura del prodotto, informazioni sui prodotti a catalogo.
@@ -8077,7 +8077,7 @@ def tool_salva_email_richiesta(email, user_message, contesto: dict) -> dict:
 #     vuota e stato_conversazione 'operatore'; il widget mostra una riga di
 #     stato, non una bolla.
 #  2. la chat e' in 'conferma_operatore' -> si' apre, no lascia, altro
-#     prosegue con Adelpina.
+#     prosegue con il bot.
 #  3. il messaggio chiede una persona -> testo di conferma, chat in
 #     'conferma_operatore' per 30 minuti.
 # bot_non_sa resta automatico (senza conferma, priorita' alta); il limite di
@@ -8554,7 +8554,7 @@ def richieste_rispondi(rid: int, body: RichiestaRispondiRequest):
 def richieste_chiudi(rid: int, body: RichiestaChiudiRequest):
     """Chiude una richiesta, da 'aperta' o da 'risposta': stato 'chiusa', con
     chi l'ha chiusa e quando. Dal 22/09/2026 il cliente trova in chat il
-    messaggio di chiusura (bolla dell'operatore) e la chat torna ad Adelpina;
+    messaggio di chiusura (bolla dell'operatore) e la chat torna al bot;
     una richiesta gia' chiusa non riceve un secondo messaggio. Il 'motivo' e'
     facoltativo e resta solo per lo staff."""
     operatore = (body.operatore or "").strip()

@@ -47,7 +47,7 @@ class Pagamenti(unittest.TestCase):
 
     def test_parola_maiuscola_non_e_un_bic(self):
         # 8 lettere maiuscole ma senza codice paese in quinta-sesta posizione
-        for parola in ("ADELPINA", "KIMONOSX", "SPEDIZIO"):
+        for parola in ("RISPONDE", "KIMONOSX", "SPEDIZIO"):
             r = blocco_uscita_retail(f"Scritto tutto maiuscolo: {parola}.")
             self.assertFalse(r["bloccato"], parola)
 
@@ -198,7 +198,7 @@ class RisposteNormali(unittest.TestCase):
         "Puoi chiudere e tornare più tardi: la conversazione resta.",
         "Va bene, dimmi pure.",
         "L'operatore ha chiuso la conversazione. Se hai altre domande sono qui.",
-        "Ciao, sono Adelpina, il risponditore AI di Kano Kimonos. Buongiorno, come posso aiutarti?",
+        "Ciao, sono il risponditore automatico di Kano Kimonos. Buongiorno, come posso aiutarti?",
         "Il costo della spedizione in Italia per i prodotti da catalogo è di 5,90 euro. I tempi sono di 2-3 giorni.",
         "Si paga completando l'ordine su kanokimonos.com con carta o PayPal.",
         "Le immagini vanno inviate in formato vettoriale (.AI, .EPS, .PDF, .SVG). Se hai solo un file raster "

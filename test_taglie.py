@@ -325,7 +325,7 @@ class LetturaMessaggio(unittest.TestCase):
         self.assertTrue(TAGLIA_RE.search("M2 per tuo figlio"))
         self.assertTrue(TAGLIA_RE.search("XL o XXL"))
         self.assertIsNone(TAGLIA_RE.search("L'ordine parte domani. S'intende che il costo è 5,90 euro."))
-        self.assertIsNone(TAGLIA_RE.search("Ciao, sono Adelpina, il risponditore AI di Kano Kimonos."))
+        self.assertIsNone(TAGLIA_RE.search("Ciao, sono il risponditore automatico di Kano Kimonos."))
 
 
 if __name__ == "__main__":
