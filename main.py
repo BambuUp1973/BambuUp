@@ -2081,6 +2081,18 @@ def tool_cerca_ordini_woocommerce(cliente: str) -> dict:
             "'clienti_negli_ordini' compaiono persone diverse, dillo e separa gli ordini "
             "per cliente invece di attribuirli tutti allo stesso."
         ),
+        "indirizzi_di_spedizione_distinti": sorted({
+            " - ".join(x for x in (m["spedizione"]["destinatario"], m["spedizione"]["indirizzo"]) if x)
+            for m in mostrati
+        }),
+        "come_riportarlo": (
+            "Per ogni ordine: numero, data, stato, pagamento (pagato sì/no e METODO), "
+            "prodotti. L'INDIRIZZO DI SPEDIZIONE va SEMPRE riportato: una volta sola se "
+            "è uguale per tutti gli ordini (vedi 'indirizzi_di_spedizione_distinti'), "
+            "altrimenti ordine per ordine. Uno stato che non torna con il pagamento "
+            "(es. 'spedito ma non pagato' con una data di pagamento) si riporta com'è, "
+            "senza spiegarne il motivo: il motivo non è nei dati."
+        ),
         "ordini": mostrati,
         "nota_importi": "Nessun importo in euro: i totali non sono riportati e non vanno chiesti a questa fonte.",
     }
@@ -11353,6 +11365,15 @@ def tool_giacenza_fully(query: str = None, sku: str = None,
     }
     if len(gruppi) > _FULLY_SOGLIA_COMPATTO:
         out["linee"] = linee
+        out["totali_complessivi_calcolati_dallo_strumento"] = {
+            campo: sum(l["totali_linea"][campo] for l in linee)
+            for campo in ("in_magazzino", "libere", "in_arrivo", "in_uscita")
+        }
+        out["nota_totali_complessivi"] = (
+            "Se dai un totale di tutti i modelli usa SOLO "
+            "'totali_complessivi_calcolati_dallo_strumento' (somma di TUTTE le linee, "
+            "anche di quelle che non mostri): non sommare tu."
+        )
         out["nota_formato_compatto"] = _FULLY_NOTA_COMPATTO.format(soglia=_FULLY_SOGLIA_COMPATTO)
     if sku_clean and gruppi:
         out["sku_cercato_corrisponde_a"] = next(
