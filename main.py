@@ -2004,7 +2004,7 @@ def format_order_for_human(order: dict) -> str:
     status = (order.get("status") or "").lower()
     if status in ["completed", "shipped"]:
         lines.append(
-            "Nota tracking: l'ordine risulta spedito/completato. Per il tracking dettagliato bisogna controllare il sistema logistica."
+            "Nota tracking: l'ordine risulta completato in WooCommerce. Questa fonte non contiene tracking."
         )
     else:
         lines.append(
@@ -2823,7 +2823,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - CONTESTAZIONI: se l'utente mette in dubbio un dato che hai appena dato, richiama lo strumento e rileggi, non cambiare risposta per assecondarlo. Se il dato è quello che avevi detto, ripetilo citando il campo. Se l'utente afferma un fatto fisico che i dati non confermano (es. "sono già stati consegnati"), non riscrivere lo stato: di' cosa dice il campo, che la sua informazione non risulta a sistema e che le due cose vanno riconciliate.
 - Per domande AGGREGATE/di riepilogo sugli ordini custom ("quanti ordini...", "quanti pagati/non pagati/in produzione/spediti", "il cliente X ha pagato / è partito", conteggi per mese) usa statistiche_ordini_custom. Quando riporti gli spediti al cliente e sono presenti ordini con stato storico 'shipped', dichiara SEMPRE la distinzione (es. "123 spediti al cliente + 46 con stato storico legacy 'shipped'").
 - DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli. VALE PER TUTTE LE PIATTAFORME, anche per gli ORDINI DA CATALOGO, sia quelli dell'archivio WooCommerce (il vecchio sito) sia quelli del sito di vendita attuale su Shopify: su un ordine da catalogo NON riportare il totale dell'ordine in euro e NON riportare i prezzi o i totali delle singole righe, anche se la scheda li contiene. Puoi dire se risulta pagato e con che metodo, non quanto.
-- ORDINI DELL'ARCHIVIO WOOCOMMERCE E FULLY: il sito di vendita attuale è Shopify (www.kanokimonos.com); WooCommerce è il vecchio sito e dal 29/09/2026 le sue schede sono solo l'archivio degli ordini vecchi. La scheda di un ordine dell'archivio viene SOLO da WooCommerce, che non sa NIENTE di Fully, non ha numeri ASN (l'ASN esiste solo per gli ordini custom di kanokimonos.app) e non ha un tracking. Su un ordine da catalogo NON parlare di Fully, di ASN, di carichi, di tracking o di consegna, né in positivo né in negativo: "non è ancora stato spedito da Fully" e "non c'è un numero ASN" sono frasi INVENTATE, esattamente come lo sarebbero "è partito" o "è in consegna". Riporta lo stato WooCommerce così com'è e basta. Se l'utente chiede di Fully, del tracking o della consegna di un ordine da catalogo, di' che quella fonte non contiene quei dati; non proporre di "controllare su Fully" come se lo strumento potesse farlo per un ordine da catalogo.
+- ORDINI DELL'ARCHIVIO WOOCOMMERCE E FULLY: il sito di vendita attuale è Shopify (www.kanokimonos.com); WooCommerce è il vecchio sito e dal 29/09/2026 le sue schede sono solo l'archivio degli ordini vecchi. La scheda di un ordine dell'archivio viene SOLO da WooCommerce, che non sa NIENTE di Fully, non ha numeri ASN (l'ASN esiste solo per gli ordini custom di kanokimonos.app) e non ha un tracking. Su un ordine da catalogo NON parlare di Fully, di ASN, di carichi, di tracking o di consegna, né in positivo né in negativo: "non è ancora stato spedito da Fully" e "non c'è un numero ASN" sono frasi INVENTATE, esattamente come lo sarebbero "è partito" o "è in consegna". Riporta lo stato WooCommerce così com'è e basta. Se l'utente chiede di Fully, del tracking o della consegna di un ordine da catalogo, di' che quella fonte non contiene quei dati; non proporre di "controllare su Fully" come se lo strumento potesse farlo per un ordine da catalogo. VIETATO anche RIMANDARE l'utente a Fully (o al "sistema logistica", al "magazzino", al portale fullyview) per il tracking, la consegna o il carico di un ordine da catalogo: "il tracking va cercato su Fully", "per la consegna controlla su Fully" sono frasi vietate. Su un ordine da catalogo la parola Fully non compare proprio, nemmeno in chiusura e nemmeno se l'utente non l'ha chiesto.
 - ORDINE DI SOLE CIFRE NON TROVATO (es. "1002", "ordine 1045"): gli ordini del sito di vendita attuale sono su Shopify e per quelli NON hai uno strumento. cerca_ordine_per_numero guarda gli ordini custom, gli ordini di fabbrica e, per i numeri di sole cifre, SOLO l'ARCHIVIO degli ordini del vecchio sito WooCommerce. Quindi, se un numero di sole cifre non viene trovato, NON dire "ordine non trovato", "non esiste" o "non risulta": di' che hai cercato solo nell'archivio degli ordini vecchi del sito WooCommerce (più le altre fonti che lo strumento dice di aver guardato), che per gli ordini del sito nuovo su Shopify non hai ancora uno strumento, e che quell'ordine va guardato nel pannello Shopify. Se invece lo trovi nell'archivio, di' che è un ordine del vecchio sito WooCommerce.
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 - "PRODUZIONE" E "LAVORAZIONE" SONO PAROLE A DUE FACCE: esistono due assi diversi, su due piattaforme diverse, che contano cose diverse. (1) ORDINI CUSTOM su kanokimonos.app: si contano ORDINI di clienti, con statistiche_ordini_custom. (2) PIPELINE DI FABBRICA su btoweb: si contano PEZZI ordinati ai fornitori, con catalogo_btoweb tipo='produzione'. Come si sceglie:
@@ -10291,14 +10291,92 @@ def _fully_solo_master(righe: list, per_ean: dict) -> list:
             or per_ean.get(str(p.get("barcode") or "").strip())]
 
 
+# 30/09/2026 (C45). "Kimonos" dentro un nome e' il MARCHIO (Kano Kimonos),
+# non il tipo: "BJJ Belt Kano Kimonos beginner" e' una cintura. Il marchio si
+# toglie dal nome prima di confrontarlo con le parole della domanda.
+_BTO_MARCHIO_RE = re.compile(r"\b(kano\s+)?kimonos\b")
+# Regola di Bambu del 30/09/2026: i KIMONI sono le GIACCHE. I pantaloni (anche
+# "ARASHI 2.0 BJJ Gi Pants White", componente del bundle Arashi 2.0 White) non
+# si elencano mai come kimoni. Si escludono per NOME: la sezione KIMONO del
+# master btoweb li contiene e i dati non si toccano.
+_BTO_PAROLE_PANTALONI = ("pants", "pant", "pantalone", "pantaloni", "trousers")
+
+
+def _bto_nome_senza_marchio(nome) -> str:
+    return _BTO_MARCHIO_RE.sub(" ", _wc_norm(str(nome or "")))
+
+
+def _bto_e_pantalone(nome) -> bool:
+    parole = re.split(r"[^a-z0-9]+", _wc_norm(str(nome or "")))
+    return any(p in _BTO_PAROLE_PANTALONI for p in parole)
+
+
+def _bto_escludi_pantaloni(q: str, token: list) -> bool:
+    """True quando la domanda chiede kimoni e non nomina i pantaloni."""
+    parole = re.split(r"[^a-z0-9]+", _wc_norm(q or ""))
+    return "kimono" in token and not any(p in _BTO_PAROLE_PANTALONI for p in parole)
+
+
+# Sezioni del master con prodotti di tipi diversi (rashguard e shorts insieme):
+# l'unica al 30/09/2026 e' SPECIAL EDITION. Non definiscono un tipo.
+_BTO_SEZIONI_MISTE = {"special edition"}
+
+
+def _bto_parola_di_tipo(t: str, sezioni: list) -> bool:
+    """La parola e' un TIPO di prodotto: combacia con la PRIMA parola del nome
+    di una sezione (KIMONO, RASHGUARD, FIGHTSHORT, BELT...). 'female', 'kids'
+    ed 'edition' non sono tipi."""
+    for sz in sezioni:
+        if _wc_norm(sz["nome"]).strip() in _BTO_SEZIONI_MISTE:
+            continue
+        prime = [x for x in _wc_norm(sz["nome"]).split() if x][:1]
+        if prime and _fully_taglia_stessa_parola(t, prime[0]):
+            return True
+    return False
+
+
+def _bto_modelli_per_tipo(token: list, tieni, sezioni: list) -> list:
+    """(riga, sezione) dei modelli di un TIPO: (a) le sezioni il cui nome
+    contiene le parole di tipo, con le parole residue nel nome del modello;
+    (b) i modelli che hanno nel nome, senza il marchio, TUTTE le parole."""
+    out, visti = [], set()
+
+    def aggiungi(r, sezione):
+        if id(r) not in visti and tieni(r.get("product_name")):
+            visti.add(id(r))
+            out.append((r, sezione))
+
+    for sz in sezioni:
+        parole_sez = [x for x in _wc_norm(sz["nome"]).split() if x]
+        consumate = [t for t in token if any(_fully_taglia_stessa_parola(t, x) for x in parole_sez)]
+        if not consumate:
+            continue
+        residue = [t for t in token if t not in consumate]
+        for r in sz["righe"]:
+            if residue and not _bto_match_radice(_bto_nome_senza_marchio(r.get("product_name")), residue):
+                continue
+            aggiungi(r, sz["nome"])
+    # Con una parola di tipo i nomi si cercano solo nelle sezioni MISTE: se no
+    # "cinture" si portava dietro le rashguard "rash comp belt rank".
+    con_tipo = any(_bto_parola_di_tipo(t, sezioni) for t in token)
+    for sz in sezioni:
+        if con_tipo and _wc_norm(sz["nome"]).strip() not in _BTO_SEZIONI_MISTE:
+            continue
+        for r in sz["righe"]:
+            if _bto_match_radice(_bto_nome_senza_marchio(r.get("product_name")), token):
+                aggiungi(r, sz["nome"])
+    return out
+
+
 def _bto_codici_per_nome(per_nome: dict, q: str):
-    """I codici (ean, sku) delle righe del master che corrispondono al nome, in
-    tre livelli: (1) nome con tutte le parole alla lettera; (2) per radici,
-    con i sinonimi (kimoni -> kimono, femminile -> female); (3) per SEZIONE
-    dell'anagrafica: le parole che combaciano con il nome della sezione sono
-    il TIPO ('kimoni' -> sezione KIMONO, i cui modelli si chiamano 'BJJ Gi
-    STEALTH' senza la parola kimono), le altre devono stare nel nome del
-    modello. (codici, corrispondenza)."""
+    """I codici (ean, sku) delle righe del master che corrispondono al nome.
+    Se la domanda nomina un TIPO di prodotto (kimoni, gi, rashguard, shorts,
+    cinture...) si parte dalla SEZIONE dell'anagrafica, come per la ricerca
+    per taglia: 'kimoni' -> sezione KIMONO, i cui modelli si chiamano 'BJJ Gi
+    STEALTH' senza la parola kimono (dal 30/09/2026: prima la ricerca per nome
+    si fermava su "BJJ Belt Kano Kimonos beginner"). Senza un tipo, due
+    livelli: (1) nome con tutte le parole alla lettera; (2) per radici, con i
+    sinonimi. Con i kimoni i pantaloni restano fuori. (codici, corrispondenza)."""
     def codici_di(righe):
         out = []
         for r in righe:
@@ -10314,8 +10392,17 @@ def _bto_codici_per_nome(per_nome: dict, q: str):
         # Solo parole di genere ("uomo"): senza un nome un AND vuoto direbbe
         # True e si porterebbe a casa tutto il master.
         return [], None
+    no_pantaloni = _bto_escludi_pantaloni(q, token)
     # "uomo" senza "donna": via i modelli con marcatore donna/bambino.
-    tieni = _fully_nome_da_uomo if solo_uomo else (lambda nome: True)
+    def tieni(nome):
+        if solo_uomo and not _fully_nome_da_uomo(nome):
+            return False
+        return not (no_pantaloni and _bto_e_pantalone(nome))
+    sezioni = _bto_anagrafica_sezioni()
+    if any(_bto_parola_di_tipo(t, sezioni) for t in token):
+        per_tipo = [r for r, _ in _bto_modelli_per_tipo(token, tieni, sezioni)]
+        if per_tipo:
+            return codici_di(per_tipo), "sezione del master btoweb (tipo) + nome -> EAN -> Fully per barcode"
     letterale = [r for n, righe in per_nome.items()
                  if all(t in n for t in parole) and tieni(n) for r in righe]
     if letterale:
@@ -10324,21 +10411,6 @@ def _bto_codici_per_nome(per_nome: dict, q: str):
               if _bto_match_radice(n, token) and tieni(n) for r in righe]
     if radici:
         return codici_di(radici), "nome nel master btoweb (radici delle parole) -> EAN -> Fully per barcode"
-    per_sezione = []
-    for sz in _bto_anagrafica_sezioni():
-        parole_sez = [x for x in _wc_norm(sz["nome"]).split() if x]
-        consumate = [t for t in token if any(_fully_taglia_stessa_parola(t, x) for x in parole_sez)]
-        if not consumate:
-            continue
-        residue = [t for t in token if t not in consumate]
-        for r in sz["righe"]:
-            if residue and not _bto_match_radice(r.get("product_name"), residue):
-                continue
-            if not tieni(r.get("product_name")):
-                continue
-            per_sezione.append(r)
-    if per_sezione:
-        return codici_di(per_sezione), "sezione del master btoweb (tipo) + nome -> EAN -> Fully per barcode"
     return [], None
 
 
@@ -10559,6 +10631,14 @@ _FULLY_TAGLIA_SINONIMI = {
     "donna": "female", "donne": "female", "femminile": "female",
     "femminili": "female", "woman": "female", "women": "female",
     "rash": "rashguard", "rashguards": "rashguard", "legging": "leggings",
+    # Colori: i nomi del master sono in inglese ("kimoni bianchi" -> white).
+    "bianco": "white", "bianca": "white", "bianchi": "white", "bianche": "white",
+    "nero": "black", "nera": "black", "neri": "black", "nere": "black",
+    "blu": "blue", "azzurro": "blue", "azzurri": "blue",
+    "rosso": "red", "rossa": "red", "rossi": "red", "rosse": "red",
+    "grigio": "grey", "grigia": "grey", "grigi": "grey", "grigie": "grey",
+    "verde": "green", "verdi": "green", "rosa": "pink",
+    "viola": "purple", "marrone": "brown", "marroni": "brown",
 }
 _FULLY_TAGLIA_XRUN_RE = re.compile(r"^(Y)?(X{2,})(L|S)$")
 
@@ -10674,47 +10754,25 @@ def _fully_giacenza_per_taglia(q: str, taglia: str, base: dict) -> dict:
                          "dire che non ci sono modelli.")}
     sezioni = _bto_anagrafica_sezioni()
 
-    # (1a) sezioni: ogni parola della query che combacia con una parola del
-    # nome della sezione e' "consumata" (il tipo); le parole residue devono
-    # stare nel nome del modello ('kimoni stealth' -> sezione KIMONO + nome
-    # con 'stealth'). Almeno una parola deve essere consumata.
+    # (1) modelli del tipo: sezioni + nomi (senza il marchio), con i kimoni
+    # senza pantaloni. Stessa selezione della ricerca senza taglia.
     candidati = {}      # nome normalizzato -> {"nome", "righe": [anagrafica], "sezioni": set}
-    sezioni_riconosciute = []
+    no_pantaloni = _bto_escludi_pantaloni(q, token)
 
-    def aggiungi(r, sezione=None):
+    def tieni(nome):
+        if solo_uomo and not _fully_nome_da_uomo(nome):
+            return False
+        return not (no_pantaloni and _bto_e_pantalone(nome))
+
+    for r, sezione in _bto_modelli_per_tipo(token, tieni, sezioni):
         nome = str(r.get("product_name") or "").strip()
         k = _wc_norm(nome).strip()
         if not k:
-            return
-        if solo_uomo and not _fully_nome_da_uomo(nome):
-            return
-        v = candidati.setdefault(k, {"nome": nome, "righe": [], "sezioni": set(), "_ids": set()})
-        if id(r) not in v["_ids"]:
-            v["_ids"].add(id(r))
-            v["righe"].append(r)
-        if sezione:
-            v["sezioni"].add(sezione)
-
-    for s in sezioni:
-        parole_sez = [p for p in _wc_norm(s["nome"]).split() if p]
-        consumate = [t for t in token if any(_fully_taglia_stessa_parola(t, p) for p in parole_sez)]
-        if not consumate:
             continue
-        residue = [t for t in token if t not in consumate]
-        prese = 0
-        for r in s["righe"]:
-            if residue and not _bto_match_radice(r.get("product_name"), residue):
-                continue
-            aggiungi(r, s["nome"])
-            prese += 1
-        if prese:
-            sezioni_riconosciute.append(s["nome"])
-    # (1b) nomi dell'anagrafica con TUTTE le parole (copre 'SPECIAL EDITION' e
-    # i modelli chiamati col nome e basta).
-    for s in sezioni:
-        for r in s["righe"]:
-            if _bto_match_radice(r.get("product_name"), token):
-                aggiungi(r, s["nome"])
+        v = candidati.setdefault(k, {"nome": nome, "righe": [], "sezioni": set()})
+        v["righe"].append(r)
+        v["sezioni"].add(sezione)
+    sezioni_riconosciute = sorted({x for v in candidati.values() for x in v["sezioni"]})
     # (1c) — tolto il 16/09/2026: su Fully non si cerca MAI per nome. I
     # modelli vengono solo dal master (sezioni + nomi); un barcode che non sta
     # nel master non esiste.
