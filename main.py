@@ -18,7 +18,6 @@ import time
 import psycopg2
 import requests
 import anthropic
-from woocommerce import API
 from docx import Document
 
 # docs_url/redoc_url/openapi_url a None: FastAPI pubblicava da sola /docs,
@@ -295,10 +294,11 @@ FONTI_FRASE = {
         "Non riesco a leggere gli ordini custom (kanokimonos.app) in questo "
         "momento: è un problema tecnico della fonte, non una risposta sull'ordine."
     ),
+    # WooCommerce e' il VECCHIO sito, letto solo come archivio ordini.
     "woocommerce": (
-        "Il canale catalogo (kanokimonos.com) non è consultabile: l'integrazione "
-        "con il sito non è attiva, quindi su quel canale non posso né confermare "
-        "né escludere nulla."
+        "Non riesco a leggere l'archivio degli ordini del vecchio sito "
+        "(WooCommerce) in questo momento: è un problema tecnico della fonte, "
+        "non una risposta sull'ordine."
     ),
     "btoweb": (
         "Non riesco a leggere gli ordini di fabbrica (btoweb) in questo momento: "
@@ -335,18 +335,144 @@ def errore_canale(fonte: str, dettaglio: str = None) -> str:
     return FONTI_FRASE.get(fonte, FRASE_CANALE_GENERICA)
 
 
-def get_wcapi():
-    # WOO_* prima: le WC_* risultano revocate sul sito ('Consumer key is
-    # invalid', verificato l'8/9/2026). WC_* solo se le WOO_* non ci sono.
-    woo = (os.getenv("WOO_BASE_URL"), os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET"))
-    url, key, secret = woo if all(woo) else (WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
-    return API(
-        url=url,
-        consumer_key=key,
-        consumer_secret=secret,
-        version="wc/v3",
-        timeout=30
-    )
+# --- CLIENT WOOCOMMERCE (archivio del vecchio sito) --------------------------
+# Dal 29/09/2026 il nome kanokimonos.com porta a Shopify, ma woocommerce e'
+# ancora vivo sul CDN Hostinger. L'URL resta https://kanokimonos.com/wp-json/
+# wc/v3/...: il nome serve per SNI, header Host e verifica del certificato.
+# Cambia SOLO l'indirizzo della connessione TCP, che va all'IP di
+# kanokimonos.com.cdn.hstgr.net, risolto all'avvio (mai scritto fisso).
+# Vale SOLO per la sessione qui sotto: Shopify, Fully, kanokimonos.app e
+# btoweb continuano a risolvere i nomi normalmente. Solo GET, basic auth.
+_WOO_HOST_CDN = "kanokimonos.com.cdn.hstgr.net"
+_WOO_IP = {"ip": None, "errore": None, "risolto_il": None}
+_WOO_TENTATIVI_BOT = 4      # il 403 "Bot Verification" di LiteSpeed e' transitorio
+_WOO_ATTESA_BOT = 3         # secondi fra un tentativo e l'altro
+
+
+def _woo_risolvi_ip() -> str:
+    import socket
+    try:
+        indirizzi = socket.getaddrinfo(_WOO_HOST_CDN, 443, socket.AF_INET, socket.SOCK_STREAM)
+        ip = indirizzi[0][4][0]
+        _WOO_IP.update(ip=ip, errore=None,
+                       risolto_il=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        print(f"[WOO] {_WOO_HOST_CDN} -> {ip}")
+    except Exception as e:
+        _WOO_IP.update(ip=None, errore=f"{type(e).__name__}: {e}")
+        print(f"[WOO] risoluzione di {_WOO_HOST_CDN} fallita: {e}. "
+              "L'archivio woocommerce non e' raggiungibile.")
+    return _WOO_IP["ip"]
+
+
+def _woo_base() -> str:
+    base = str(os.getenv("WOO_BASE_URL") or WC_API_URL or "").strip().rstrip("/")
+    if base.endswith("/wp-json/wc/v3"):
+        base = base[: -len("/wp-json/wc/v3")]
+    if base and not base.lower().startswith(("http://", "https://")):
+        base = "https://" + base
+    return base
+
+
+def _woo_sessione():
+    from requests.adapters import HTTPAdapter
+    from urllib3.connection import HTTPSConnection
+    from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+    from urllib.parse import urlsplit
+
+    class _ConnessioneWoo(HTTPSConnection):
+        # Solo il socket viene aperto verso l'IP Hostinger. In urllib3 'host'
+        # legge _dns_host, quindi lo si cambia per la sola apertura del socket
+        # e lo si rimette subito: SNI, Host e certificato restano sul nome.
+        def _new_conn(self):
+            if not _WOO_IP["ip"]:
+                raise ConnectionError(
+                    f"IP di {_WOO_HOST_CDN} non risolto: {_WOO_IP['errore']}")
+            nome = self._dns_host
+            self._dns_host = _WOO_IP["ip"]
+            try:
+                return super()._new_conn()
+            finally:
+                self._dns_host = nome
+
+    class _PoolWoo(HTTPSConnectionPool):
+        ConnectionCls = _ConnessioneWoo
+
+    class _AdattatoreWoo(HTTPAdapter):
+        def init_poolmanager(self, *args, **kwargs):
+            super().init_poolmanager(*args, **kwargs)
+            self.poolmanager.pool_classes_by_scheme = {
+                "http": HTTPConnectionPool, "https": _PoolWoo,
+            }
+
+    s = requests.Session()
+    host = urlsplit(_woo_base()).netloc
+    if host:
+        s.mount(f"https://{host}/", _AdattatoreWoo())
+    s.headers.update({
+        "User-Agent": "BambuUp-bot/1.0 (+https://bambuup.onrender.com)",
+        "Accept": "application/json",
+    })
+    return s
+
+
+_woo_risolvi_ip()
+_WOO_SESSIONE = _woo_sessione()
+
+
+def _woo_set_chiavi() -> list:
+    """WOO_* prima, poi WC_*: nessuna delle due e' stata provata davvero
+    attraverso l'IP Hostinger (29/09/2026). Si dichiara sempre quale ha risposto."""
+    return [
+        ("WOO_*", os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET")),
+        ("WC_*", WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+    ]
+
+
+def _woo_e_bot_verification(r) -> bool:
+    return r.status_code == 403 and "bot verification" in (r.text or "").lower()
+
+
+def woo_get(endpoint: str, params: dict = None, set_chiavi: str = None):
+    """GET sulla REST woocommerce attraverso l'IP Hostinger. Restituisce
+    (response o None, tentativi). Il 403 "Bot Verification" si ritenta fino a
+    _WOO_TENTATIVI_BOT volte; un 401/403 sulle chiavi passa al set successivo.
+    set_chiavi ('WOO_*' o 'WC_*') forza un solo set (per le sonde)."""
+    if not _WOO_IP["ip"]:
+        _woo_risolvi_ip()   # all'avvio puo' essere fallita per un attimo
+    tentativi = []
+    url = f"{_woo_base()}/wp-json/wc/v3/{endpoint}"
+    ultima = None
+    for nome_set, key, secret in _woo_set_chiavi():
+        if set_chiavi and nome_set != set_chiavi:
+            continue
+        if not (key and secret):
+            tentativi.append({"set": nome_set, "eccezione": "variabili non valorizzate"})
+            continue
+        for n in range(1, _WOO_TENTATIVI_BOT + 1):
+            try:
+                r = _WOO_SESSIONE.get(
+                    url, params=_wc_cache_buster(params), auth=(key, secret),
+                    timeout=30, allow_redirects=False,
+                )
+            except Exception as e:
+                tentativi.append({"set": nome_set, "tentativo": n,
+                                  "eccezione": f"{type(e).__name__}: {str(e)[:200]}"})
+                return None, tentativi
+            bot = _woo_e_bot_verification(r)
+            tentativi.append({"set": nome_set, "tentativo": n, "http": r.status_code,
+                              "bot_verification": bot,
+                              "cache": r.headers.get("x-litespeed-cache")})
+            print(f"[WOO] {endpoint} {tentativi[-1]}")
+            ultima = r
+            if bot and n < _WOO_TENTATIVI_BOT:
+                time.sleep(_WOO_ATTESA_BOT)
+                continue
+            break
+        if ultima is not None and ultima.status_code in (401, 403) \
+                and not _woo_e_bot_verification(ultima):
+            continue    # chiavi rifiutate: si prova il set successivo
+        return ultima, tentativi
+    return ultima, tentativi
 
 def get_custom_resource(resource: str, limit: int = 50, status: str = None, extra_params: dict = None):
     headers = {
@@ -1794,12 +1920,10 @@ def normalize_order(order):
 def search_orders_by_id(order_id: str):
     # Senza try/except un timeout o un errore SSL risaliva fino al catch-all e
     # usciva come testo tecnico: qui diventa un errore di canale dichiarato.
-    try:
-        wcapi = get_wcapi()
-        response = wcapi.get(f"orders/{order_id}")
-    except Exception as e:
+    response, tentativi = woo_get(f"orders/{order_id}")
+    if response is None:
         return {
-            "error": errore_canale("woocommerce", f"connessione fallita su orders/{order_id}: {e}"),
+            "error": errore_canale("woocommerce", f"connessione fallita su orders/{order_id}: {tentativi}"),
             "fonte": "woocommerce",
         }
     if response.status_code != 200:
@@ -2714,7 +2838,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre. NUMERO DI CARICO / REPLENISHMENT DA SOLO (es. "858314", "il carico 858314", "questo id è il replenishment di un ordine"): chiama tracciamento_fully con quel numero, SEMPRE, anche senza ordine e senza ASN. Se il numero è collegato a ordini custom torna la strada di kanokimonos.app; se NON lo è, lo strumento lo legge DIRETTAMENTE da Fully e torna il blocco 'carico_fully_diretto': riporta stato del carico ('stato_in_parole'), se il conteggio è chiuso o aperto ('conteggio_chiuso', 'chiuso_il'), le date, i totali di 'totali_calcolati_dallo_strumento' (attesi/buoni/danneggiati/mancanti, mai sommati fra loro), l'origine e gli 'altri_carichi_stessa_origine'. Corriere e tracking: Fully non li espone per i carichi in entrata, quindi riporta solo quello che c'è in 'asn_corrispondente'; se è assente di' che non risultano da nessuna fonte. Dichiara che il carico non risulta collegato a ordini custom. Se 'carico_fully_diretto' ha 'trovato': false, la frase è "non trovato su Fully" (mai "non ho accesso"); se ha 'error', Fully non è consultabile ora e non puoi né confermare né escludere. MAI rimandare l'utente a cercarsi il carico sul portale Fully: lo hai letto tu.
 - RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
-- GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). È l'UNICA giacenza che leggi: dal 29/09/2026 il vecchio sito woocommerce non è più operativo e del sito nuovo su Shopify non leggi le giacenze. Anche "quante ne abbiamo sul sito?" si risponde con giacenza_fully, dicendo che è la giacenza Fully. Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori).
+- GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). È l'UNICA giacenza che leggi: dal 29/09/2026 il vecchio sito woocommerce non è più operativo e del sito nuovo su Shopify non leggi le giacenze. Anche "quante ne abbiamo sul sito?" si risponde con giacenza_fully, dicendo che è la giacenza Fully, e basta: NON spiegare come funziona il sito né da dove prende i suoi numeri ("Fully alimenta il sito", "il sito legge da Fully", "è la stessa giacenza che vede il sito" sono frasi INVENTATE: nessun dato te lo dice). Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori).
   TIPO DI PRODOTTO + TAGLIA ("quali kimoni sono in stock in taglia A3L?", "tutti i modelli di rashguard disponibili in XXL", "cosa c'è in M3?"): chiama SUBITO giacenza_fully con 'query' = il tipo di prodotto e 'taglia' = la taglia. È VIETATO chiedere "quale modello?": l'utente vuole TUTTI i modelli e lo strumento li trova da solo. Chiedere è lecito solo se manca il TIPO di prodotto. Nella risposta: (1) dichiara quanti modelli hai controllato, quanti hanno pezzi liberi e quanti ne mostri ('modelli_controllati', 'modelli_disponibili', 'modelli_mostrati'), e se 'elenco_completo' è false di' che l'elenco è troncato: presentare un elenco parziale come completo è l'errore da non ripetere; (2) elenca TUTTI i 'disponibili' con le libere di ognuno ("in stock" = libere > 0); (3) usa parole DIVERSE per i quattro 'caso': "quella taglia non è disponibile in nessun modello" (esiste ma zero libere), "quella taglia non esiste per questo prodotto" (e di' quali esistono), "non ho trovato nessun prodotto con quel nome", oppure l'elenco; (4) se ci sono 'righe_fully_fuori_anagrafica', dichiarale a parte come righe con taglia letta dal nome Fully e non risolta, senza ometterle e senza fonderle con i modelli.
 """
 
@@ -6402,7 +6526,7 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
 # e i PEZZI della pipeline di fabbrica (btoweb), ma alla domanda "quante ne
 # abbiamo?" rispondeva "non ho accesso": la giacenza del sito non la leggeva
 # nessuno strumento. Questa e' una lettura in SOLA LETTURA di WooCommerce via
-# REST (get_wcapi(), le stesse credenziali del ramo ordini), prodotti e varianti.
+# REST (woo_get(), lo stesso client del ramo ordini), prodotti e varianti.
 #
 # Tre cose che il payload tiene distinte perche' il modello tende a fonderle:
 # - "non trovato" e "giacenza zero" sono due risposte diverse ('trovato' false
@@ -6464,16 +6588,6 @@ def _wc_radice_url() -> str:
     return _wc_radice(WC_API_URL)
 
 
-# I due set di credenziali presenti sull'ambiente, in ordine di prova. Il
-# secondo esiste per la migrazione; si dichiara sempre quale ha risposto.
-def _wc_set_credenziali() -> list:
-    return [
-        ("WC_*", _wc_radice(WC_API_URL), WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-        ("WOO_*", _wc_radice(os.getenv("WOO_BASE_URL")),
-         os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET")),
-    ]
-
-
 def _wc_cache_buster(params: dict) -> dict:
     """Il CDN del sito (hcdn + LiteSpeed) serve /wp-json/wc/v3/products dalla
     cache A CHIUNQUE, anche senza credenziali: un 200 su un URL gia' visto non
@@ -6483,94 +6597,20 @@ def _wc_cache_buster(params: dict) -> dict:
     return {**(params or {}), "_": int(datetime.now(timezone.utc).timestamp() * 1000)}
 
 
-def _wc_get_oauth(radice: str, key: str, secret: str, endpoint: str, params: dict):
-    """GET firmata OAuth1 (HMAC-SHA256) spedita in https. Serve perche' dietro
-    il CDN WordPress NON vede la richiesta come SSL, e WooCommerce in quel caso
-    IGNORA basic auth e credenziali in query string e accetta SOLO la firma
-    OAuth1 (verificato con chiavi finte: basic -> 'invalid_username' del core
-    WP, query string -> 'cannot list resources', OAuth1 -> 'Consumer key is
-    invalid', cioe' l'unico ramo che arriva alla verifica della chiave)."""
-    from woocommerce.oauth import OAuth
-    from urllib.parse import urlencode
-    url = f"{radice}/wp-json/wc/v3/{endpoint}"
-    if params:
-        url = f"{url}?{urlencode(params)}"
-    firmata = OAuth(url, key, secret, version="wc/v3", method="GET").get_oauth_url()
-    return requests.get(firmata, timeout=30, headers={"accept": "application/json"})
-
-
 def _wc_get(endpoint: str, params: dict = None):
-    """Una GET su WooCommerce, in tre passi, ognuno registrato con la sua 'via':
-    1) la libreria (get_wcapi(), la stessa del ramo ordini: basic auth);
-    2) OAuth1 con le chiavi WC_*; 3) OAuth1 con le chiavi WOO_*.
-    Restituisce (json, None) o (None, errore_payload). Il dettaglio tecnico
-    resta nel log e in _WC_ULTIMA_DIAGNOSTICA; al modello va la frase."""
-    params = _wc_cache_buster(params)
-    _WC_ULTIMA_DIAGNOSTICA["tentativi"] = []
-
-    def _registra(via, **info):
-        voce = {"via": via, "endpoint": endpoint, **info}
-        _WC_ULTIMA_DIAGNOSTICA["tentativi"].append(voce)
-        print(f"[FONTE woocommerce-giacenza] {voce}")
-
-    def _leggi(via, r):
-        cache = r.headers.get("x-litespeed-cache")
-        if r.status_code != 200:
-            _registra(via, http=r.status_code, cache=cache, risposta=(r.text or "")[:300])
-            return None
-        try:
-            data = r.json()
-        except Exception as e:
-            _registra(via, http=200, cache=cache, eccezione=f"risposta non JSON: {type(e).__name__}")
-            return None
-        _registra(via, http=200, cache=cache, esito="ok")
-        return data
-
-    # 1) libreria woocommerce, come il ramo ordini
+    """Una GET su WooCommerce con il client dell'archivio (woo_get: IP
+    Hostinger, basic auth, WOO_* poi WC_*). Restituisce (json, None) o
+    (None, errore_payload). Il dettaglio tecnico resta nel log e in
+    _WC_ULTIMA_DIAGNOSTICA; al modello va la frase."""
+    r, tentativi = woo_get(endpoint, params)
+    _WC_ULTIMA_DIAGNOSTICA["tentativi"] = tentativi
+    if r is None or r.status_code != 200:
+        return None, _wc_errore()
     try:
-        r = get_wcapi().get(endpoint, params=params)
+        return r.json(), None
     except Exception as e:
-        _registra("libreria (basic auth, WC_*)", eccezione=f"{type(e).__name__}: {str(e)[:200]}")
-    else:
-        data = _leggi("libreria (basic auth, WC_*)", r)
-        if data is not None:
-            return data, None
-
-    # 2) basic auth con il set WOO_* (l'8/9/2026 e' l'unico che risponde 200
-    #    senza cache: le chiavi WC_* risultano revocate sul sito, 'Consumer
-    #    key is invalid'); 3) OAuth1 con i due set, come ultima strada.
-    set_credenziali = _wc_set_credenziali()
-    for nome_set, radice, key, secret in set_credenziali[1:]:
-        via = f"basic auth ({nome_set})"
-        if not (radice and key and secret):
-            _registra(via, eccezione=f"variabili {nome_set} non valorizzate")
-            continue
-        try:
-            r = requests.get(
-                f"{radice}/wp-json/wc/v3/{endpoint}",
-                auth=(key, secret), params=params, timeout=30,
-                headers={"accept": "application/json"},
-            )
-        except Exception as e:
-            _registra(via, eccezione=f"{type(e).__name__}: {str(e)[:200]}")
-            continue
-        data = _leggi(via, r)
-        if data is not None:
-            return data, None
-    for nome_set, radice, key, secret in set_credenziali:
-        via = f"oauth1 ({nome_set})"
-        if not (radice and key and secret):
-            _registra(via, eccezione=f"variabili {nome_set} non valorizzate")
-            continue
-        try:
-            r = _wc_get_oauth(radice, key, secret, endpoint, params)
-        except Exception as e:
-            _registra(via, eccezione=f"{type(e).__name__}: {str(e)[:200]}")
-            continue
-        data = _leggi(via, r)
-        if data is not None:
-            return data, None
-    return None, _wc_errore()
+        tentativi.append({"eccezione": f"risposta non JSON: {type(e).__name__}"})
+        return None, _wc_errore()
 
 
 def _wc_errore() -> dict:
@@ -9238,48 +9278,36 @@ def wc_giacenza(query: str = None, sku: str = None, debug: int = 0):
 
 
 @app.get("/wc-sonda", dependencies=SOLO_ADMIN)
-def wc_sonda(request: Request, endpoint: str = "products", via: str = "oauth",
-             set: str = "wc", cache_buster: int = 1):
-    """Sonda grezza su WooCommerce: inoltra alla REST tutti i parametri extra
-    della query string (search, per_page, sku, ...) e restituisce SOLO codice
-    HTTP, header di cache, corpo troncato e i parametri inoltrati. Mai
-    credenziali, mai l'URL completo. via='oauth' = firma OAuth1 (l'unica che
-    dietro il CDN arriva alla verifica della chiave), via='rest' = basic auth
-    con requests, via='libreria' = get_wcapi(). set='wc' o 'woo' sceglie il
-    set di chiavi. cache_buster=1 aggiunge un parametro unico: senza, il CDN
-    puo' rispondere 200 dalla cache anche a chi non ha credenziali."""
+def wc_sonda(request: Request, endpoint: str = "products", set: str = None):
+    """Sonda grezza sull'archivio woocommerce, con lo STESSO client del bot
+    (woo_get: IP Hostinger, basic auth, 403 "Bot Verification" ritentato,
+    cache-buster sempre). Inoltra alla REST i parametri extra della query
+    string (per_page, _fields, ...) e restituisce solo codice HTTP, totali,
+    tentativi e corpo troncato: mai credenziali. set='woo' o 'wc' forza un
+    set di chiavi; senza, WOO_* poi WC_* come il bot."""
     extra = {
-        k: v for k, v in request.query_params.items()
-        if k not in ("endpoint", "via", "set", "cache_buster")
+        k: v for k, v in request.query_params.items() if k not in ("endpoint", "set")
     }
-    if cache_buster:
-        extra = _wc_cache_buster(extra)
-    scelto = {"wc": 0, "woo": 1}.get(set, 0)
-    nome_set, radice, key, secret = _wc_set_credenziali()[scelto]
-    try:
-        if via == "libreria":
-            r = get_wcapi().get(endpoint, params=extra or {})
-        elif via == "rest":
-            r = requests.get(
-                f"{radice}/wp-json/wc/v3/{endpoint}",
-                auth=(key, secret), params=extra or None, timeout=30,
-            )
-        else:
-            r = _wc_get_oauth(radice, key, secret, endpoint, extra)
-    except Exception as e:
-        return {
-            "via": via, "set": nome_set, "endpoint": endpoint, "parametri": extra,
-            "eccezione": f"{type(e).__name__}: {str(e)[:200]}",
-        }
+    forzato = {"woo": "WOO_*", "wc": "WC_*"}.get(set)
+    r, tentativi = woo_get(endpoint, extra, set_chiavi=forzato)
+    out = {
+        "endpoint": endpoint, "parametri": extra, "tentativi": tentativi,
+        "ip_hostinger": _WOO_IP["ip"], "ip_errore": _WOO_IP["errore"],
+        "ip_risolto_il": _WOO_IP["risolto_il"],
+    }
+    if r is None:
+        return out
     corpo = (r.text or "")
-    return {
-        "via": via, "set": nome_set, "endpoint": endpoint, "parametri": extra,
+    out.update({
+        "set": tentativi[-1].get("set") if tentativi else None,
         "http": r.status_code,
         "cache": r.headers.get("x-litespeed-cache"),
         "righe_json": len(r.json()) if r.status_code == 200 and corpo.startswith("[") else None,
         "x_wp_total": r.headers.get("X-WP-Total"),
-        "corpo": corpo[:400],
-    }
+        "x_wp_totalpages": r.headers.get("X-WP-TotalPages"),
+        "corpo": corpo[:600],
+    })
+    return out
 
 # --- REIMPORT DEL MANUALE: non è più una rotta HTTP ---------------------------
 # Prima era GET /import-knowledge, raggiungibile da chiunque senza credenziali,
@@ -11423,115 +11451,56 @@ def fully_giacenza(query: str = None, sku: str = None, taglia: str = None):
         return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
 
 
-def _diag_woo_prova(nomi: list, base, key, secret) -> dict:
-    """Una lettura minima su wp-json/wc/v3/products con un set di credenziali.
-    Sta qui in un pezzo solo perche' i due set (WOO_* e WC_*) vanno provati
-    NELLO STESSO MODO: se la prova fosse scritta due volte, la differenza fra i
-    due esiti potrebbe venire dal codice invece che dalle chiavi.
-    Due lezioni dell'8/9/2026, entrambe qui dentro: (1) senza un parametro
-    unico il CDN del sito risponde 200 dalla cache anche a chi non ha nessuna
-    credenziale, e la prova mente; (2) dietro quel CDN WordPress non vede la
-    richiesta come SSL, quindi la basic auth viene ignorata e solo la firma
-    OAuth1 arriva alla verifica della chiave. Si prova prima la basic (per
-    dire se un giorno tornasse a funzionare) e poi OAuth1, dichiarando 'via'."""
-    mancanti = _diag_mancanti(list(zip(nomi, (base, key, secret))))
+def _diag_woo_prova(nomi: list, nome_set: str, key, secret) -> dict:
+    """Una lettura minima su wc/v3/orders con UN set di chiavi, attraverso lo
+    stesso client del bot (woo_get: IP Hostinger, basic auth, cache-buster).
+    I due set si provano nello stesso modo, cosi' una differenza di esito
+    viene dalle chiavi e non dal codice."""
+    mancanti = _diag_mancanti(list(zip(nomi, (_woo_base(), key, secret))))
     if mancanti:
         return {
             "esito": "chiave mancante",
             "nomi_provati": nomi,
             "variabili_non_valorizzate": mancanti,
         }
-
-    radice = str(base).strip().rstrip("/")
-    if radice.endswith("/wp-json/wc/v3"):
-        radice = radice[: -len("/wp-json/wc/v3")]
-    schema_aggiunto = None
-    if not radice.lower().startswith(("http://", "https://")):
-        schema_aggiunto = (
-            f"{nomi[0]} e' scritta senza schema: per la prova e' stato anteposto "
-            "https://. Vale la pena correggerla all'origine."
-        )
-        radice = "https://" + radice
-
-    tentativi = []
-
-    def _prova(via, chiamata):
-        try:
-            r = chiamata()
-        except Exception as e:
-            tentativi.append({"via": via, "eccezione": f"{type(e).__name__}: {str(e)[:200]}"})
-            return None
-        voce = {"via": via, "http": r.status_code, "cache": r.headers.get("x-litespeed-cache")}
-        if r.status_code != 200:
-            voce["risposta"] = (r.text or "").strip().replace("\n", " ")[:_DIAG_MAX_TESTO]
-            tentativi.append(voce)
-            return None
-        try:
-            data = r.json()
-        except Exception:
-            voce["risposta"] = "HTTP 200 ma corpo non JSON"
-            tentativi.append(voce)
-            return None
-        tentativi.append(voce)
-        return r, data
-
-    esito = _prova("basic auth", lambda: requests.get(
-        f"{radice}/wp-json/wc/v3/products", auth=(key, secret),
-        params=_wc_cache_buster({"per_page": 1}), timeout=30,
-    ))
-    if esito is None:
-        esito = _prova("oauth1", lambda: _wc_get_oauth(
-            radice, key, secret, "products", _wc_cache_buster({"per_page": 1}),
-        ))
-    if esito is None:
+    r, tentativi = woo_get("orders", {"per_page": 1, "_fields": "id,status,date_created"},
+                           set_chiavi=nome_set)
+    base = {"nomi_usati": nomi, "ip_hostinger": _WOO_IP["ip"], "tentativi": tentativi}
+    if r is None:
         ultimo = tentativi[-1] if tentativi else {}
-        return {
-            "esito": (
-                f"errore: wc/v3/products HTTP {ultimo.get('http')} - "
-                f"{ultimo.get('risposta') or ultimo.get('eccezione')}"
-            ),
-            "nomi_usati": nomi,
-            "http": ultimo.get("http"),
-            "tentativi": tentativi,
-            "nota_variabile": schema_aggiunto,
-        }
-    r, data = esito
+        return {**base, "esito": f"errore: {ultimo.get('eccezione') or _WOO_IP['errore']}"}
+    if r.status_code != 200:
+        testo = (r.text or "").strip().replace("\n", " ")[:_DIAG_MAX_TESTO]
+        return {**base, "esito": f"errore: wc/v3/orders HTTP {r.status_code} - {testo}",
+                "http": r.status_code}
+    try:
+        data = r.json()
+    except Exception:
+        return {**base, "esito": "errore: HTTP 200 ma corpo non JSON", "http": 200}
     primo = data[0] if isinstance(data, list) and data else {}
-    if not isinstance(primo, dict):
-        primo = {}
     return {
+        **base,
         "esito": "ok",
-        "nomi_usati": nomi,
-        "http": r.status_code,
-        "via": tentativi[-1]["via"],
+        "http": 200,
         "cache": r.headers.get("x-litespeed-cache"),
-        "prodotto_letto": primo.get("name"),
-        "prodotti_totali_dichiarati": r.headers.get("X-WP-Total"),
-        "tentativi": tentativi,
-        "nota_variabile": schema_aggiunto,
+        "ordini_totali_dichiarati": r.headers.get("X-WP-Total"),
+        "ultimo_ordine": primo if isinstance(primo, dict) else None,
     }
 
 
 def _diag_woocommerce() -> dict:
-    """Il set WOO_*, quello indicato per la migrazione. Se non c'e', ripiega sui
-    WC_* dichiarando in 'nomi_usati' quali ha davvero usato."""
-    base = os.getenv("WOO_BASE_URL")
-    key = os.getenv("WOO_CONSUMER_KEY")
-    secret = os.getenv("WOO_CONSUMER_SECRET")
-    nomi = ["WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET"]
-    if not (base and key and secret) and (WC_API_URL and WC_CONSUMER_KEY and WC_CONSUMER_SECRET):
-        base, key, secret = WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET
-        nomi = ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"]
-    return _diag_woo_prova(nomi, base, key, secret)
+    """Il set WOO_*, il primo che il bot prova."""
+    return _diag_woo_prova(
+        ["WOO_BASE_URL", "WOO_CONSUMER_KEY", "WOO_CONSUMER_SECRET"],
+        "WOO_*", os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET"),
+    )
 
 
 def _diag_woocommerce_wc() -> dict:
-    """Il set WC_*: quello che il bot usa DAVVERO in get_wcapi(). Provato a
-    parte, e non come ripiego, perche' i due set possono avere esiti diversi e
-    fin qui l'esito buono di uno copriva quello rotto dell'altro."""
+    """Il set WC_*, il ripiego se le WOO_* vengono rifiutate."""
     return _diag_woo_prova(
-        ["WC_API_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"],
-        WC_API_URL, WC_CONSUMER_KEY, WC_CONSUMER_SECRET,
+        ["WOO_BASE_URL", "WC_CONSUMER_KEY", "WC_CONSUMER_SECRET"],
+        "WC_*", WC_CONSUMER_KEY, WC_CONSUMER_SECRET,
     )
 
 
@@ -11995,8 +11964,8 @@ def shopify_tema_installa(req: InstallaWidgetRequest):
 def diagnostica_collegamenti():
     """Inventario dei NOMI delle variabili d'ambiente dei canali, e poi una
     lettura vera su ognuno. Nessun valore di chiave esce da qui. WooCommerce
-    compare DUE volte, una per set di credenziali: 'woocommerce' e' il set WOO_*
-    della migrazione, 'woocommerce_wc' e' il set WC_* che get_wcapi() usa oggi.
+    compare DUE volte, una per set di chiavi: 'woocommerce' e' il set WOO_*
+    (il primo che il bot prova), 'woocommerce_wc' e' il set WC_* (il ripiego).
     Da qui si legge anche lo stato delle chiavi client di /chat ('chiavi_client')
     e l'ora di avvio del processo, per capire se Render ha gia' riavviato con le
     variabili salvate di recente."""
