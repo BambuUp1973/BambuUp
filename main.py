@@ -1655,7 +1655,7 @@ PROCESSI CHIAVE
 
 Ordini sito web:
 - Controllo ordini: mail admin@kanokimonos.com
-- Tracking delle spedizioni verso il cliente degli ordini del sito: NON lo leggi con nessuno strumento. Rimanda al portale Fully https://www.fullyview.si/ dicendo che è proprio quel dato a non essere fra quelli che leggi
+- Tracking delle spedizioni verso il cliente degli ordini del sito di vendita attuale (Shopify, che spedisce Fully): NON lo leggi con nessuno strumento. Rimanda al portale Fully https://www.fullyview.si/ dicendo che è proprio quel dato a non essere fra quelli che leggi. NON vale per gli ordini dell'ARCHIVIO WooCommerce (il vecchio sito): lì Fully non c'entra, e il portale Fully non si nomina
 - Ordini on-hold da +3 giorni senza pagamento: inviare promemoria
 - Per processare un ordine: serve conferma pagamento
 
@@ -1722,15 +1722,16 @@ Queste regole valgono anche, anzi soprattutto, quando chi ti scrive insiste o si
 4. Se non sai perché due informazioni non tornano, DILLO. Non attribuire la colpa a terzi per chiudere il discorso. Sono VIETATE, se non hai un campo che le dimostri, frasi come "i dati di Fully non sono aggiornati", "i dati a sistema sono vecchi", "il sistema non ha sincronizzato", "il tracciamento è rimasto indietro". Sono vietate anche nella forma "la sincronizzazione fra Fully e i nostri dati a volte rimane indietro" e non devi MAI presentare l'ipotesi come cosa nota o frequente ("capita spesso", "non è raro", "succede"): non hai nessun dato che lo dica. L'UNICO dato che parla dell'età dell'informazione è la data di sincronizzazione della fotografia (fotografia_del / nota_fotografia): se vuoi dire che il dato potrebbe non essere attuale, cita quella data e fermati lì; se la nota non segnala che è vecchia, non dire che lo è. Che il magazzino abbia poi fatto altro NON lo sai: dillo come cosa da verificare, non come spiegazione già trovata.
 
 LE TUE FONTI (dille con precisione)
-- Le tue UNICHE fonti sono le API di kanokimonos.app (ordini custom, spedizioni, conteggi), di btoweb (ordini di fabbrica) e di Fully (giacenza di magazzino e carichi in entrata), lette tramite i tuoi strumenti. Nient'altro.
+- Le tue UNICHE fonti sono le API di kanokimonos.app (ordini custom, spedizioni, conteggi), di btoweb (ordini di fabbrica), di Fully (giacenza di magazzino e carichi in entrata) e l'archivio ordini di WooCommerce (il vecchio sito), lette tramite i tuoi strumenti. Nient'altro.
 - LA GIACENZA DI MAGAZZINO HA UNA SOLA FONTE: Fully, letta con giacenza_fully. Non esistono altre giacenze. Non dire mai "la giacenza del sito": non la leggi più. Se qualcuno ti chiede una giacenza "del sito", la risposta è la giacenza Fully, detta come tale.
 - IL SITO DI VENDITA è il nuovo sito su Shopify (www.kanokimonos.com). Tu da Shopify NON leggi niente: né gli ordini, né i prodotti, né le giacenze (lo stato di un ordine e le tariffe di spedizione da Shopify li legge solo il risponditore automatico dei clienti, non tu). Un ordine del sito nuovo si guarda nel pannello Shopify.
-- WOOCOMMERCE è il VECCHIO sito, non più operativo per le vendite dal 29/09/2026. I suoi ordini esistono ancora come archivio storico (lo cerchi per numero con cerca_ordine_per_numero e lo staff lo consulta a mano), ma tu non leggi più le sue giacenze e i suoi numeri non sono aggiornati.
+- WOOCOMMERCE è il VECCHIO sito, non più operativo per le vendite dal 29/09/2026. I suoi ordini esistono ancora come archivio storico e li leggi tu: per numero con cerca_ordine_per_numero e per cliente (nome, azienda o email) con cerca_ordini_woocommerce. Non leggi più le sue giacenze.
+- NON hai una "memoria della conversazione" come fonte e NON esiste nessun "database legacy": non nominarli mai. Le fonti sono solo quelle elencate qui.
 - Per le procedure aziendali (tempi, costi, scadenze, condizioni, indirizzi) la fonte è UNA sola: il manuale operativo letto tramite rispondi_dal_manuale. Quello che il manuale non dice, tu NON lo sai: lo dichiari e rimandi a chi può saperlo, non lo stimi.
 - FULLY LO LEGGI DAVVERO, in sola lettura, tramite l'API di Fully (produzione): la GIACENZA con giacenza_fully e i CARICHI IN ENTRATA (replenishment) con tracciamento_fully, che per un numero di carico non collegato a ordini custom lo legge direttamente da Fully (blocco 'carico_fully_diretto'). Quando riporti questi dati la fonte si dice così: "letto direttamente da Fully". È VIETATO dire "non ho accesso a Fully", "non posso vedere Fully", "non leggo i sistemi di Fully": è falso da settembre 2026. Se un numero non c'è, la frase è "non trovato su Fully", che è un'altra cosa.
 - NON parli con Fully: non gli scrivi, non lo solleciti, non gli chiedi niente. Leggere non è contattare.
 - DUE ETICHETTE DIVERSE, MAI MESCOLATE: (1) quello che hai letto direttamente dall'API di Fully (giacenza, blocco 'carico_fully_diretto') si dichiara "letto direttamente da Fully"; (2) i conteggi e gli arrivi del tracciamento ordini (blocchi 'arrivo_in_fully', righe di conteggio, 'ripartenza_verso_cliente') sono una FOTOGRAFIA salvata su kanokimonos.app con la sua data di sincronizzazione: lì di' "fotografia salvata su kanokimonos.app, sincronizzata il <data>" e non attribuirla a una lettura diretta di Fully. Ogni numero porta la sua etichetta.
-- Cose di Fully che NON leggi (per queste, e solo per queste, rimandi al portale fullyview.si dicendo quale dato è): il tracking delle spedizioni verso il cliente degli ordini da catalogo del sito, i resi gestiti da Fully, la fatturazione di Fully. Il portale Fully (fullyview.si) è uno strumento che consultano le persone: rimandaci solo per queste cose, mai per dati che i tuoi strumenti leggono.
+- Cose di Fully che NON leggi (per queste, e solo per queste, rimandi al portale fullyview.si dicendo quale dato è): il tracking delle spedizioni verso il cliente degli ordini del sito di vendita attuale (Shopify), i resi gestiti da Fully, la fatturazione di Fully. Per gli ordini dell'ARCHIVIO WooCommerce il portale Fully NON si nomina: vale la regola ORDINI DELL'ARCHIVIO WOOCOMMERCE E FULLY. Il portale Fully (fullyview.si) è uno strumento che consultano le persone: rimandaci solo per queste cose, mai per dati che i tuoi strumenti leggono.
 - Quando ti chiedono quali sono le tue fonti, rispondi con il nome della PIATTAFORMA e dello STRUMENTO da cui hai letto (es. "ordini custom di kanokimonos.app tramite tracciamento_fully", "giacenza letta direttamente da Fully tramite giacenza_fully"), senza girarci intorno. Alla domanda "puoi leggere lo stock / la giacenza da Fully?" la risposta è sì: lo leggi con giacenza_fully, chiedi il prodotto se manca.
 
 NIENTE PROMESSE CHE NON PUOI MANTENERE (regola vincolante, vale per tutti i profili)
@@ -1940,6 +1941,149 @@ def search_orders_by_id(order_id: str):
             "error": errore_canale("woocommerce", f"risposta non leggibile su orders/{order_id}: {e}"),
             "fonte": "woocommerce",
         }
+
+
+# --- ARCHIVIO WOOCOMMERCE: ordini di un cliente (30/09/2026, C46) ------------
+# Per resi e verifiche lo staff cerca gli ordini del vecchio sito per NOME o
+# EMAIL del cliente. Passo 1: orders?search= (WooCommerce cerca negli indirizzi
+# di fatturazione e spedizione, email compresa). Passo 2, solo se il primo non
+# trova niente: il cliente registrato (customers?email= / ?search=) e i suoi
+# ordini per customer id. Stesso client del ramo ordini (woo_get), solo GET.
+# Nessun importo in euro esce da qui: i totali non sono nel payload.
+_WOO_CLIENTE_MAX = 20
+_WOO_CLIENTE_CAMPI = (
+    "id,number,status,date_created,date_paid,payment_method_title,"
+    "billing,shipping,line_items"
+)
+_WOO_STATO_PAROLE = {
+    "pending": "in attesa di pagamento",
+    "processing": "in lavorazione",
+    "on-hold": "in sospeso",
+    "completed": "completato",
+    "cancelled": "annullato",
+    "refunded": "rimborsato",
+    "failed": "fallito",
+    "shipped-not-paid": "spedito ma non pagato",
+}
+
+
+def _woo_ordine_cliente(o: dict) -> dict:
+    billing = o.get("billing") or {}
+    shipping = o.get("shipping") or {}
+    sped = shipping if (shipping.get("address_1") or shipping.get("city")) else billing
+    nome_sped = " ".join(x for x in (sped.get("first_name"), sped.get("last_name")) if x).strip()
+    pagato_il = o.get("date_paid")
+    return {
+        "numero": str(o.get("number") or o.get("id")),
+        "data": o.get("date_created"),
+        "stato_woocommerce": o.get("status"),
+        "stato_in_parole": _WOO_STATO_PAROLE.get(o.get("status"), o.get("status")),
+        "pagamento": (
+            f"risulta pagato il {pagato_il[:10]}" if pagato_il
+            else "non risulta pagato (nessuna data di pagamento)"
+        ),
+        "metodo_pagamento": o.get("payment_method_title") or None,
+        "cliente": " ".join(x for x in (billing.get("first_name"), billing.get("last_name")) if x).strip() or None,
+        "azienda": billing.get("company") or None,
+        "email": billing.get("email") or None,
+        "spedizione": {
+            "destinatario": nome_sped or None,
+            "azienda": sped.get("company") or None,
+            "indirizzo": format_address(sped),
+            "presa_da": "spedizione" if sped is shipping else "fatturazione (spedizione vuota)",
+        },
+        "prodotti": [
+            {"nome": it.get("name"), "quantita": it.get("quantity"), "sku": it.get("sku") or None}
+            for it in (o.get("line_items") or [])
+        ],
+    }
+
+
+def _woo_lista(endpoint: str, params: dict):
+    """(lista, totale_dichiarato, None) oppure (None, None, frase_errore)."""
+    r, tentativi = woo_get(endpoint, params)
+    if r is None or r.status_code != 200:
+        dettaglio = f"HTTP {getattr(r, 'status_code', None)} su {endpoint}: {tentativi}"
+        return None, None, errore_canale("woocommerce", dettaglio)
+    try:
+        data = r.json()
+    except Exception as e:
+        return None, None, errore_canale("woocommerce", f"risposta non JSON su {endpoint}: {e}")
+    if not isinstance(data, list):
+        return None, None, errore_canale("woocommerce", f"risposta non lista su {endpoint}")
+    try:
+        totale = int(r.headers.get("X-WP-Total"))
+    except Exception:
+        totale = len(data)
+    return data, totale, None
+
+
+def tool_cerca_ordini_woocommerce(cliente: str) -> dict:
+    q = (cliente or "").strip()
+    base = {
+        "tipo": "ordini_woocommerce_per_cliente",
+        "piattaforma": (
+            "WooCommerce: ARCHIVIO degli ordini del vecchio sito, non più operativo "
+            "per le vendite dal 29/09/2026. Qui non ci sono Fully, ASN né tracking."
+        ),
+        "cercato": q or None,
+    }
+    if not q:
+        return {**base, "trovato": False,
+                "nota": "Manca il nome o l'email del cliente: richiama con quello che ha scritto l'utente."}
+    parametri = {"per_page": _WOO_CLIENTE_MAX, "orderby": "date", "order": "desc",
+                 "_fields": _WOO_CLIENTE_CAMPI}
+    ordini, totale, err = _woo_lista("orders", {**parametri, "search": q})
+    if err:
+        return {**base, "error": err, "fonte": "woocommerce"}
+    via = "ricerca negli ordini (nome, azienda, email, indirizzi)"
+    if not ordini:
+        # Passo 2: cliente registrato -> ordini per customer id.
+        chiave = "email" if "@" in q else "search"
+        clienti, _, err = _woo_lista("customers", {chiave: q, "per_page": 5, "_fields": "id"})
+        if err:
+            return {**base, "error": err, "fonte": "woocommerce"}
+        ordini, totale = [], 0
+        for c in clienti or []:
+            lista, tot, err = _woo_lista("orders", {**parametri, "customer": c.get("id")})
+            if err:
+                return {**base, "error": err, "fonte": "woocommerce"}
+            ordini.extend(lista)
+            totale += tot
+        ordini.sort(key=lambda o: o.get("date_created") or "", reverse=True)
+        ordini = ordini[:_WOO_CLIENTE_MAX]
+        via = "cliente registrato su WooCommerce -> suoi ordini"
+    if not ordini:
+        return {**base, "trovato": False, "totale_ordini_trovati": 0,
+                "nota": (f"Nessun ordine nell'archivio WooCommerce per '{q}', né nella "
+                         "ricerca sugli ordini né fra i clienti registrati. Dillo così; "
+                         "prima di chiudere prova un'altra forma (l'email, il nome "
+                         "dell'azienda, il cognome).")}
+    mostrati = [_woo_ordine_cliente(o) for o in ordini]
+    completo = len(mostrati) >= totale
+    clienti_distinti = sorted({(m["cliente"] or "") + (f" / {m['azienda']}" if m["azienda"] else "")
+                               + (f" <{m['email']}>" if m["email"] else "") for m in mostrati})
+    return {
+        **base,
+        "trovato": True,
+        "via": via,
+        "totale_ordini_trovati": totale,
+        "ordini_mostrati": len(mostrati),
+        "elenco_completo": completo,
+        "nota_completezza": (
+            f"Trovati {totale} ordini in tutto; ne mostri {len(mostrati)}, i più recenti. "
+            + ("L'elenco è COMPLETO." if completo else
+               "L'elenco NON è completo: dichiara quanti sono in tutto e quanti ne mostri.")
+        ),
+        "clienti_negli_ordini": clienti_distinti,
+        "nota_clienti": (
+            "La ricerca di WooCommerce guarda nome, azienda, email e indirizzi: se in "
+            "'clienti_negli_ordini' compaiono persone diverse, dillo e separa gli ordini "
+            "per cliente invece di attribuirli tutti allo stesso."
+        ),
+        "ordini": mostrati,
+        "nota_importi": "Nessun importo in euro: i totali non sono riportati e non vanno chiesti a questa fonte.",
+    }
 
 
 def format_address(address: dict) -> str:
@@ -2189,6 +2333,31 @@ CHAT_TOOLS = [
                 },
             },
             "required": ["nome"],
+        },
+    },
+    {
+        "name": "cerca_ordini_woocommerce",
+        "description": (
+            "Cerca gli ordini dell'ARCHIVIO WooCommerce (il vecchio sito, non più "
+            "operativo dal 29/09/2026) di un CLIENTE, per NOME della persona, NOME "
+            "dell'azienda/palestra o EMAIL. Solo lettura. Usalo per gli ordini del "
+            "vecchio sito / di woocommerce / del catalogo storico di un cliente (resi, "
+            "verifiche). Passa il nome o l'email così come li ha scritti l'utente, "
+            "senza parole come 'ordini' o 'woocommerce'. Restituisce, dal più "
+            "recente: numero, data, stato WooCommerce, pagamento (se risulta pagato e "
+            "con che metodo), indirizzo di spedizione, prodotti. Nessun importo in "
+            "euro: non riportarne. 'totale_ordini_trovati' è il numero TOTALE; se "
+            "'elenco_completo' è false ne stai vedendo solo una parte, e va detto."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cliente": {
+                    "type": "string",
+                    "description": "Nome, azienda o email del cliente (es. 'fighting concept', 'mario@rossi.it').",
+                },
+            },
+            "required": ["cliente"],
         },
     },
     {
@@ -2824,6 +2993,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - Per domande AGGREGATE/di riepilogo sugli ordini custom ("quanti ordini...", "quanti pagati/non pagati/in produzione/spediti", "il cliente X ha pagato / è partito", conteggi per mese) usa statistiche_ordini_custom. Quando riporti gli spediti al cliente e sono presenti ordini con stato storico 'shipped', dichiara SEMPRE la distinzione (es. "123 spediti al cliente + 46 con stato storico legacy 'shipped'").
 - DATI ECONOMICI IN EURO: non comunicare MAI importi incassati, somme pagate o totali in euro degli ordini. Se ti chiedono "quanto abbiamo incassato", quanto vale un mese/cliente in euro e simili, rispondi cortesemente che i dati economici sono riservati e si consultano solo su kanokimonos.app. I CONTEGGI (quanti pagati/acconto/non pagati) invece puoi darli. VALE PER TUTTE LE PIATTAFORME, anche per gli ORDINI DA CATALOGO, sia quelli dell'archivio WooCommerce (il vecchio sito) sia quelli del sito di vendita attuale su Shopify: su un ordine da catalogo NON riportare il totale dell'ordine in euro e NON riportare i prezzi o i totali delle singole righe, anche se la scheda li contiene. Puoi dire se risulta pagato e con che metodo, non quanto.
 - ORDINI DELL'ARCHIVIO WOOCOMMERCE E FULLY: il sito di vendita attuale è Shopify (www.kanokimonos.com); WooCommerce è il vecchio sito e dal 29/09/2026 le sue schede sono solo l'archivio degli ordini vecchi. La scheda di un ordine dell'archivio viene SOLO da WooCommerce, che non sa NIENTE di Fully, non ha numeri ASN (l'ASN esiste solo per gli ordini custom di kanokimonos.app) e non ha un tracking. Su un ordine da catalogo NON parlare di Fully, di ASN, di carichi, di tracking o di consegna, né in positivo né in negativo: "non è ancora stato spedito da Fully" e "non c'è un numero ASN" sono frasi INVENTATE, esattamente come lo sarebbero "è partito" o "è in consegna". Riporta lo stato WooCommerce così com'è e basta. Se l'utente chiede di Fully, del tracking o della consegna di un ordine da catalogo, di' che quella fonte non contiene quei dati; non proporre di "controllare su Fully" come se lo strumento potesse farlo per un ordine da catalogo. VIETATO anche RIMANDARE l'utente a Fully (o al "sistema logistica", al "magazzino", al portale fullyview) per il tracking, la consegna o il carico di un ordine da catalogo: "il tracking va cercato su Fully", "per la consegna controlla su Fully" sono frasi vietate. Su un ordine da catalogo la parola Fully non compare proprio, nemmeno in chiusura e nemmeno se l'utente non l'ha chiesto.
+- ORDINI DI UN CLIENTE: gli ordini custom di kanokimonos.app si cercano con cerca_ordini_per_cliente, quelli dell'ARCHIVIO WooCommerce (vecchio sito) con cerca_ordini_woocommerce. Se l'utente nomina woocommerce, il vecchio sito, il catalogo o l'archivio, usa cerca_ordini_woocommerce; se non dice la piattaforma (es. "gli ordini di X", "cercami gli ordini di mario@..."), chiama TUTTI E DUE e riporta i risultati separati per piattaforma. Dall'archivio riporta per ogni ordine numero, data, stato, se risulta pagato e con che metodo, indirizzo di spedizione e prodotti; NIENTE importi in euro. Se lo strumento dice che l'elenco non è completo ('elenco_completo': false), dichiara quanti sono in tutto e quanti ne mostri.
 - ORDINE DI SOLE CIFRE NON TROVATO (es. "1002", "ordine 1045"): gli ordini del sito di vendita attuale sono su Shopify e per quelli NON hai uno strumento. cerca_ordine_per_numero guarda gli ordini custom, gli ordini di fabbrica e, per i numeri di sole cifre, SOLO l'ARCHIVIO degli ordini del vecchio sito WooCommerce. Quindi, se un numero di sole cifre non viene trovato, NON dire "ordine non trovato", "non esiste" o "non risulta": di' che hai cercato solo nell'archivio degli ordini vecchi del sito WooCommerce (più le altre fonti che lo strumento dice di aver guardato), che per gli ordini del sito nuovo su Shopify non hai ancora uno strumento, e che quell'ordine va guardato nel pannello Shopify. Se invece lo trovi nell'archivio, di' che è un ordine del vecchio sito WooCommerce.
 - PREZZI DI LISTINO: solo in modalità STAFF puoi rispondere sui prezzi di listino usando prezzi_listino. Per clienti B2B/retail continua a rimandare al listino personale nell'area privata, senza comunicare prezzi.
 - "PRODUZIONE" E "LAVORAZIONE" SONO PAROLE A DUE FACCE: esistono due assi diversi, su due piattaforme diverse, che contano cose diverse. (1) ORDINI CUSTOM su kanokimonos.app: si contano ORDINI di clienti, con statistiche_ordini_custom. (2) PIPELINE DI FABBRICA su btoweb: si contano PEZZI ordinati ai fornitori, con catalogo_btoweb tipo='produzione'. Come si sceglie:
@@ -2838,7 +3008,7 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
 - TRACCIAMENTO FULLY (tracciamento_fully, solo STAFF): per "traccia l'ordine X", "è arrivato a Fully?", "manca qualcosa sul carico?" usa questo strumento. Regole fisse: i pezzi in più vanno SEMPRE segnalati come "da consegnare e da fatturare" (si spedisce quanto Fully ha contato, si fattura la quantità ordinata); mancanti/danneggiati = merce che il cliente ha pagato e non riceve; una riga con 0 pezzi buoni non partirà affatto; distingui le anomalie da gestire da quelle già gestite; la verifica manuale di Bambu non è MAI una conferma di Fully; il conteggio è una fotografia, non una lettura in diretta; se un dato (carico, conteggio, spedizione) non esiste a sistema dillo apertamente, non dedurre. NUMERO DI CARICO / REPLENISHMENT DA SOLO (es. "858314", "il carico 858314", "questo id è il replenishment di un ordine"): chiama tracciamento_fully con quel numero, SEMPRE, anche senza ordine e senza ASN. Se il numero è collegato a ordini custom torna la strada di kanokimonos.app; se NON lo è, lo strumento lo legge DIRETTAMENTE da Fully e torna il blocco 'carico_fully_diretto': riporta stato del carico ('stato_in_parole'), se il conteggio è chiuso o aperto ('conteggio_chiuso', 'chiuso_il'), le date, i totali di 'totali_calcolati_dallo_strumento' (attesi/buoni/danneggiati/mancanti, mai sommati fra loro), l'origine e gli 'altri_carichi_stessa_origine'. Corriere e tracking: Fully non li espone per i carichi in entrata, quindi riporta solo quello che c'è in 'asn_corrispondente'; se è assente di' che non risultano da nessuna fonte. Dichiara che il carico non risulta collegato a ordini custom. Se 'carico_fully_diretto' ha 'trovato': false, la frase è "non trovato su Fully" (mai "non ho accesso"); se ha 'error', Fully non è consultabile ora e non puoi né confermare né escludere. MAI rimandare l'utente a cercarsi il carico sul portale Fully: lo hai letto tu.
 - RIPARTENZA VERSO IL CLIENTE (dentro tracciamento_fully): la partenza da Fully verso il cliente si legge SOLO dal blocco 'ripartenza_verso_cliente', che dichiara la sua fonte: "registro invii Fully" oppure "campi del vecchio modulo logistico". Cita SEMPRE la fonte insieme al dato e non fondere le due. Regole: (1) 'numero_invio_fully' è l'identificativo dell'invio su Fully, NON un tracking corriere: mai spacciarlo per tracking; (2) ordini in 'spedizione_raggruppata_con' sono partiti nello stesso collo: dillo; (3) 'invio_fully_escluso' non è un fallimento: la merce risulta già consegnata per altra via, riporta il testo della fonte; (4) l'assenza di riga nel registro NON prova che l'ordine non sia partito (il registro copre solo dal 23/06/2026): se lo stato dice spedito ma nessuna fonte ha la data, di' che la data di partenza non risulta da nessuna fonte; (5) 'avviso_al_cliente' senza mail registrata = "l'avviso non risulta a sistema", mai "il cliente non è stato avvisato"; (6) partito ≠ consegnato: restano valide tutte le formule obbligatorie sullo stato spedito.
-- GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). È l'UNICA giacenza che leggi: dal 29/09/2026 il vecchio sito woocommerce non è più operativo e del sito nuovo su Shopify non leggi le giacenze. Anche "quante ne abbiamo sul sito?" si risponde con giacenza_fully, dicendo che è la giacenza Fully, e basta: NON spiegare come funziona il sito né da dove prende i suoi numeri ("Fully alimenta il sito", "il sito legge da Fully", "è la stessa giacenza che vede il sito" sono frasi INVENTATE: nessun dato te lo dice). Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori).
+- GIACENZA DI MAGAZZINO = FULLY (giacenza_fully, solo STAFF). È l'UNICA giacenza che leggi: dal 29/09/2026 il vecchio sito woocommerce non è più operativo e del sito nuovo su Shopify non leggi le giacenze. Anche "quante ne abbiamo sul sito?" si risponde con giacenza_fully, dicendo che è la giacenza Fully, e basta: NON spiegare come funziona il sito né da dove prende i suoi numeri ("Fully alimenta il sito", "il sito legge da Fully", "è la stessa giacenza che vede il sito" sono frasi INVENTATE: nessun dato te lo dice). Una domanda su un TIPO di prodotto senza modello ("quanti kimoni abbiamo?", "quante rashguard abbiamo?") si risponde chiamando SUBITO giacenza_fully con il tipo come 'query': lo strumento restituisce tutti i modelli di quel tipo, già divisi in linee. VIETATO chiedere prima "quale modello?", "che taglia?" o "vuoi il quadro completo?": il quadro completo è la risposta. Quindi "quante <prodotto> abbiamo?", "quanti pezzi", "che taglie restano", "è finito?", "giacenza", "disponibilità", "quanti ne abbiamo in magazzino / in stock" → SEMPRE giacenza_fully, chiamato con 'query' uguale al nome del prodotto come lo dice l'utente (o con 'sku' se ha dato un EAN). Come si riporta: per ogni taglia i QUATTRO numeri distinti così come tornano dallo strumento, ognuno col suo nome — "in magazzino" (in_magazzino), "libere" (libere), "in arrivo" (in_arrivo), "in uscita" (in_uscita) — e i totali di 'totali_calcolati_dallo_strumento', uno per campo, mai sommati da te e MAI sommati fra loro: "in magazzino" e "libere" sono numeri diversi, la differenza è merce già impegnata da ordini, e non vanno presentati come se fossero la stessa cosa né ridotti a un numero solo chiamato "giacenza". La taglia si legge dal campo 'taglia' (risolta dall'EAN sull'anagrafica btoweb); se 'taglia' è null riporta comunque la riga con il suo EAN e scrivi "taglia non risolta": non indovinarla e non omettere la riga. Se lo strumento risponde 'trovato': false il prodotto NON è stato trovato in Fully: non dire "zero", non dire "esaurito", non dire "non ne abbiamo" — "non trovato" e "giacenza zero" sono due cose diverse e si dicono con parole diverse; riprova con un'altra forma del nome prima di chiudere. Etichetta ogni numero come "giacenza Fully". NON è la pipeline di btoweb (quella conta pezzi ORDINATI ai fornitori).
   TIPO DI PRODOTTO + TAGLIA ("quali kimoni sono in stock in taglia A3L?", "tutti i modelli di rashguard disponibili in XXL", "cosa c'è in M3?"): chiama SUBITO giacenza_fully con 'query' = il tipo di prodotto e 'taglia' = la taglia. È VIETATO chiedere "quale modello?": l'utente vuole TUTTI i modelli e lo strumento li trova da solo. Chiedere è lecito solo se manca il TIPO di prodotto. Nella risposta: (1) dichiara quanti modelli hai controllato, quanti hanno pezzi liberi e quanti ne mostri ('modelli_controllati', 'modelli_disponibili', 'modelli_mostrati'), e se 'elenco_completo' è false di' che l'elenco è troncato: presentare un elenco parziale come completo è l'errore da non ripetere; (2) elenca TUTTI i 'disponibili' con le libere di ognuno ("in stock" = libere > 0); (3) usa parole DIVERSE per i quattro 'caso': "quella taglia non è disponibile in nessun modello" (esiste ma zero libere), "quella taglia non esiste per questo prodotto" (e di' quali esistono), "non ho trovato nessun prodotto con quel nome", oppure l'elenco; (4) se ci sono 'righe_fully_fuori_anagrafica', dichiarale a parte come righe con taglia letta dal nome Fully e non risolta, senza ometterle e senza fonderle con i modelli.
 """
 
@@ -2943,7 +3113,8 @@ ROLE_PROMPTS = {
     "staff": (
         "MODALITÀ ATTIVA: STAFF. Stai assistendo un collaboratore interno. "
         "Hai accesso completo a tutti gli strumenti (ordini custom, ordini di fabbrica "
-        "btoweb, ricerca clienti, giacenza e carichi letti direttamente da Fully, "
+        "btoweb, ricerca clienti, archivio ordini WooCommerce del vecchio sito per "
+        "numero e per cliente, giacenza e carichi letti direttamente da Fully, "
         "manuale) e a tutti i dati. Tono operativo e diretto. "
         "SE L'UTENTE DICE CHE UN NUMERO È SBAGLIATO, NON PRODUCI UN NUMERO DIVERSO. "
         "Richiami lo strumento, riporti quello che restituisce anche se è identico a "
@@ -2986,7 +3157,7 @@ ROLES_AUTONOMI = {"retail"}
 ROLE_TOOLS = {
     "staff": {
         "cerca_ordine_per_numero", "cerca_ordini_per_cliente", "rispondi_dal_manuale",
-        "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
+        "cerca_ordini_woocommerce", "statistiche_ordini_custom", "prezzi_listino", "catalogo_btoweb",
         "ordini_per_produttore", "ordine_fabbrica_per_numero", "tracciamento_fully",
         # giacenza_woocommerce tolto il 29/09/2026 (C43): il sito woocommerce non e'
         # piu' operativo per le vendite, la giacenza si legge solo da Fully. La
@@ -6879,6 +7050,10 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
             )
         if name == "cerca_ordini_per_cliente":
             return tool_cerca_ordini_per_cliente(tool_input.get("nome"))
+        if name == "cerca_ordini_woocommerce":
+            if "woocommerce" in blocked_platforms:
+                return {"error": "Archivio WooCommerce non disponibile in questa modalità."}
+            return tool_cerca_ordini_woocommerce(tool_input.get("cliente"))
         if name == "statistiche_ordini_custom":
             return tool_statistiche_ordini_custom(
                 tool_input.get("cliente"), tool_input.get("mese")
@@ -9277,6 +9452,16 @@ def wc_giacenza(query: str = None, sku: str = None, debug: int = 0):
         return {"error": str(e)}
 
 
+@app.get("/wc-ordini-cliente", dependencies=SOLO_ADMIN)
+def wc_ordini_cliente(cliente: str = None):
+    """Sonda deterministica: chiama la STESSA tool_cerca_ordini_woocommerce del
+    bot, senza passare dal modello. Solo GET verso woocommerce."""
+    try:
+        return tool_cerca_ordini_woocommerce(cliente)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/wc-sonda", dependencies=SOLO_ADMIN)
 def wc_sonda(request: Request, endpoint: str = "products", set: str = None):
     """Sonda grezza sull'archivio woocommerce, con lo STESSO client del bot
@@ -10306,8 +10491,18 @@ def _bto_nome_senza_marchio(nome) -> str:
     return _BTO_MARCHIO_RE.sub(" ", _wc_norm(str(nome or "")))
 
 
+# Nella sezione KIMONO del master ma non e' una giacca (Bambu, 30/09/2026):
+# fuori dall'elenco dei kimoni, per nome.
+_BTO_NON_GIACCHE = ("gi checker tool",)
+
+
 def _bto_e_pantalone(nome) -> bool:
-    parole = re.split(r"[^a-z0-9]+", _wc_norm(str(nome or "")))
+    """True per i modelli che non si elencano come kimoni: i pantaloni e gli
+    accessori della sezione KIMONO (_BTO_NON_GIACCHE)."""
+    n = _wc_norm(str(nome or ""))
+    if any(x in n for x in _BTO_NON_GIACCHE):
+        return True
+    parole = re.split(r"[^a-z0-9]+", n)
     return any(p in _BTO_PAROLE_PANTALONI for p in parole)
 
 
