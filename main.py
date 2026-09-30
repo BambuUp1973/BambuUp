@@ -7261,7 +7261,7 @@ def _lingua_giusta(client, system, tools, messages, testo, max_tokens, chat_id, 
                 f"Rewrite your last reply entirely in {en_nome}.")},
         ]
         r = client.messages.create(
-            model=ANTHROPIC_MODEL, max_tokens=max_tokens, system=system + istruzione,
+            model=ANTHROPIC_MODEL, max_tokens=max_tokens, system=_system_in_cache(system, istruzione),
             tools=tools, tool_choice={"type": "none"}, messages=riscrivi,
         )
         _accumula_uso(uso, r)
@@ -7293,6 +7293,24 @@ _ERRORE_TECNICO = {
 }
 
 
+# --- PROMPT CACHING (30/09/2026, C47) -----------------------------------------
+# Il prompt di sistema del profilo e le definizioni degli strumenti sono
+# identici a ogni chiamata: l'API li rende nell'ordine tools -> system ->
+# messages, quindi UN punto di cache sull'ultimo blocco di sistema mette in
+# cache strumenti + sistema insieme. Letti dalla cache costano 0,1x; la prima
+# scrittura 1,25x; la cache vive 5 minuti dall'ultimo uso. Minimo per Haiku 4.5:
+# 4096 token (staff ~29.000, retail ~5.400 con gli strumenti: entrambi sopra).
+# NON vanno in cache i messaggi della conversazione ne' i risultati degli
+# strumenti (il manuale arriva come risultato di rispondi_dal_manuale): restano
+# freschi. Le aggiunte di un solo giro (lingua, chiamate finite) stanno in un
+# blocco DOPO il punto di cache, cosi' non lo rompono.
+def _system_in_cache(system: str, aggiunta: str = None) -> list:
+    blocchi = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    if aggiunta:
+        blocchi.append({"type": "text", "text": aggiunta})
+    return blocchi
+
+
 def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
                     uso: dict = None, contesto: dict = None) -> str:
     """Loop tool use: Haiku decide, eseguiamo le funzioni esistenti, Haiku compone."""
@@ -7316,7 +7334,7 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
             response = client.messages.create(
                 model=ANTHROPIC_MODEL,
                 max_tokens=max_tokens,
-                system=system,
+                system=_system_in_cache(system),
                 tools=active_tools,
                 messages=messages,
             )
@@ -7359,12 +7377,12 @@ def chat_with_tools(chat_id: str, user_message: str, role: str = DEFAULT_ROLE,
         final = client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=max_tokens,
-            system=system + (
+            system=_system_in_cache(system, (
                 "\n\nLE CHIAMATE AGLI STRUMENTI PER QUESTO TURNO SONO FINITE: rispondi "
                 "ORA all'utente con i dati che hai già ricevuto. NON annunciare altre "
                 "ricerche, NON scrivere piani di chiamata, nomi di strumenti, parametri "
                 "o ID. Se un dato manca, di' in una riga che non l'hai trovato."
-            ),
+            )),
             messages=messages,
         )
         _accumula_uso(uso, final)
