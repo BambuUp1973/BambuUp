@@ -200,6 +200,10 @@ def init_db():
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_in INTEGER;")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_out INTEGER;")
         cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_cache_in INTEGER;")
+        # Dal 30/09/2026 (C47) lettura e scrittura della cache separate: la
+        # lettura costa 0,1x, la scrittura 1,25x del prezzo di ingresso.
+        cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_cache_read INTEGER;")
+        cur.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS token_cache_write INTEGER;")
         # Dal 16/09/2026 ogni chiamata a uno strumento lascia una riga di SOLI
         # metadati (mai il contenuto della risposta, mai chiavi): serve a
         # ricostruire cosa il bot ha consultato in un turno, cosa che il 16/09
@@ -7145,10 +7149,11 @@ def _accumula_uso(uso, response):
     uso["stop_reason"] = getattr(response, "stop_reason", None)
     uso["token_in"] = uso.get("token_in", 0) + (getattr(u, "input_tokens", 0) or 0)
     uso["token_out"] = uso.get("token_out", 0) + (getattr(u, "output_tokens", 0) or 0)
-    uso["token_cache_in"] = uso.get("token_cache_in", 0) + (
-        (getattr(u, "cache_read_input_tokens", 0) or 0)
-        + (getattr(u, "cache_creation_input_tokens", 0) or 0)
-    )
+    letti = getattr(u, "cache_read_input_tokens", 0) or 0
+    scritti = getattr(u, "cache_creation_input_tokens", 0) or 0
+    uso["token_cache_in"] = uso.get("token_cache_in", 0) + letti + scritti
+    uso["token_cache_read"] = uso.get("token_cache_read", 0) + letti
+    uso["token_cache_write"] = uso.get("token_cache_write", 0) + scritti
 
 
 def _registra_strumento(chat_id, role, nome, parametri, esito, byte_risposta, durata_ms):
@@ -7719,7 +7724,7 @@ def pulizia_conversazioni_endpoint():
 # di token in ingresso, 5 USD per milione in uscita (listino Anthropic,
 # verificato il 15/09/2026). Cambio USD->EUR da CAMBIO_USD_EUR (default 0.92,
 # dichiarato come ipotesi). Nessuna cache di prompt e' attiva.
-_PREZZO_USD_PER_MILIONE = {"in": 1.0, "out": 5.0, "cache_in": 0.1}
+_PREZZO_USD_PER_MILIONE = {"in": 1.0, "out": 5.0, "cache_in": 0.1, "cache_write": 1.25}
 
 
 def _cambio_usd_eur() -> float:
@@ -7729,11 +7734,13 @@ def _cambio_usd_eur() -> float:
         return 0.92
 
 
-def _euro(token_in, token_out, token_cache_in=0) -> float:
+def _euro(token_in, token_out, token_cache_in=0, token_cache_write=0) -> float:
+    """token_cache_in = token LETTI dalla cache; token_cache_write = scritti."""
     usd = (
         (token_in or 0) * _PREZZO_USD_PER_MILIONE["in"]
         + (token_out or 0) * _PREZZO_USD_PER_MILIONE["out"]
         + (token_cache_in or 0) * _PREZZO_USD_PER_MILIONE["cache_in"]
+        + (token_cache_write or 0) * _PREZZO_USD_PER_MILIONE["cache_write"]
     ) / 1_000_000
     return round(usd * _cambio_usd_eur(), 6)
 
@@ -9105,6 +9112,36 @@ def conversazioni(prefisso: str = None, giorno: str = None, profilo: str = None,
             "troncato": len(righe) >= limit, "conversazioni": conv}
 
 
+@app.get("/uso-chat", dependencies=SOLO_ADMIN)
+def uso_chat(chat_id: str):
+    """Token di ogni risposta del bot in una chat, come li ha contati l'API:
+    ingresso non in cache, uscita, letti dalla cache, scritti in cache. Serve
+    a misurare il prompt caching senza esporre i costi nella risposta /chat
+    (che arriva anche al widget pubblico)."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, created_at, profilo, token_in, token_out, token_cache_in,
+                   token_cache_read, token_cache_write
+            FROM messages WHERE chat_id = %s AND role = 'assistant' ORDER BY id
+            """,
+            (chat_id,),
+        )
+        righe = [
+            {"id": i, "quando": str(t), "profilo": p, "token_in": a, "token_out": b,
+             "token_cache_in": c, "token_cache_read": r, "token_cache_write": w,
+             "costo_eur": _euro(a, b, r or 0, w or 0)}
+            for i, t, p, a, b, c, r, w in cur.fetchall()
+        ]
+        cur.close()
+        conn.close()
+        return {"chat_id": chat_id, "risposte": righe}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+
+
 @app.get("/costi", dependencies=SOLO_ADMIN)
 def costi():
     """Costo medio di un messaggio del bot. Due strati: (1) MISURA vera sui
@@ -9124,20 +9161,23 @@ def costi():
         cur.execute(
             """
             SELECT COALESCE(profilo, '(non marcato)'), COUNT(*),
-                   AVG(token_in), AVG(token_out), AVG(COALESCE(token_cache_in, 0)),
+                   AVG(token_in), AVG(token_out),
+                   AVG(COALESCE(token_cache_read, token_cache_in, 0)),
+                   AVG(COALESCE(token_cache_write, 0)),
                    MAX(token_in), MAX(token_out)
             FROM messages WHERE role = 'assistant' AND token_in IS NOT NULL
             GROUP BY 1 ORDER BY 1
             """
         )
         misurati = []
-        for p, n, tin, tout, tcache, mxin, mxout in cur.fetchall():
+        for p, n, tin, tout, tcache, twrite, mxin, mxout in cur.fetchall():
             misurati.append({
                 "profilo": p, "messaggi_misurati": n,
                 "token_in_medi": round(float(tin)), "token_out_medi": round(float(tout)),
-                "token_cache_medi": round(float(tcache)),
+                "token_cache_letti_medi": round(float(tcache)),
+                "token_cache_scritti_medi": round(float(twrite)),
                 "token_in_max": mxin, "token_out_max": mxout,
-                "costo_medio_eur": _euro(float(tin), float(tout), float(tcache)),
+                "costo_medio_eur": _euro(float(tin), float(tout), float(tcache), float(twrite)),
             })
         out["misura_vera_sui_messaggi_con_token_registrati"] = misurati or (
             "nessun messaggio con token registrati ancora"
@@ -9363,11 +9403,13 @@ def chat(request: ChatRequest, http_request: Request,
         cur.execute(
             """
             INSERT INTO messages (source, sender, chat_id, role, content, profilo,
-                                  token_in, token_out, token_cache_in)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                  token_in, token_out, token_cache_in,
+                                  token_cache_read, token_cache_write)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (request.source, "BambuUp", request.chat_id, "assistant", bot_reply, role,
-             uso.get("token_in"), uso.get("token_out"), uso.get("token_cache_in")),
+             uso.get("token_in"), uso.get("token_out"), uso.get("token_cache_in"),
+             uso.get("token_cache_read"), uso.get("token_cache_write")),
         )
 
         conn.commit()
