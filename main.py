@@ -340,78 +340,41 @@ def errore_canale(fonte: str, dettaglio: str = None) -> str:
 
 
 # --- CLIENT WOOCOMMERCE (archivio del vecchio sito) --------------------------
-# Dal 29/09/2026 il nome kanokimonos.com porta a Shopify, ma woocommerce e'
-# ancora vivo sul CDN Hostinger. L'URL resta https://kanokimonos.com/wp-json/
-# wc/v3/...: il nome serve per SNI, header Host e verifica del certificato.
-# Cambia SOLO l'indirizzo della connessione TCP, che va all'IP di
-# kanokimonos.com.cdn.hstgr.net, risolto all'avvio (mai scritto fisso).
-# Vale SOLO per la sessione qui sotto: Shopify, Fully, kanokimonos.app e
-# btoweb continuano a risolvere i nomi normalmente. Solo GET, basic auth.
-_WOO_HOST_CDN = "kanokimonos.com.cdn.hstgr.net"
-_WOO_IP = {"ip": None, "errore": None, "risolto_il": None}
+# Dal 29/09/2026 kanokimonos.com e' il sito Shopify. Woocommerce vive sul suo
+# dominio https://kanokimonos.eu (WP_HOME/WP_SITEURL, e tutti i link della REST
+# puntano li'). Sessione requests normale: il nome si risolve col DNS, SSL
+# verificato, basic auth, solo GET.
+# GUARDIA (Bambu, 01/10/2026): se WOO_BASE_URL o WC_API_URL contengono ancora
+# kanokimonos.com si ignorano e si usa kanokimonos.eu, con una riga di log che
+# chiede di aggiornare la variabile su Render.
+_WOO_RADICE_PREDEFINITA = "https://kanokimonos.eu"
+_WOO_GUARDIA = {"scattata": False, "variabile": None, "loggata": False}
 _WOO_TENTATIVI_BOT = 4      # il 403 "Bot Verification" di LiteSpeed e' transitorio
 _WOO_ATTESA_BOT = 3         # secondi fra un tentativo e l'altro
 
 
-def _woo_risolvi_ip() -> str:
-    import socket
-    try:
-        indirizzi = socket.getaddrinfo(_WOO_HOST_CDN, 443, socket.AF_INET, socket.SOCK_STREAM)
-        ip = indirizzi[0][4][0]
-        _WOO_IP.update(ip=ip, errore=None,
-                       risolto_il=datetime.now(timezone.utc).isoformat(timespec="seconds"))
-        print(f"[WOO] {_WOO_HOST_CDN} -> {ip}")
-    except Exception as e:
-        _WOO_IP.update(ip=None, errore=f"{type(e).__name__}: {e}")
-        print(f"[WOO] risoluzione di {_WOO_HOST_CDN} fallita: {e}. "
-              "L'archivio woocommerce non e' raggiungibile.")
-    return _WOO_IP["ip"]
-
-
 def _woo_base() -> str:
+    nome_var = "WOO_BASE_URL" if os.getenv("WOO_BASE_URL") else "WC_API_URL"
     base = str(os.getenv("WOO_BASE_URL") or WC_API_URL or "").strip().rstrip("/")
     if base.endswith("/wp-json/wc/v3"):
         base = base[: -len("/wp-json/wc/v3")]
     if base and not base.lower().startswith(("http://", "https://")):
         base = "https://" + base
-    return base
+    if base and "kanokimonos.com" in base.lower():
+        _WOO_GUARDIA.update(scattata=True, variabile=nome_var)
+        if not _WOO_GUARDIA["loggata"]:
+            _WOO_GUARDIA["loggata"] = True
+            print(f"[WOO] {nome_var} punta ancora a kanokimonos.com (Shopify): "
+                  f"ignorata, uso {_WOO_RADICE_PREDEFINITA}. "
+                  "Variabile su Render da aggiornare.")
+        return _WOO_RADICE_PREDEFINITA
+    _WOO_GUARDIA.update(scattata=False, variabile=None)
+    return base or _WOO_RADICE_PREDEFINITA
 
 
 def _woo_sessione():
-    from requests.adapters import HTTPAdapter
-    from urllib3.connection import HTTPSConnection
-    from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
-    from urllib.parse import urlsplit
-
-    class _ConnessioneWoo(HTTPSConnection):
-        # Solo il socket viene aperto verso l'IP Hostinger. In urllib3 'host'
-        # legge _dns_host, quindi lo si cambia per la sola apertura del socket
-        # e lo si rimette subito: SNI, Host e certificato restano sul nome.
-        def _new_conn(self):
-            if not _WOO_IP["ip"]:
-                raise ConnectionError(
-                    f"IP di {_WOO_HOST_CDN} non risolto: {_WOO_IP['errore']}")
-            nome = self._dns_host
-            self._dns_host = _WOO_IP["ip"]
-            try:
-                return super()._new_conn()
-            finally:
-                self._dns_host = nome
-
-    class _PoolWoo(HTTPSConnectionPool):
-        ConnectionCls = _ConnessioneWoo
-
-    class _AdattatoreWoo(HTTPAdapter):
-        def init_poolmanager(self, *args, **kwargs):
-            super().init_poolmanager(*args, **kwargs)
-            self.poolmanager.pool_classes_by_scheme = {
-                "http": HTTPConnectionPool, "https": _PoolWoo,
-            }
-
     s = requests.Session()
-    host = urlsplit(_woo_base()).netloc
-    if host:
-        s.mount(f"https://{host}/", _AdattatoreWoo())
+    s.verify = True
     s.headers.update({
         "User-Agent": "BambuUp-bot/1.0 (+https://bambuup.onrender.com)",
         "Accept": "application/json",
@@ -419,13 +382,28 @@ def _woo_sessione():
     return s
 
 
-_woo_risolvi_ip()
 _WOO_SESSIONE = _woo_sessione()
 
 
+def _woo_indirizzo() -> dict:
+    """Per le sonde: radice usata, esito della guardia e gli IP che il DNS da'
+    ADESSO per quel nome (solo lettura, la sessione risolve da se')."""
+    import socket
+    from urllib.parse import urlsplit
+    radice = _woo_base()
+    host = urlsplit(radice).hostname
+    try:
+        ip = sorted({a[4][0] for a in socket.getaddrinfo(host, 443, socket.AF_INET)})
+        errore = None
+    except Exception as e:
+        ip, errore = [], f"{type(e).__name__}: {e}"
+    return {"radice": radice, "host": host, "ip_risolti_ora": ip, "dns_errore": errore,
+            "guardia_scattata": _WOO_GUARDIA["scattata"],
+            "variabile_da_aggiornare": _WOO_GUARDIA["variabile"]}
+
+
 def _woo_set_chiavi() -> list:
-    """WOO_* prima, poi WC_*: nessuna delle due e' stata provata davvero
-    attraverso l'IP Hostinger (29/09/2026). Si dichiara sempre quale ha risposto."""
+    """WOO_* prima, poi WC_*. Si dichiara sempre quale ha risposto."""
     return [
         ("WOO_*", os.getenv("WOO_CONSUMER_KEY"), os.getenv("WOO_CONSUMER_SECRET")),
         ("WC_*", WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
@@ -437,12 +415,10 @@ def _woo_e_bot_verification(r) -> bool:
 
 
 def woo_get(endpoint: str, params: dict = None, set_chiavi: str = None):
-    """GET sulla REST woocommerce attraverso l'IP Hostinger. Restituisce
+    """GET sulla REST woocommerce (kanokimonos.eu). Restituisce
     (response o None, tentativi). Il 403 "Bot Verification" si ritenta fino a
     _WOO_TENTATIVI_BOT volte; un 401/403 sulle chiavi passa al set successivo.
     set_chiavi ('WOO_*' o 'WC_*') forza un solo set (per le sonde)."""
-    if not _WOO_IP["ip"]:
-        _woo_risolvi_ip()   # all'avvio puo' essere fallita per un attimo
     tentativi = []
     url = f"{_woo_base()}/wp-json/wc/v3/{endpoint}"
     ultima = None
@@ -6785,8 +6761,8 @@ def _wc_cache_buster(params: dict) -> dict:
 
 
 def _wc_get(endpoint: str, params: dict = None):
-    """Una GET su WooCommerce con il client dell'archivio (woo_get: IP
-    Hostinger, basic auth, WOO_* poi WC_*). Restituisce (json, None) o
+    """Una GET su WooCommerce con il client dell'archivio (woo_get:
+    kanokimonos.eu, basic auth, WOO_* poi WC_*). Restituisce (json, None) o
     (None, errore_payload). Il dettaglio tecnico resta nel log e in
     _WC_ULTIMA_DIAGNOSTICA; al modello va la frase."""
     r, tentativi = woo_get(endpoint, params)
@@ -9537,7 +9513,7 @@ def wc_ordini_cliente(cliente: str = None):
 @app.get("/wc-sonda", dependencies=SOLO_ADMIN)
 def wc_sonda(request: Request, endpoint: str = "products", set: str = None):
     """Sonda grezza sull'archivio woocommerce, con lo STESSO client del bot
-    (woo_get: IP Hostinger, basic auth, 403 "Bot Verification" ritentato,
+    (woo_get: kanokimonos.eu, basic auth, 403 "Bot Verification" ritentato,
     cache-buster sempre). Inoltra alla REST i parametri extra della query
     string (per_page, _fields, ...) e restituisce solo codice HTTP, totali,
     tentativi e corpo troncato: mai credenziali. set='woo' o 'wc' forza un
@@ -9549,8 +9525,7 @@ def wc_sonda(request: Request, endpoint: str = "products", set: str = None):
     r, tentativi = woo_get(endpoint, extra, set_chiavi=forzato)
     out = {
         "endpoint": endpoint, "parametri": extra, "tentativi": tentativi,
-        "ip_hostinger": _WOO_IP["ip"], "ip_errore": _WOO_IP["errore"],
-        "ip_risolto_il": _WOO_IP["risolto_il"],
+        "indirizzo": _woo_indirizzo(),
     }
     if r is None:
         return out
@@ -11787,7 +11762,7 @@ def fully_giacenza(query: str = None, sku: str = None, taglia: str = None):
 
 def _diag_woo_prova(nomi: list, nome_set: str, key, secret) -> dict:
     """Una lettura minima su wc/v3/orders con UN set di chiavi, attraverso lo
-    stesso client del bot (woo_get: IP Hostinger, basic auth, cache-buster).
+    stesso client del bot (woo_get: kanokimonos.eu, basic auth, cache-buster).
     I due set si provano nello stesso modo, cosi' una differenza di esito
     viene dalle chiavi e non dal codice."""
     mancanti = _diag_mancanti(list(zip(nomi, (_woo_base(), key, secret))))
@@ -11799,10 +11774,10 @@ def _diag_woo_prova(nomi: list, nome_set: str, key, secret) -> dict:
         }
     r, tentativi = woo_get("orders", {"per_page": 1, "_fields": "id,status,date_created"},
                            set_chiavi=nome_set)
-    base = {"nomi_usati": nomi, "ip_hostinger": _WOO_IP["ip"], "tentativi": tentativi}
+    base = {"nomi_usati": nomi, "indirizzo": _woo_indirizzo(), "tentativi": tentativi}
     if r is None:
         ultimo = tentativi[-1] if tentativi else {}
-        return {**base, "esito": f"errore: {ultimo.get('eccezione') or _WOO_IP['errore']}"}
+        return {**base, "esito": f"errore: {ultimo.get('eccezione')}"}
     if r.status_code != 200:
         testo = (r.text or "").strip().replace("\n", " ")[:_DIAG_MAX_TESTO]
         return {**base, "esito": f"errore: wc/v3/orders HTTP {r.status_code} - {testo}",
