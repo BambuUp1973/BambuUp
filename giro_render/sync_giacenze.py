@@ -13,8 +13,10 @@ Solo varianti ACTIVE, esclusi bundle, senza SKU, non tracciate, SKU non in Fully
 Dal cmd 170 (29/09/26) anche le varianti componenti dei bundle citate in simple_bundles.bundled_variants
 (ARASHI 2.0 White: giacca + pantalone BJJ, prodotti in bozza); le altre varianti di quei prodotti restano fuori.
 Uso:  python sync_giacenze.py        -> PROVA A SECCO
-      python sync_giacenze.py go     -> scrive (inventorySetQuantities, blocchi da 100, stop al primo errore)
-      python sync_giacenze.py go max=50 -> come go, ma NON scrive se le varianti da cambiare sono piu' di 50
+      python sync_giacenze.py go     -> scrive SOLO le varianti diverse da Fully, TUTTE (cmd 291: nessun limite sul numero),
+                                        a scaglioni da 50 uno dopo l'altro; scaglione non OK = riga ERRORE nel log e stop,
+                                        il giro dopo riparte da cio' che e' ancora diverso
+  Non scrive niente se: Fully non risponde o risponde vuoto, abbinate < 1000, SKU doppi > 10.
 Fully: solo GET. cmd 289 (copia per Render): nessun backup su file; fuori da GIRO_MODO=acceso
 inventorySetQuantities diventa una riga "AVREI FATTO" nel log.
 """
@@ -24,8 +26,7 @@ from _giacenze_lib import q, read_variants, read_open_orders, fully_products, fu
 from _seo_lib import avrei_fatto
 
 GO = len(sys.argv) > 1 and sys.argv[1] == "go"
-MAX_CAMBI = next((int(a.split("=", 1)[1]) for a in sys.argv[2:] if a.startswith("max=")), None)
-MIN_ABBINATE, MAX_DOPPI, BLOCCO = 1000, 10, 100
+MIN_ABBINATE, MAX_DOPPI, BLOCCO = 1000, 10, 50      # cmd 291: scaglioni da 50, tolto il limite max= sulle varianti da cambiare
 M = """mutation($input:InventorySetQuantitiesInput!, $key:String!){ inventorySetQuantities(input:$input) @idempotent(key:$key){
   inventoryAdjustmentGroup{ id } userErrors{ field message code } } }"""
 
@@ -45,6 +46,8 @@ def copia_attiva_in_fully(nome):
 def calcola():
     sh = read_variants(con_componenti=True)
     fby = fully_products()
+    if not fby:      # cmd 291: Fully vuoto = non si scrive niente (Fully che non risponde = eccezione, gestita in main)
+        raise RuntimeError("Fully ha risposto senza prodotti")
     ordini = read_open_orders()
     pend, ord_pend = Counter(), []
     for name, pezzi in ordini:
@@ -71,8 +74,14 @@ def calcola():
 def main():
     t0 = stamp()
     print("MODO:", "SCRITTURA (go)" if GO else "PROVA A SECCO")
-    sh, todo, esclusi, doppi, ord_pend = calcola()
+    try:
+        sh, todo, esclusi, doppi, ord_pend = calcola()
+    except Exception as e:      # cmd 291: Fully (o Shopify) non risponde -> nessuna scrittura
+        print("STOP: lettura fallita, nessuna scrittura:", type(e).__name__, e)
+        log("sync: STOP senza scrivere (lettura fallita: %s: %s)" % (type(e).__name__, str(e)[:200]))
+        return
     cambia = [r for r in todo if r["available"] != r["target"]]
+    sale = lambda r: r["target"] > (r["available"] or 0)
     pezzi_pend = sum(sum(o["pezzi"].values()) for o in ord_pend)
     print("varianti ACTIVE %d | abbinate %d | SKU doppi Shopify %d" % (len(sh), len(todo), len(doppi)))
     print("ordini aperti non in Fully %d (pezzi %d)" % (len(ord_pend), pezzi_pend))
@@ -83,7 +92,8 @@ def main():
         for r in todo:
             if r.get("componente"):
                 print("  comp %-15s %-45s %s -> %s" % (r["sku"], (r["prodotto"] + " / " + r["variante"])[:45], r["available"], r["target"]))
-    print("cambierebbero %d | gia' uguali %d" % (len(cambia), len(todo) - len(cambia)))
+    print("cambierebbero %d (salgono %d, scendono %d) | gia' uguali %d" % (
+        len(cambia), sum(1 for r in cambia if sale(r)), sum(1 for r in cambia if not sale(r)), len(todo) - len(cambia)))
     for r in cambia[:10]:
         print("  %-15s %-40s %s -> %s (free %s, ordini %s)" % (r["sku"], (r["prodotto"] + " / " + r["variante"])[:40],
               r["available"], r["target"], r["fully_free_qty"], r["ordini_non_in_fully"]))
@@ -97,7 +107,6 @@ def main():
     stop = []
     if len(todo) < MIN_ABBINATE: stop.append("abbinate %d < %d" % (len(todo), MIN_ABBINATE))
     if len(doppi) > MAX_DOPPI: stop.append("%d SKU doppi > %d" % (len(doppi), MAX_DOPPI))
-    if MAX_CAMBI is not None and len(cambia) > MAX_CAMBI: stop.append("%d varianti da cambiare > %d" % (len(cambia), MAX_CAMBI))
     if stop:
         rep["stop"] = stop; save(); print("STOP:", stop, "| salvato", path)
         if GO: log("sync: STOP senza scrivere (%s)" % "; ".join(stop))
@@ -112,34 +121,45 @@ def main():
     if not avrei_fatto("inventorySetQuantities su %d varianti (sede Fully, blocchi da %d)" % (len(cambia), BLOCCO)):
         log("sync: abbinate %d, ordini non in Fully %d, da cambiare %d (prova, nulla scritto)" % (len(todo), len(ord_pend), len(cambia)))
         return
-    fatti = 0
-    for i in range(0, len(cambia), BLOCCO):
+    fatti, salite, n_sc, sc_ok = 0, 0, (len(cambia) + BLOCCO - 1) // BLOCCO, 0
+    for i in range(0, len(cambia), BLOCCO):     # cmd 291: uno scaglione dopo l'altro, il successivo solo se il precedente e' OK
         blk = cambia[i:i + BLOCCO]
+        k = i // BLOCCO + 1
         inp = {"name": "available", "reason": "correction", "referenceDocumentUri": "logistics://kano/sync_giacenze/" + t0,
                "quantities": [{"inventoryItemId": r["inventory_item"], "locationId": LOC, "quantity": r["target"],
                                "changeFromQuantity": r["available"]} for r in blk]}
-        d = q(M, {"input": inp, "key": str(uuid.uuid4())})["inventorySetQuantities"]
-        ue = d["userErrors"]
+        try:
+            d = q(M, {"input": inp, "key": str(uuid.uuid4())})["inventorySetQuantities"]
+            ue = d["userErrors"]
+        except Exception as e:      # cmd 291: nessuna risposta OK = ci si ferma qui
+            d, ue = {}, [{"message": "%s: %s" % (type(e).__name__, str(e)[:200])}]
         rep["blocchi"].append({"n": len(blk), "group": (d.get("inventoryAdjustmentGroup") or {}).get("id"), "userErrors": ue})
-        print("blocco %d: %d righe | userErrors %s" % (i // BLOCCO + 1, len(blk), ue or "nessuno"))
+        print("scaglione %d/%d: %d righe | userErrors %s" % (k, n_sc, len(blk), ue or "nessuno"))
         if ue:
-            rep["stop"] = "userErrors al blocco %d" % (i // BLOCCO + 1); break
-        fatti += len(blk)
-    rep["aggiornate"] = fatti
+            rep["stop"] = "ERRORE allo scaglione %d/%d" % (k, n_sc)
+            log("sync: ERRORE allo scaglione %d/%d (%d righe), mi fermo qui, il giro dopo riparte: %s" % (
+                k, n_sc, len(blk), "; ".join(str(x.get("message")) for x in ue)[:300]))
+            break
+        fatti += len(blk); salite += sum(1 for r in blk if sale(r)); sc_ok += 1
+    rep["aggiornate"], rep["salite"], rep["scese"], rep["scaglioni"] = fatti, salite, fatti - salite, "%d/%d" % (sc_ok, n_sc)
 
     # verifica: rilettura Shopify vs target
     time.sleep(5)
-    now = {r["variant_id"]: r["available"] for r in read_variants(con_componenti=True)}
+    try:
+        now = {r["variant_id"]: r["available"] for r in read_variants(con_componenti=True)}
+    except Exception as e:
+        now = {}; print("verifica non riuscita:", type(e).__name__, e)
     ok = 0
     for r in rep["righe"]:
         r["dopo"] = now.get(r["variant_id"])
         ok += r["dopo"] == r["target"]
     rep["verifica_ok"] = ok
     save()
-    print("AGGIORNATE %d | gia' uguali %d | VERIFICA dopo = formula su %d/%d | salvato %s" % (
-        fatti, len(todo) - len(cambia), ok, len(todo), path))
-    log("sync: abbinate %d, ordini non in Fully %d, cambiate %d%s, verifica %d/%d" % (
-        len(todo), len(ord_pend), fatti, " (STOP: %s)" % rep["stop"] if rep["stop"] else "", ok, len(todo)))
+    print("AGGIORNATE %d (salite %d, scese %d) in %d/%d scaglioni | gia' uguali %d | VERIFICA dopo = formula su %d/%d | salvato %s" % (
+        fatti, salite, fatti - salite, sc_ok, n_sc, len(todo) - len(cambia), ok, len(todo), path))
+    log("sync: abbinate %d, ordini non in Fully %d, da cambiare %d, cambiate %d (salite %d, scese %d), scaglioni %d/%d%s, verifica %d/%d" % (
+        len(todo), len(ord_pend), len(cambia), fatti, salite, fatti - salite, sc_ok, n_sc,
+        " (STOP: %s)" % rep["stop"] if rep["stop"] else "", ok, len(todo)))
 
 
 if __name__ == "__main__":

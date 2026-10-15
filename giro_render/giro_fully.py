@@ -7,7 +7,8 @@ In ordine (cmd 256/257: di nuovo come il 01/10, il NOSTRO connettore invia; app 
             ritorno_fully.py go        -> evasione con tracking degli ordini spediti, copia cercata per nome (shop 721 e 883)
             avvisi_fully.py go         -> cmd 244: UN riepilogo al giorno a info@ "Fully: N ordini fermi" (cmd 289: giro delle 09:00-09:09 Roma)
             tag_spedito_non_pagato.py go -> toglie SPEDITO-NON-PAGATO dagli ordini diventati pagati (cmd 210)
-            sync_giacenze.py go max=50 -> giacenze del sito = Fully (non scrive se >50 varianti o <1000 abbinate; correzione 242)
+            sync_giacenze.py go        -> giacenze del sito = Fully su TUTTE le varianti diverse, scaglioni da 50 (cmd 291;
+                                          non scrive se Fully non risponde/vuoto, <1000 abbinate, >10 SKU doppi)
 Log: una riga per azione, solo numeri ordine (nessun dato personale).
 
 cmd 289 (copia per Render, cartella BambuUp/giro_render): stesse regole dell'originale in ShopifyKano, con questi adattamenti:
@@ -38,7 +39,7 @@ PASSI = [("connettore", ["connettore_fully.py", "auto"]),
          ("ritorno", ["ritorno_fully.py", "go"]),
          ("avvisi", ["avvisi_fully.py", "go"]),      # cmd 244: UN riepilogo al giorno, non piu' una email per ordine
          ("tag-pagati", ["tag_spedito_non_pagato.py", "go"]),
-         ("sync", ["sync_giacenze.py", "go", "max=50"])]
+         ("sync", ["sync_giacenze.py", "go"])]
 
 
 def scrivi(riga):
