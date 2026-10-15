@@ -1,0 +1,9 @@
+{
+  "_nota": "Regola decisa da Bambu (cmd 131, 28/09/26): il corriere Fully dipende SOLO dal paese di consegna, per tutte le tariffe (retail e B2B). Il nome della tariffa non va a Fully. Sostituisce carrier_map.json.",
+  "IT": "GLS Italia",
+  "UE": {
+    "carrier": "GLS Slovenia",
+    "paesi": ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"]
+  },
+  "altri": "Fedex Connect Plus"
+}
