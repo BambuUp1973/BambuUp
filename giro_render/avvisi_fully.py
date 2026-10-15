@@ -6,18 +6,20 @@ Ora, al primo giro dopo le 09:00, UNA email da admin@kanokimonos.com a info@kano
 "Fully: N ordini fermi" con gli ordini Shopify che hanno il tag FULLY-ERRORE (messo dal controllore,
 connettore_fully.py) e che non sono annullati ne' evasi: numero, cliente, da quanti giorni e' fermo, motivo
 in italiano, link all'ordine. Nessun ordine fermo -> nessuna email.
-Massimo una email al giorno (originale PC: il giorno fatto stava in logs/avvisi_fully_riepilogo.json; se l'invio falliva
-il giorno non veniva segnato e si riprovava al giro dopo). Sola lettura su Shopify e Fully: non tocca tag, note o ordini.
+Massimo una email al giorno: il giorno fatto sta in logs/avvisi_fully_riepilogo.json. Se l'invio fallisce
+il giorno NON viene segnato e si riprova al giro dopo. Sola lettura su Shopify e Fully: non tocca tag, note o ordini.
 
 "Fermo da": data della prima riga FULLY-ERRORE della nota dopo l'ultima riga FULLY-INVIATO
 (il blocco attuale); se la nota non ne ha, la data dell'ordine.
 
-cmd 289 (copia per Render): NESSUN file di stato. In "go" il riepilogo parte solo se il giro cade tra le 09:00 e le 09:09
-ora di Roma (con la pianificazione */10 e' un solo giro al giorno); se quell'invio fallisce, oggi non si riprova.
-Fuori da GIRO_MODO=acceso l'invio diventa una riga "AVREI FATTO" nel log. Modo "salta" tolto (non c'e' stato da segnare).
+Uso:  python avvisi_fully.py         -> a secco: mostra il riepilogo di oggi, non manda niente, non segna niente
+      python avvisi_fully.py go      -> dopo le 09:00, se oggi non e' gia' partito: manda il riepilogo (usato da giro_fully.py)
+      python avvisi_fully.py salta   -> segna oggi come fatto senza mandare niente
 
-Uso:  python avvisi_fully.py         -> a secco: mostra il riepilogo di oggi, non manda niente
-      python avvisi_fully.py go      -> tra 09:00 e 09:09 ora di Roma: manda il riepilogo (usato da giro_fully.py)
+cmd 289 fase 2 (copia per Render): stessa logica del PC. Differenze: il "giorno fatto" sta nella memoria _memoria.py
+(tabella giro_fully_stato se c'e' DATABASE_URL, altrimenti logs/avvisi_fully_riepilogo.json come sul PC); ora di Roma;
+fuori da GIRO_MODO=acceso email e memoria diventano righe "AVREI FATTO". Memoria illeggibile -> "ERRORE memoria",
+nessuna email in quel giro.
 """
 import json, os, re, sys, time, html, smtplib
 from datetime import datetime, date
@@ -26,12 +28,14 @@ from email.utils import formataddr, make_msgid, formatdate
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 from _giacenze_lib import q, log, TAG_ERR, TAG_OK
-from _seo_lib import load_env, ora_roma, avrei_fatto
+from _seo_lib import load_env, ora_roma, roma_str, avrei_fatto
+import _memoria
 
 MITT = "admin@kanokimonos.com"
 DEST = "info@kanokimonos.com"
 SMTP_HOST, SMTP_PORT = "smtp.hostinger.com", 465
-ORA_INVIO, MINUTI_FINESTRA = 9, 10    # cmd 289: solo tra 09:00 e 09:09 ora di Roma
+STATO = "avvisi_fully_riepilogo"     # cmd 289: chiave in _memoria (database o logs/avvisi_fully_riepilogo.json)
+ORA_INVIO = 9            # dalle 09:00 ora di Roma
 ADMIN_URL = "https://admin.shopify.com/store/tipjd7-r0/orders/%s"
 Q = """query($c:String){ orders(first:50, after:$c, query:"tag:%s"){ pageInfo{ hasNextPage endCursor }
   nodes{ id legacyResourceId name createdAt tags note cancelledAt displayFulfillmentStatus displayFinancialStatus
@@ -93,17 +97,27 @@ def a_html(t):
 
 
 def manda(dest, ogg, corpo):
-    if not avrei_fatto("email riepilogo %r da %s a %s" % (ogg, MITT, dest)):
-        return False
+    if not avrei_fatto("email %r da %s a %s" % (ogg, MITT, dest)):
+        return
     pwd = load_env().get("ADMIN_SMTP_PASSWORD", "").strip()
-    if not pwd: raise RuntimeError("ADMIN_SMTP_PASSWORD mancante")
+    if not pwd: raise RuntimeError("ADMIN_SMTP_PASSWORD vuota nel .env")
     m = EmailMessage()
     m["From"] = formataddr(("Kano Kimonos - giro Fully", MITT)); m["To"] = dest; m["Reply-To"] = MITT
     m["Subject"] = ogg; m["Date"] = formatdate(localtime=True); m["Message-ID"] = make_msgid(domain="kanokimonos.com")
     m.set_content(corpo); m.add_alternative(a_html(corpo), subtype="html")
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=60) as s:
         s.login(MITT, pwd); s.send_message(m)
-    return True
+
+
+def leggi_stato():
+    return _memoria.leggi(STATO)        # cmd 289: file mancante/illeggibile -> {} come prima; database giu' -> MemoriaErrore
+
+
+def salva_stato(s):
+    try:
+        _memoria.scrivi(STATO, s)
+    except _memoria.MemoriaErrore as e:
+        log("ERRORE memoria: giorno non segnato (%s)" % e)
 
 
 def ordini_fermi():
@@ -159,28 +173,39 @@ def riepilogo(fermi, oggi):
 def main():
     a = sys.argv[1:]
     modo = a[0] if a else "secco"
-    if modo not in ("secco", "go"):
-        raise SystemExit("uso: python avvisi_fully.py [secco|go]")
-    adesso = ora_roma()
-    oggi = adesso.date()
+    if modo not in ("secco", "go", "salta"):
+        raise SystemExit("uso: python avvisi_fully.py [secco|go|salta]")
+    oggi = ora_roma().date()
+    try:
+        stato = leggi_stato()
+    except _memoria.MemoriaErrore as e:   # cmd 289: meglio un giro di ritardo che un'email doppia
+        log("ERRORE memoria: %s; nessuna email in questo giro" % e); return
+    if modo == "salta":
+        stato[oggi.isoformat()] = {"segnato": roma_str("%Y-%m-%d %H:%M:%S"), "email": False, "nota": "salta a mano"}
+        salva_stato(stato); print("oggi segnato come fatto, nessuna email"); return
     if modo == "go":
-        if not (adesso.hour == ORA_INVIO and adesso.minute < MINUTI_FINESTRA):
-            print("fuori dalla finestra %02d:00-%02d:%02d ora di Roma: niente" % (ORA_INVIO, ORA_INVIO, MINUTI_FINESTRA - 1)); return
+        if ora_roma().hour < ORA_INVIO:
+            print("prima delle %02d:00: niente" % ORA_INVIO); return
+        if oggi.isoformat() in stato:
+            print("riepilogo di oggi gia' fatto: niente"); return
     fermi = [dati(o, oggi) for o in ordini_fermi()]
     if not fermi:
         print("nessun ordine fermo: nessuna email")
         if modo == "go":
-            log("avvisi: nessun ordine fermo, nessuna email")
+            stato[oggi.isoformat()] = {"segnato": roma_str("%Y-%m-%d %H:%M:%S"), "email": False, "ordini": 0}
+            salva_stato(stato); log("avvisi: nessun ordine fermo, nessuna email")
         return
     ogg, corpo = riepilogo(fermi, oggi)
     if modo != "go":
         print("A SECCO (non inviato)\nDa: %s  A: %s\nOggetto: %s\n\n%s" % (MITT, DEST, ogg, corpo)); return
     try:
-        inviata = manda(DEST, ogg, corpo)
+        manda(DEST, ogg, corpo)
     except Exception as e:
-        log("avvisi: riepilogo NON inviato (%s): oggi non si riprova" % str(e)[:120]); return
-    if inviata:
-        log("avvisi: riepilogo %r -> %s" % (ogg, DEST))
+        log("avvisi: riepilogo NON inviato (%s): si riprova al prossimo giro" % str(e)[:120]); return
+    stato[oggi.isoformat()] = {"inviato": roma_str("%Y-%m-%d %H:%M:%S"), "a": DEST, "email": True,
+                               "ordini": [d["ordine"] for d in fermi]}
+    salva_stato(stato)
+    log("avvisi: riepilogo %r -> %s" % (ogg, DEST))
 
 
 if __name__ == "__main__":

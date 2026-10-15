@@ -14,12 +14,15 @@ cmd 289 (copia per Render, cartella BambuUp/giro_render): stesse regole dell'ori
   - GIRO_MODO (variabile d'ambiente): "spento" = esce subito; "prova" = legge tutto, ogni scrittura diventa
     una riga "AVREI FATTO: ..."; "acceso" = lavora. Mancante o sconosciuto = "spento".
   - log solo su stdout con data e ora di Roma; niente file di log, niente cartella backup/
+  - fase 2: memoria tra i giri (email del giorno, riga "saltato") in _memoria.py: database se c'e' DATABASE_URL,
+    altrimenti i json del PC in logs/; riga "memoria: ..." all'inizio di ogni giro
   - niente file di lock: un giro alla volta lo garantisce la pianificazione (cron Render); qui solo un controllo in memoria
   - un passo che fallisce non ferma i successivi: riga "ERRORE passo X", codice di uscita sempre 0
 Uso manuale:  GIRO_MODO=prova python giro_fully.py
 """
 import os, subprocess, sys, time
 from _seo_lib import giro_modo, roma_str
+import _memoria
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 TIMEOUT_PASSO = 8 * 60
@@ -74,6 +77,8 @@ def main():
     t = time.time()
     try:
         scrivi("giro: inizio (GIRO_MODO=%s)" % modo)
+        ok, testo = _memoria.controllo()     # cmd 289 fase 2: solo lettura
+        scrivi(("memoria: " + testo) if ok else ("memoria: ERRORE %s" % testo if modo == "prova" else "ERRORE memoria: %s" % testo))
         if CONNETTORE_SPENTO:
             scrivi("connettore: SPENTO (CONNETTORE_SPENTO), nessun invio ordini a Fully")
         for nome, argv in PASSI:
