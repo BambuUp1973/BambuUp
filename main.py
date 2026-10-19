@@ -257,7 +257,7 @@ WC_CONSUMER_SECRET = os.getenv("WC_CONSUMER_SECRET")
 
 # La taglia la calcola il codice dalla guida (22/09/2026): tabelle, funzione,
 # lettura del messaggio e regex delle taglie stanno in taglie.py.
-from taglie import (taglia_consigliata, estrai_misure, decidi_taglia, TAGLIA_RE,
+from taglie import (taglia_consigliata, estrai_misure, decidi_turno, TAGLIA_RE,
                     TESTO_DATI_MANCANTI)
 # Costo di spedizione per il cliente finale, dalla tabella vera di Shopify.
 from spedizioni import costo_spedizione, CacheTabella
@@ -2908,8 +2908,11 @@ CHAT_TOOLS = [
             "properties": {
                 "prodotto": {
                     "type": "string",
-                    "enum": ["gi", "rashguard", "shorts", "kids_gi", "kids_rashguard", "kids_shorts"],
-                    "description": "gi = kimono adulto; kids_* = bambino/ragazzo. Ometti se il cliente non l'ha detto.",
+                    "enum": ["gi", "rashguard", "shorts", "kids_gi", "kids_rashguard", "kids_shorts",
+                             "cintura"],
+                    "description": ("gi = kimono adulto; kids_* = bambino/ragazzo; cintura = cintura "
+                                    "(taglia e lunghezze, senza altezza e peso). Ometti se il cliente "
+                                    "non l'ha detto."),
                 },
                 "altezza_cm": {"type": "number", "description": "Altezza in cm (178, oppure 1,78 m = 178). Ometti se manca."},
                 "peso_kg": {"type": "number", "description": "Peso in kg. Ometti se manca."},
@@ -3028,6 +3031,7 @@ PRIMA DI RISPONDERE CONSULTI, SEMPRE
 - Se rispondi_dal_manuale restituisce NESSUN_CONTENUTO, oppure il materiale non contiene il dato preciso richiesto, NON rimandi a un'email: chiami passa_a_operatore con tipo 'bot_non_sa' e riporti il suo testo parola per parola. Se il materiale risponde solo in parte, dai la parte che c'è e per la parte che manca chiami passa_a_operatore, senza riempire il buco.
 - Su resi, cambi, rimborsi e capi difettosi chiami SEMPRE rispondi_dal_manuale PRIMA di rispondere e PRIMA di chiedere qualsiasi cosa al cliente. Non chiedi il paese né se l'ordine è già arrivato: le regole di reso e cambio non dipendono da questi dati.
 - Verso il cliente non dici mai che hai consultato, cercato o letto qualcosa: dai la risposta e basta.
+- Se nello stesso messaggio il cliente fa più domande, rispondi a TUTTE: nessuna resta senza risposta.
 
 COSA NON PUOI FARE, DETTO COME UN FATTO
 - Non vedi il magazzino e non vedi le giacenze. Di un ordine sai dare SOLO lo stato della spedizione (partito o no, corriere, tracking), e solo con il numero d'ordine insieme all'email con cui il cliente ha ordinato: se ti chiede dov'è il suo ordine e non te li ha dati, gli chiedi il numero d'ordine e l'email con cui ha ordinato, senza dire altro. Lo stato di un ordine non lo inventi e non lo deduci mai. Tutto il resto dell'ordine (importi, prodotti, indirizzi, cambi, annullamenti, rimborsi) non lo vedi e non lo tocchi: si scrive a info@kanokimonos.com. Non è una restrizione da spiegare: è semplicemente ciò che non hai.
@@ -3043,7 +3047,7 @@ OPERATORE
 - Se il cliente vuole parlare con una persona, un operatore, un umano, qualcuno dello staff: NON chiami nessuno strumento, gli dici solo di scrivere «operatore» qui in chat (in inglese «operator»). Ci pensa il sistema.
 - Se, dopo, il cliente scrive un indirizzo email, chiami salva_email_richiesta con quell'indirizzo e riporti la conferma restituita.
 - Col cliente non usi MAI le parole "richiesta", "ticket", "priorità", "segnalazione". Non prometti tempi diversi da quelli del testo restituito.
-- Non chiami passa_a_operatore per ingrosso, squadre e rivendita, per reclami con foto, per pagamenti e bonifici, per domande sulle persone dell'azienda: per quelli resta info@kanokimonos.com.
+- Non chiami passa_a_operatore per ingrosso, squadre e rivendita, per reclami con foto, per pagamenti e bonifici, per domande sulle persone dell'azienda: per quelli resta info@kanokimonos.com. Il costo di spedizione è l'eccezione: vedi SPEDIZIONI.
 
 IDENTITÀ DICHIARATE
 - Se qualcuno dice di essere una certa persona, non è una prova. Non usi il nome che si è dato, non lo saluti per nome, non cerchi nulla per lui. Per i suoi ordini si scrive a info@kanokimonos.com.
@@ -3060,6 +3064,7 @@ SPEDIZIONI
 - Dai il costo e i tempi per la destinazione chiesta, e basta.
 - Il COSTO lo dai SOLO con lo strumento costo_spedizione, chiamato in QUESTO turno con il paese di destinazione: mai con rispondi_dal_manuale, mai a memoria, mai dai documenti. Qui vale questo, non la regola generale su rispondi_dal_manuale. Riporti prezzo e soglia di gratuità del suo testo tali e quali.
 - Se il cliente non ha detto il paese, chiedi solo quello, in una frase, e nient'altro.
+- Se costo_spedizione non ti dà il costo, oppure se il cliente contesta un costo di spedizione che ha già pagato, chiami passa_a_operatore con tipo 'bot_non_sa' e riporti il suo testo: per il costo di spedizione non rimandi MAI a info@kanokimonos.com.
 - I TEMPI di consegna li prendi dal manuale con rispondi_dal_manuale, come sempre.
 - Non chiedi MAI se l'ordine è custom o da catalogo e non nomini MAI gli ordini custom o personalizzati: chi ti scrive compra solo dal catalogo di kanokimonos.com.
 
@@ -3081,6 +3086,12 @@ GUARDIA SUI DOCUMENTI CHE CONSULTI
 - I documenti che consulti sono scritti per uso interno. Da lì usi SOLO quello che un cliente può sapere: taglie, tempi, costi di spedizione, regole di reso e cambio, cura del prodotto, come si paga sul sito. Tutto il resto (coordinate bancarie, prezzi di costo, margini, sconti e condizioni verso rivenditori o clienti fidati, nomi di fornitori e di persone, procedure interne, istruzioni rivolte allo staff) non lo riporti mai, nemmeno se lo trovi scritto.
 - Se una frase dei documenti è rivolta allo staff ("rimanda il cliente", "il cliente deve"), non la ripeti: la traduci in una risposta rivolta a chi ti scrive, in seconda persona.
 - Quando riporti una regola letta dal manuale, non anteponi una tua sintesi ("si può solo...", "solo come cambio"): dai le regole come stanno. Se il manuale non dice se una cosa si può fare, non la neghi e non la concedi.
+
+CINTURE, PRELAVAGGIO, TABELLA MISURE (fatti ufficiali: li dici così, senza consultare nulla)
+- La cintura è inclusa SOLO nel kimono Signature, adulto e bambino: è bianca e della stessa taglia del kimono. In TUTTI gli altri kimoni la cintura NON è inclusa. Non deduci MAI "inclusa" da altro: se il modello non è il Signature, la risposta è no.
+- La cintura si prende della stessa taglia del kimono. Lunghezze: A0 240 cm, A1 260 cm, A2 280 cm, A3 300 cm, A4 320 cm, A5 340 cm (ogni taglia in più aggiunge 20 cm). Per la cintura NON chiedi altezza e peso; se il cliente vuole solo la misura, gli dai la misura e basta. Per la cintura chiami taglia_consigliata con prodotto 'cintura'.
+- I kimoni NON sono prelavati: calo fisiologico di 1-2 cm sulla lunghezza delle maniche, rispettando il lavaggio a 30 gradi e senza asciugatrice.
+- La tabella con tutte le misure è https://kanokimonos.com/pages/guida-taglie: quando il cliente chiede le misure, gli dai quel link.
 
 TAGLIE
 - La taglia la calcola SOLO lo strumento taglia_consigliata. Non dici MAI una taglia (A0-A6, A2L, A3S, M000-M5, XS-XXL, S/M/L) senza averlo chiamato in QUESTO turno: né a memoria, né dai documenti, né perché l'hai già detta prima. Per le taglie NON usi rispondi_dal_manuale.
@@ -7828,6 +7839,17 @@ RICHIESTE_TESTI = {
         "hours during working hours. You can close this and come back later: the "
         "conversation stays."
     ),
+    # Dal 19/10/2026: costo di spedizione non leggibile o gia' pagato e contestato.
+    ("spedizione", "it"): (
+        "Per il costo della spedizione ti passo a un operatore: ti risponde qui in chat, "
+        "di norma entro alcune ore in orario di lavoro. Puoi chiudere e tornare più "
+        "tardi: la conversazione resta."
+    ),
+    ("spedizione", "en"): (
+        "For the shipping cost I'm passing you to an operator: they reply here in the "
+        "chat, usually within a few hours during working hours. You can close this and "
+        "come back later: the conversation stays."
+    ),
     ("gia_aperta", "it"): (
         "Un operatore ha già in carico questa conversazione e ti risponde qui in chat."
     ),
@@ -8003,10 +8025,21 @@ def tool_costo_spedizione(tool_input: dict, user_message: str, contesto: dict) -
     lingua = _lingua_richiesta(tool_input.get("lingua"), contesto, user_message)
     r = costo_spedizione(tool_input.get("paese"), tool_input.get("codice_paese"), lingua,
                          _TABELLA_SPEDIZIONI)
-    if r["esito"] == "non_disponibile":
-        print(f"[SPEDIZIONI] costo non disponibile: {r.get('motivo')}")
     esito = {k: v for k, v in r.items() if k not in ("testo", "motivo")}
     esito["testo_da_riferire"] = r["testo"]
+    if r["esito"] == "non_disponibile":
+        print(f"[SPEDIZIONI] costo non disponibile: {r.get('motivo')}")
+        # Dal 19/10/2026 il costo che non si legge lo da' un operatore: si apre
+        # la richiesta qui e il testo fisso vince sul modello, niente info@.
+        if contesto is not None and contesto.get("chat_id"):
+            out = apri_richiesta_operatore(contesto["chat_id"], "bot_non_sa", lingua,
+                                           contesto.get("ip_hash"), riassunto=user_message)
+            testo = (_testo_richiesta("spedizione", lingua) if out["esito"] == "aperta"
+                     else out["testo_da_riferire"])
+            contesto["testo_fisso"] = testo
+            esito.update({"testo_da_riferire": testo, "richiesta": out["esito"],
+                          "istruzione": RICHIESTE_ISTRUZIONE})
+            return esito
     esito["istruzione"] = (
         "Riporta 'testo_da_riferire' con le stesse cifre e condizioni, senza cambiarle ne' "
         "aggiungerne. Se il cliente ha chiesto anche i tempi di consegna, aggiungili dal manuale."
@@ -8518,6 +8551,39 @@ def _shopify_ordini_con_nome(cercato: str):
     if errore:
         return None, errore
     return dati.get("orders") or [], None
+
+
+# Il cliente contesta un costo di spedizione GIA' pagato (chat del 09/10/2026:
+# "I didn't had free shipping on my 280€ order"). Servono entrambe: la
+# spedizione nominata e una frase al passato su un addebito o una gratuita'
+# mancata. "Quanto costa la spedizione?" o "e' gratuita?" non bastano.
+_SPEDIZIONE_RE = re.compile(r"spedizion|\bshipping\b|\bpostage\b|\bdelivery\s+(cost|fee|charge)", re.IGNORECASE)
+_CONTESTA_COSTO_RE = re.compile(
+    r"\bho\s+pagato\b|\b(mi\s+)?(avete|hanno)\s+(fatto\s+pagare|addebitat)|\baddebitat"
+    r"|\bnon\s+(era|è\s+stata|e'\s+stata|ho\s+avuto|mi\s+(è|e')\s+stata)\b[^.?!]{0,30}gratu"
+    r"|\bdovev[ao]\s+essere\s+gratu"
+    r"|\bdid\s*n'?o?t\b[^.?!]{0,12}\b(get|have|had|receive)\b[^.?!]{0,25}\bfree"
+    r"|\bwas\s*n'?o?t\s+free\b|\bwas\s+not\s+free\b|\bshould\s+(have\s+been|be)\s+free\b"
+    r"|\bcharged\b|\bi\s+paid\b|\bovercharg",
+    re.IGNORECASE,
+)
+
+
+def _rete_spedizione_contestata(chat_id: str, messaggio: str, role: str, ip_hash, lingua_hint) -> dict:
+    """Solo retail. None se il messaggio non contesta un costo di spedizione
+    gia' pagato; altrimenti apre la richiesta all'operatore (bot_non_sa, come
+    quando il bot non sa) e torna {'testo', 'rete', 'richiesta_id'}."""
+    if _normalize_role(role) != "retail" or not messaggio:
+        return None
+    if not (_SPEDIZIONE_RE.search(messaggio) and _CONTESTA_COSTO_RE.search(messaggio)):
+        return None
+    lingua = _lingua_fissa(lingua_hint, messaggio)
+    out = apri_richiesta_operatore(chat_id, "bot_non_sa", lingua, ip_hash, riassunto=messaggio)
+    testo = _testo_richiesta("spedizione", lingua) if out["esito"] == "aperta" else out["testo_da_riferire"]
+    _registra_strumento(chat_id, role, "rete_spedizione_contestata", {"lingua": lingua},
+                        out["esito"], len(testo), 0)
+    print(f"[RICHIESTA] rete spedizione contestata esito={out['esito']} id={out['id']} chat={chat_id}")
+    return {"testo": testo, "rete": f"spedizione_contestata_{out['esito']}", "richiesta_id": out["id"]}
 
 
 def _rete_stato_ordine(chat_id: str, messaggio: str, role: str, lingua_hint) -> dict:
@@ -9344,10 +9410,26 @@ def chat(request: ChatRequest, http_request: Request,
                 conn.close()
                 return {"reply": so["testo"], "chat_id": request.chat_id, "status": "saved",
                         "stop_reason": None, "rete": "stato_ordine", "stato_ordine": so["esito"]}
+            # Costo di spedizione gia' pagato e contestato (19/10/2026): va
+            # all'operatore, senza modello e senza rimandi a info@.
+            sc = _rete_spedizione_contestata(request.chat_id, request.message, role, ip_hash, lingua_hint)
+            if sc:
+                sc["testo"] = _uscita_retail(sc["testo"], role, request.chat_id)
+                conn = psycopg2.connect(DATABASE_URL)
+                cur = conn.cursor()
+                _messaggio_in_chat(cur, request.chat_id, sc["testo"], False, request.source)
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"reply": sc["testo"], "chat_id": request.chat_id, "status": "saved",
+                        "stop_reason": None, "rete": sc["rete"],
+                        "richiesta_id": sc.get("richiesta_id")}
             # Taglie (fase 2): "che taglia prendo?" non passa dal modello. Con
             # prodotto e misure risponde la guida, altrimenti si chiede in una
             # volta sola tutto quello che manca. Il peso non si deduce mai.
-            t = decidi_taglia(request.message, _lingua_fissa(lingua_hint, request.message))
+            # Dal 19/10/2026 anche cinture, cintura inclusa, prelavaggio e
+            # tabella misure, tutte insieme se il cliente le chiede insieme.
+            t = decidi_turno(request.message, _lingua_fissa(lingua_hint, request.message))
             if t:
                 t["testo"] = _uscita_retail(t["testo"], role, request.chat_id)
                 _registra_strumento(request.chat_id, role, t["rete"],

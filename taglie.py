@@ -315,6 +315,11 @@ def taglia_consigliata(prodotto, altezza_cm=None, peso_kg=None, eta=None, donna=
         return {"prodotto": prodotto, "taglie": [], "fascia": None, "esito": "dati_mancanti",
                 "mancano": mancano, "testo": {l: _testo_mancanti(l, mancano) for l in ("it", "en")}}
 
+    if prodotto == "cintura":
+        # Niente altezza e peso: la cintura e' della taglia del kimono (19/10/2026).
+        return {"prodotto": prodotto, "taglie": [], "fascia": None, "esito": "cintura",
+                "mancano": [], "testo": {l: testo_cintura(l) for l in ("it", "en")}}
+
     if prodotto not in PRODOTTI:
         mancano = ["prodotto"]
         if altezza is None:
@@ -357,8 +362,10 @@ _DONNA_RE = re.compile(r"\bdonna\b|femminil|\bwomen|\bwoman\b|\bfemale\b|\bragaz
 _PRODOTTO_RE = [
     ("rashguard", re.compile(r"rash\s?guard|\brash\b", re.IGNORECASE)),
     ("shorts", re.compile(r"\bshorts?\b|pantalonc|bermuda", re.IGNORECASE)),
-    ("gi", re.compile(r"kimon|\bgi\b|\bbjj\b", re.IGNORECASE)),
+    ("gi", re.compile(r"kimon|\bgi\b|\bbjj\b|signature", re.IGNORECASE)),
 ]
+_CINTURA_RE = re.compile(r"cintur|\bbelts?\b", re.IGNORECASE)
+_GI_ESPLICITO_RE = re.compile(r"kimon|\bgi\b|signature", re.IGNORECASE)
 
 
 def estrai_misure(messaggio):
@@ -397,6 +404,10 @@ def estrai_misure(messaggio):
         elif out["peso"] is None and 20 <= v <= 200:
             out["peso"] = v
     base = next((nome for nome, rx in _PRODOTTO_RE if rx.search(testo)), None)
+    if _CINTURA_RE.search(testo) and base in (None, "gi") and not _GI_ESPLICITO_RE.search(testo):
+        # "bjj premium belt" parla della cintura, non del kimono (chat del 16/10/2026).
+        out["prodotto"] = "cintura"
+        return out
     kids = bool(_KIDS_RE.search(testo)) or (out["eta"] is not None and out["eta"] <= 14)
     out["prodotto"] = (f"kids_{base}" if kids else base) if base else None
     return out
@@ -431,6 +442,8 @@ def decidi_taglia(messaggio, lingua="it"):
     if _ALTRA_DOMANDA_RE.search(testo):
         return None
     m = estrai_misure(testo)
+    if m["prodotto"] == "cintura":
+        return None     # la cintura la risolve decidi_turno, senza altezza e peso
     chiede = bool(_CHIEDE_TAGLIA_RE.search(testo))
     con_unita = bool(m["sicure"])
     if not chiede and not (m["prodotto"] and con_unita):
@@ -439,3 +452,137 @@ def decidi_taglia(messaggio, lingua="it"):
     rete = "rete_taglie_dati_mancanti" if r["esito"] == "dati_mancanti" else "rete_taglie_diretta"
     return {"rete": rete, "testo": r["testo"][lingua], "esito": r["esito"],
             "taglie": r["taglie"], "misure": m}
+
+
+# --- cinture, cintura inclusa, prelavaggio, tabella misure (19/10/2026) --------
+# Regole date da Bambu dopo la lettura delle chat del 01-19/10/2026 (COMANDO
+# 52). NON stanno nella guida del manuale: la fonte e' Bambu, per questo non
+# sono nelle tabelle controllate da test_taglie contro il docx.
+CINTURA_CM = {"A0": 240, "A1": 260, "A2": 280, "A3": 300, "A4": 320, "A5": 340}
+GUIDA_TAGLIE_URL = "https://kanokimonos.com/pages/guida-taglie"
+
+_CINTURA_INCLUSA_RE = re.compile(
+    r"inclus|compres|\bpresente\b|\bha(nno)?\s+(anche\s+)?(la\s+)?cintur|\bcon\s+(la\s+)?cintur"
+    r"|\bincluded?\b|\bincludes\b|\bcomes?\s+with\b|\bwith\s+(a\s+|the\s+)?belt|\bcontains?\b",
+    re.IGNORECASE,
+)
+_CINTURA_MISURA_RE = re.compile(
+    r"lungh|\blength|\blong\b|\bin\s+cms?\b|centimetr|\bmisur", re.IGNORECASE)
+_NO_CONSIGLIO_RE = re.compile(
+    r"\b(don'?t|do\s+not|no)\b[^.?!]{0,25}\brecommend"
+    r"|\bnon\b[^.?!]{0,25}\bconsigli|\bsenza\b[^.?!]{0,15}\bconsigli",
+    re.IGNORECASE,
+)
+_PRELAVAGGIO_RE = re.compile(
+    r"pre-?lavat|pre-?wash|pre-?shrunk|\bshrinks?\b|\bshrinking\b|\bshrunk\b"
+    r"|\bsi\s+restring|\brestring[eo]|\bsi\s+ritira|\bcalo\b",
+    re.IGNORECASE,
+)
+_TABELLA_MISURE_RE = re.compile(
+    r"\ble\s+misure\b|\btabella\b|\bguida\s+(alle\s+|delle\s+)?taglie\b"
+    r"|\bsiz(e|ing)\s+(chart|guide|table)\b|\bmeasurements\b",
+    re.IGNORECASE,
+)
+_SIGNATURE_RE = re.compile(r"signature", re.IGNORECASE)
+_TAGLIA_CINTURA_RE = re.compile(r"\bA[0-5]\b", re.IGNORECASE)
+
+_INCLUSA_SI = {
+    "it": "Sì: nel kimono Signature, adulto e bambino, la cintura è inclusa. È bianca e della stessa taglia del kimono.",
+    "en": "Yes: the Signature kimono, adult and kids, comes with the belt. It's white and the same size as the kimono.",
+}
+_INCLUSA_NO = {
+    "it": ("No: la cintura è inclusa solo nel kimono Signature (adulto e bambino), bianca e della "
+           "stessa taglia del kimono. In tutti gli altri kimoni la cintura non è inclusa."),
+    "en": ("No: the belt is included only with the Signature kimono (adult and kids), white and the "
+           "same size as the kimono. None of the other kimonos include a belt."),
+}
+_PRELAVAGGIO = {
+    "it": ("I nostri kimoni non sono prelavati: hanno un calo fisiologico di 1-2 cm sulla lunghezza "
+           "delle maniche, rispettando il lavaggio a 30 gradi e senza asciugatrice."),
+    "en": ("Our kimonos are not pre-washed: they shrink naturally by 1-2 cm in sleeve length, as long "
+           "as you wash them at 30°C and don't use a tumble dryer."),
+}
+_TABELLA_MISURE = {
+    "it": (f"Trovi la tabella con tutte le misure qui: {GUIDA_TAGLIE_URL}. Se mi scrivi altezza, peso e "
+           "prodotto ti consiglio io la taglia."),
+    "en": (f"You'll find the full size chart here: {GUIDA_TAGLIE_URL}. If you tell me your height, "
+           "weight and the product, I can recommend a size."),
+}
+_TABELLA_LINK = {
+    "it": f"Trovi la tabella con tutte le misure qui: {GUIDA_TAGLIE_URL}.",
+    "en": f"You'll find the full size chart here: {GUIDA_TAGLIE_URL}.",
+}
+
+
+def testo_cintura(lingua, chieste=(), solo_misura=False):
+    """Lunghezze delle cinture adulto. 'chieste' = le taglie nominate dal
+    cliente (la loro lunghezza va in testa); 'solo_misura' = il cliente ha
+    detto che non vuole un consiglio: niente regola sulla taglia."""
+    lingua = lingua if lingua in ("it", "en") else "it"
+    chieste = [t for t in dict.fromkeys(t.upper() for t in chieste) if t in CINTURA_CM]
+    elenco = ", ".join(f"{t} {cm} cm" for t, cm in CINTURA_CM.items())
+    parti = []
+    if chieste:
+        if lingua == "it":
+            prima = chieste[0]
+            frase = f"La cintura {prima} è lunga {CINTURA_CM[prima]} cm"
+            frase += "".join(f", la {t} {CINTURA_CM[t]} cm" for t in chieste[1:])
+        else:
+            frase = ", ".join(f"the {t} belt is {CINTURA_CM[t]} cm long" for t in chieste)
+            frase = frase[0].upper() + frase[1:]
+        parti.append(frase + ".")
+    if not solo_misura:
+        parti.append("La cintura si prende della stessa taglia del kimono." if lingua == "it"
+                     else "The belt is the same size as your kimono.")
+    parti.append(f"Lunghezze: {elenco} (ogni taglia in più aggiunge 20 cm)." if lingua == "it"
+                 else f"Lengths: {elenco} (each size up adds 20 cm).")
+    return " ".join(parti)
+
+
+def decidi_turno(messaggio, lingua="it"):
+    """Il turno retail risolto dal codice, PRIMA del modello: taglia del capo
+    (decidi_taglia) piu' cinture, cintura inclusa, prelavaggio e tabella
+    misure. Se il messaggio fa piu' domande fra queste, la risposta le mette
+    tutte, nell'ordine prelavaggio, cintura inclusa, misure della cintura,
+    tabella, taglia. None se non c'e' niente da risolvere qui (ci pensa il
+    modello). Domande di prezzo, reso, spedizione o disponibilita' restano
+    al modello anche qui: la risposta fissa ne lascerebbe fuori una parte."""
+    testo = messaggio or ""
+    lingua = lingua if lingua in ("it", "en") else "it"
+    if _ALTRA_DOMANDA_RE.search(testo):
+        return None
+    m = estrai_misure(testo)
+    cintura = bool(_CINTURA_RE.search(testo))
+    misure_date = m["altezza"] is not None or m["peso"] is not None
+    parti, voci = [], []
+    if _PRELAVAGGIO_RE.search(testo) and m["prodotto"] in (None, "gi", "kids_gi", "cintura"):
+        parti.append(_PRELAVAGGIO[lingua])
+        voci.append("prelavaggio")
+    if cintura and _CINTURA_INCLUSA_RE.search(testo):
+        si = bool(_SIGNATURE_RE.search(testo))
+        parti.append((_INCLUSA_SI if si else _INCLUSA_NO)[lingua])
+        voci.append("cintura_inclusa_si" if si else "cintura_inclusa_no")
+    misura_cintura = cintura and not _KIDS_RE.search(testo) and (
+        _CINTURA_MISURA_RE.search(testo) or _TAGLIA_CINTURA_RE.search(testo)
+        or (m["prodotto"] == "cintura" and _CHIEDE_TAGLIA_RE.search(testo)))
+    if misura_cintura:
+        parti.append(testo_cintura(lingua, _TAGLIA_CINTURA_RE.findall(testo),
+                                   bool(_NO_CONSIGLIO_RE.search(testo))))
+        voci.append("cintura_misure")
+    tabella = bool(_TABELLA_MISURE_RE.search(testo)) and not cintura
+    if tabella:
+        # Con le misure del cliente la taglia segue subito: basta il link.
+        parti.append(_TABELLA_MISURE[lingua] if not misure_date else _TABELLA_LINK[lingua])
+        voci.append("tabella_misure")
+    t = None
+    if not (tabella and not misure_date) and not _NO_CONSIGLIO_RE.search(testo):
+        t = decidi_taglia(testo, lingua)
+        if t and misura_cintura and t["rete"] == "rete_taglie_dati_mancanti":
+            t = None    # "size" parlava della cintura, non del kimono
+    if not parti:
+        return t
+    if t:
+        parti.append(t["testo"])
+        voci.append(t["esito"])
+    return {"rete": "rete_prodotto", "testo": " ".join(parti), "esito": "+".join(voci),
+            "taglie": t["taglie"] if t else [], "misure": m}

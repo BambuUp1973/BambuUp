@@ -9,7 +9,7 @@ import re
 import unittest
 
 import taglie
-from taglie import taglia_consigliata, estrai_misure, decidi_taglia, TAGLIA_RE
+from taglie import taglia_consigliata, estrai_misure, decidi_taglia, decidi_turno, TAGLIA_RE
 
 QUI = os.path.dirname(os.path.abspath(__file__))
 
@@ -326,6 +326,52 @@ class LetturaMessaggio(unittest.TestCase):
         self.assertTrue(TAGLIA_RE.search("XL o XXL"))
         self.assertIsNone(TAGLIA_RE.search("L'ordine parte domani. S'intende che il costo è 5,90 euro."))
         self.assertIsNone(TAGLIA_RE.search("Ciao, sono il risponditore automatico di Kano Kimonos."))
+
+
+class TestTurnoProdotto(unittest.TestCase):
+    """COMANDO 52 (19/10/2026): cinture, cintura inclusa, prelavaggio,
+    tabella misure. Regole di Bambu, non della guida del manuale."""
+
+    def test_lunghezza_cintura_senza_altezza_e_peso(self):
+        r = decidi_turno("what is the length of your A2 belt in cms ?", "en")
+        self.assertIn("The A2 belt is 280 cm long", r["testo"])
+        self.assertIn("A0 240 cm", r["testo"])
+        self.assertIn("A5 340 cm", r["testo"])
+        self.assertNotIn("height", r["testo"])
+
+    def test_cintura_senza_consiglio_solo_misure(self):
+        r = decidi_turno("173cm 65kg, I don't need a size recommendation, I want the belt length", "en")
+        self.assertEqual(r["esito"], "cintura_misure")
+        self.assertTrue(r["testo"].startswith("Lengths:"))
+        self.assertEqual(r["taglie"], [])
+
+    def test_bjj_belt_e_cintura_non_kimono(self):
+        self.assertEqual(estrai_misure("Bjj premium belt")["prodotto"], "cintura")
+        self.assertEqual(taglia_consigliata("cintura")["esito"], "cintura")
+        self.assertIsNone(decidi_taglia("173 cm 65 kg bjj premium belt, which size?"))
+
+    def test_cintura_inclusa_solo_signature(self):
+        r = decidi_turno("ciao volevo sapere se nel arashi 2.0 è presente anche la cintura", "it")
+        self.assertTrue(r["testo"].startswith("No: la cintura è inclusa solo nel kimono Signature"))
+        r = decidi_turno("il Signature bambino ha la cintura?", "it")
+        self.assertTrue(r["testo"].startswith("Sì: nel kimono Signature"))
+
+    def test_due_domande_due_risposte(self):
+        r = decidi_turno("I would like to know if I get the Signature gi there is included the belt. "
+                         "I am 180cm and I weight around 78kg", "en")
+        self.assertIn("comes with the belt", r["testo"])
+        self.assertIn("A2L", r["testo"])
+
+    def test_prelavaggio_e_tabella(self):
+        r = decidi_turno("Il gi è prelavato?", "it")
+        self.assertIn("non sono prelavati", r["testo"])
+        self.assertIn("1-2 cm", r["testo"])
+        r = decidi_turno("mi puoi dare le misure?", "it")
+        self.assertIn("https://kanokimonos.com/pages/guida-taglie", r["testo"])
+
+    def test_altre_domande_restano_al_modello(self):
+        self.assertIsNone(decidi_turno("il kimono Signature ha la cintura? quanto costa?", "it"))
+        self.assertIsNone(decidi_turno("ciao c'è una rashguard per cintura gialla?", "it"))
 
 
 if __name__ == "__main__":
