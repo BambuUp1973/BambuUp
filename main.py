@@ -1626,16 +1626,16 @@ STILE E TONO
 - Se c'è un errore dillo chiaramente ma senza aggressività.
 
 STRUTTURA OPERATIVA
-- Fully (Slovenia): gestisce logistica e spedizioni — comunicazioni via Slack (Kelmar non esiste più)
+- Fully (Slovenia): gestisce logistica e spedizioni (Kelmar non esiste più)
 - Designer: ognuno assegnato a clienti specifici, chat WhatsApp con nome = numero ordine
-- Prima che qualcuno scriva a Fully su Slack: lo stato lo leggi TU con i tuoi strumenti (tracciamento_fully per ordini, ASN e carichi; giacenza_fully per la giacenza) e lo riporti. Il portale Fully (https://www.fullyview.si/) serve alle persone solo per quello che i tuoi strumenti non leggono: vedi LE TUE FONTI
-- Quando scrivi a logistica o contabilità: dai sempre numero ordine + problema specifico
+- Lo stato della logistica lo leggi TU con i tuoi strumenti (tracciamento_fully per ordini, ASN e carichi; giacenza_fully per la giacenza) e lo riporti. Quando un dato lato Fully non c'è, dici "non risulta a sistema" e basta: vedi LE TUE FONTI
+- Quando scrivi alla contabilità: dai sempre numero ordine + problema specifico
 
 PROCESSI CHIAVE
 
 Ordini sito web:
 - Controllo ordini: mail admin@kanokimonos.com
-- Tracking delle spedizioni verso il cliente degli ordini del sito di vendita attuale (Shopify, che spedisce Fully): NON lo leggi con nessuno strumento. Rimanda al portale Fully https://www.fullyview.si/ dicendo che è proprio quel dato a non essere fra quelli che leggi. NON vale per gli ordini dell'ARCHIVIO WooCommerce (il vecchio sito): lì Fully non c'entra, e il portale Fully non si nomina
+- Tracking delle spedizioni verso il cliente degli ordini del sito di vendita attuale (Shopify, che spedisce Fully): NON lo leggi con nessuno strumento. Dillo così, senza rimandi a portali e senza suggerire di contattare Fully. Per gli ordini dell'ARCHIVIO WooCommerce (il vecchio sito) Fully non c'entra e non si nomina
 - Ordini on-hold da +3 giorni senza pagamento: inviare promemoria
 - Per processare un ordine: serve conferma pagamento
 
@@ -1680,13 +1680,13 @@ Pagamenti:
 REGOLE OPERATIVE
 1. Rispondi sempre nella lingua del cliente finale
 2. Non inventare procedure — se non sai, di' che non lo sai e a chi tocca saperlo. Mai "sto verificando" o "verifico" se non hai appena chiamato uno strumento (vedi NIENTE PROMESSE)
-3. Dai sempre il numero ordine quando contatti logistica o contabilità
+3. Dai sempre il numero ordine quando prepari un messaggio per la contabilità o per Mauro
 4. Non proporre rimborso a chi chiede solo cambio taglia
 5. Non ringraziare per la domanda
 6. Non lasciare mai un dipendente senza una direzione
 7. Questioni complesse o delicate: escala al referente interno, non improvvisare
 8. File grafici: sempre rinominati con numero ordine
-9. Prima che qualcuno contatti la logistica: leggi tu lo stato con tracciamento_fully o giacenza_fully e riportalo, così il messaggio a Fully parte già con i dati
+9. Su logistica, carichi e giacenza: leggi tu lo stato con tracciamento_fully o giacenza_fully e riportalo. Non suggerire mai di contattare Fully
 10. Tempi di consegna: dipendono dal tipo di prodotto.
 - Prodotti CUSTOM (kanokimonos.app): 45-60 giorni lavorativi dal pagamento che fa partire i lavori (il saldo totale sotto i 1000 euro, l'acconto del 50% sopra). Alla domanda sui tempi di un custom dai SEMPRE prima questa informazione, poi eventualmente chiedi il numero ordine. L'approvazione della grafica non allunga i tempi e non va sommata: avviene sempre prima del preventivo.
 - Prodotti da CATALOGO (kanokimonos.com): spedizione 2-3 giorni in Italia, 5-6 giorni in Europa.
@@ -1710,16 +1710,18 @@ LE TUE FONTI (dille con precisione)
 - Per le procedure aziendali (tempi, costi, scadenze, condizioni, indirizzi) la fonte è UNA sola: il manuale operativo letto tramite rispondi_dal_manuale. Quello che il manuale non dice, tu NON lo sai: lo dichiari e rimandi a chi può saperlo, non lo stimi.
 - FULLY LO LEGGI DAVVERO, in sola lettura, tramite l'API di Fully (produzione): la GIACENZA con giacenza_fully e i CARICHI IN ENTRATA (replenishment) con tracciamento_fully, che per un numero di carico non collegato a ordini custom lo legge direttamente da Fully (blocco 'carico_fully_diretto'). Quando riporti questi dati la fonte si dice così: "letto direttamente da Fully". È VIETATO dire "non ho accesso a Fully", "non posso vedere Fully", "non leggo i sistemi di Fully": è falso da settembre 2026. Se un numero non c'è, la frase è "non trovato su Fully", che è un'altra cosa.
 - NON parli con Fully: non gli scrivi, non lo solleciti, non gli chiedi niente. Leggere non è contattare.
+- E NON SUGGERISCI MAI A NESSUNO DI CONTATTARE FULLY, in nessuna lingua e in nessuna forma: niente "chiedi a Fully", "scrivi a Fully su Slack", "puoi sollecitare Fully", "contatta Fully", "guarda il portale Fully", "ask/contact/chase Fully", nessun messaggio pronto per Fully. Quando un dato lato Fully non c'è, dici "non risulta a sistema" e basta. Per i produttori la persona resta Mauro (messaggio pronto per lui).
 - DUE ETICHETTE DIVERSE, MAI MESCOLATE: (1) quello che hai letto direttamente dall'API di Fully (giacenza, blocco 'carico_fully_diretto') si dichiara "letto direttamente da Fully"; (2) i conteggi e gli arrivi del tracciamento ordini (blocchi 'arrivo_in_fully', righe di conteggio, 'ripartenza_verso_cliente') sono una FOTOGRAFIA salvata su kanokimonos.app con la sua data di sincronizzazione: lì di' "fotografia salvata su kanokimonos.app, sincronizzata il <data>" e non attribuirla a una lettura diretta di Fully. Ogni numero porta la sua etichetta.
-- Cose di Fully che NON leggi (per queste, e solo per queste, rimandi al portale fullyview.si dicendo quale dato è): il tracking delle spedizioni verso il cliente degli ordini del sito di vendita attuale (Shopify), i resi gestiti da Fully, la fatturazione di Fully. Per gli ordini dell'ARCHIVIO WooCommerce il portale Fully NON si nomina: vale la regola ORDINI DELL'ARCHIVIO WOOCOMMERCE E FULLY. Il portale Fully (fullyview.si) è uno strumento che consultano le persone: rimandaci solo per queste cose, mai per dati che i tuoi strumenti leggono.
+- Cose di Fully che NON leggi: il tracking delle spedizioni verso il cliente degli ordini del sito di vendita attuale (Shopify), i resi gestiti da Fully, la fatturazione di Fully. Per queste dici quale dato non leggi, e basta: niente rimandi a portali, niente "chiedi a Fully". Per gli ordini dell'ARCHIVIO WooCommerce Fully non si nomina: vale la regola ORDINI DELL'ARCHIVIO WOOCOMMERCE E FULLY.
+- "NON RISULTA" SOLO DOPO TUTTE LE FONTI. Per tracking, corriere, data di partenza dalla fabbrica e arrivo di un ordine custom o di un carico, chiami SEMPRE tracciamento_fully in QUESTO turno con il numero dell'ORDINE (se l'utente ne ha nominato uno, anche in un messaggio precedente) prima di rispondere: i campi 'partito_dalla_fabbrica_il', 'corriere' e 'tracking' vengono da kanokimonos.app e ci sono quasi sempre. Dici "non risulta" solo dopo averlo letto, e in quel caso dici quali fonti hai letto (es. "non risulta né su kanokimonos.app né su Fully").
 - Quando ti chiedono quali sono le tue fonti, rispondi con il nome della PIATTAFORMA e dello STRUMENTO da cui hai letto (es. "ordini custom di kanokimonos.app tramite tracciamento_fully", "giacenza letta direttamente da Fully tramite giacenza_fully"), senza girarci intorno. Alla domanda "puoi leggere lo stock / la giacenza da Fully?" la risposta è sì: lo leggi con giacenza_fully, chiedi il prodotto se manca.
 
 NIENTE PROMESSE CHE NON PUOI MANTENERE (regola vincolante, vale per tutti i profili)
 Tu rispondi in chat e basta. NON puoi contattare nessuno (produttori, fabbriche, Fully, corrieri, colleghi), NON puoi inoltrare o girare messaggi a Mauro, a Kaltrina o a chiunque altro, NON puoi "aggiornare più tardi", "ricontrollare dopo", "tenere d'occhio", "far sapere". Finita la risposta, per te la conversazione è chiusa: nessuno riceve niente da parte tua.
 - Quindi sono VIETATE, in ogni lingua e in ogni forma, frasi come "provo a sentire X", "sento la fabbrica", "giro a Y", "lo passo a Mauro", "verifico con Mauro", "ti aggiorno", "ti faccio sapere", "ti tengo aggiornato", "appena so qualcosa", "ricontrollo più tardi", "resto in ascolto". Creano un'attesa falsa: nessuno verrà avvisato e nessuno tornerà da chi ti ha scritto.
-- Quando serve l'intervento di una persona (sollecitare un produttore, scrivere a Fully, una decisione di Mauro, un pagamento da verificare con la contabilità), lo dici chiaramente: "questo passo tocca a una persona, non posso farlo io". E SUBITO, nella stessa risposta, fornisci il MESSAGGIO PRONTO DA COPIARE E INOLTRARE, con dentro numero ordine, cliente e problema specifico, così chi ti legge lo manda lui.
-- Il destinatario non lo inventi: se sai chi se ne occupa (il produttore dell'ordine, Fully per la logistica, la contabilità per i pagamenti, Mauro per le eccezioni in modalità staff) lo dici; se non lo sai, lo chiedi.
-- Se l'utente ti chiede esplicitamente di contattare qualcuno ("sentilo tu", "scrivigli tu", "chiedi a Fully"), rispondi che non puoi, senza giri di parole, e dai il messaggio pronto. Prima però leggi quello che i tuoi strumenti sanno sull'ordine o sul carico in questione e mettilo nella risposta: il messaggio da inoltrare deve partire già con i dati giusti.
+- Quando serve l'intervento di una persona (sollecitare un produttore, una decisione di Mauro, un pagamento da verificare con la contabilità), lo dici chiaramente: "questo passo tocca a una persona, non posso farlo io". E SUBITO, nella stessa risposta, fornisci il MESSAGGIO PRONTO DA COPIARE E INOLTRARE, con dentro numero ordine, cliente e problema specifico, così chi ti legge lo manda lui. Fully non è mai fra queste persone: vedi LE TUE FONTI.
+- Il destinatario non lo inventi: se sai chi se ne occupa (Mauro per i produttori e per le eccezioni in modalità staff, la contabilità per i pagamenti) lo dici; se non lo sai, lo chiedi.
+- Se l'utente ti chiede esplicitamente di contattare qualcuno ("sentilo tu", "scrivigli tu"), rispondi che non puoi, senza giri di parole, e dai il messaggio pronto. Prima però leggi quello che i tuoi strumenti sanno sull'ordine o sul carico in questione e mettilo nella risposta: il messaggio da inoltrare deve partire già con i dati giusti. Se ti chiede di contattare Fully, rispondi che non puoi e riporti quello che risulta a sistema, senza messaggio per Fully.
 
 QUANDO ESCALARE
 Escala quando:
@@ -1744,9 +1746,7 @@ COSA NON FARE MAI
 - Non offrire mai di "creare un preventivo" né comunicare prezzi: rimanda sempre e solo al listino personale nell'area privata su kanokimonos.app (eccezione super-VIP con prezzi già concordati)
 
 CANALI E LINK
-- Logistica Fully: comunicazioni via Slack (problemi spedizione: sempre numero ordine + cliente + tracking)
 - Contabilità: chat WhatsApp accounting
-- Portale Fully (per le persone, solo per ciò che i tuoi strumenti non leggono): https://www.fullyview.si/
 - Piattaforma custom: https://www.kanokimonos.app
 - Sito catalogo: https://www.kanokimonos.com
 - Email custom: custom@kanokimonos.com
@@ -2627,7 +2627,15 @@ CHAT_TOOLS = [
             "Usalo per domande tipo 'cosa deve arrivare da <produttore>?', 'quali ordini "
             "ha in produzione <produttore>?', 'quando arriva la merce di <produttore>?', "
             "'ordini di <produttore>'.\n"
-            "SERVE IL NOME DI UN PRODUTTORE. Se l'utente ti ha dato un NUMERO di batch/"
+            "RICERCA PER PRODOTTO, SENZA PRODUTTORE: se l'utente nomina un PRODOTTO e chiede "
+            "se/quando arriva, un restock o un carico ('sto aspettando un carico di cinture', "
+            "'quando tornano in stock i kaze?', 'arriva qualche team gi?'), chiamalo SUBITO "
+            "con 'prodotto' = il prodotto come l'ha scritto e SENZA 'produttore': cerca su "
+            "TUTTI i produttori. È VIETATO chiedere prima il produttore, il batch o il tipo "
+            "di ordine: chiedi qualcosa solo se lo strumento non trova niente. La risposta "
+            "comincia con il 'verdetto' dello strumento (stessa sostanza, SÌ/NO): il titolo "
+            "non può mai contraddire l'elenco che segue.\n"
+            "PER UN PRODUTTORE SERVE IL SUO NOME. Se l'utente ti ha dato un NUMERO di batch/"
             "ordine (es. 082026-0002) NON serve questo strumento e soprattutto NON chiedere "
             "di quale produttore sia: usa ordine_fabbrica_per_numero, che il produttore te "
             "lo restituisce.\n"
@@ -2662,10 +2670,14 @@ CHAT_TOOLS = [
             "properties": {
                 "produttore": {
                     "type": "string",
-                    "description": "Nome del produttore così come lo ha detto l'utente (es. 'Martin', 'Wearica', 'Tussle').",
+                    "description": "Nome del produttore così come lo ha detto l'utente (es. 'Martin', 'Wearica', 'Tussle'). Ometti se l'utente non l'ha nominato.",
+                },
+                "prodotto": {
+                    "type": "string",
+                    "description": "Prodotto cercato negli ordini di fabbrica, come l'ha scritto l'utente (es. 'cinture', 'kaze', 'team gi'). Senza produttore cerca su tutti.",
                 },
             },
-            "required": ["produttore"],
+            "required": [],
         },
     },
     {
@@ -2777,8 +2789,8 @@ CHAT_TOOLS = [
             "e che il conteggio Fully non esiste);\n"
             "  * 'counting_in_progress' = merce ARRIVATA in magazzino ma conteggio NON "
             "ancora concluso da Fully: dillo esplicitamente, riporta 'avanzamento_conteggio_"
-            "fully' (righe contate su totale), di' che i numeri sono PROVVISORI e che si "
-            "può SOLLECITARE FULLY. Non dire mai che è 'arrivata e contata';\n"
+            "fully' (righe contate su totale) e di' che i numeri sono PROVVISORI. Non "
+            "suggerire mai di contattare o sollecitare Fully. Non dire mai che è 'arrivata e contata';\n"
             "  * 'no_arrival_evidence' = nessuna prova di arrivo: dichiaralo così, senza "
             "dedurre né che sia arrivata né che sia persa.\n"
             "- Dichiara SEMPRE da dove viene il dato di arrivo ('come_lo_sappiamo'): "
@@ -2998,6 +3010,8 @@ Hai a disposizione degli strumenti per cercare ordini, clienti e informazioni da
   Come si scrive la risposta ambigua: i due assi vanno tenuti SEPARATI, in due blocchi distinti, ognuno con la SUA piattaforma dichiarata per nome. Forma corretta: "Su kanokimonos.app (ordini custom): X ordini in lavorazione. Su btoweb (pipeline di fabbrica): Y pezzi in produzione presso i fornitori". È VIETATO sommare i due numeri, VIETATO metterli nella stessa tabella o nella stessa riga, e VIETATO presentarli come un totale unico: uno conta ORDINI e l'altro conta PEZZI, quindi la loro somma è un numero senza nessun significato. E non dire mai un numero senza dire su quale delle due piattaforme sta.
   QUANDO LA DOMANDA NOMINA UN PRODOTTO ("quanti rashguard sono in produzione?", "quanti kimoni?"): statistiche_ordini_custom NON sa filtrare per prodotto — ha SOLO i filtri cliente e mese — quindi i suoi conteggi sono SEMPRE su tutti i prodotti insieme. È VIETATO presentarli come se riguardassero il prodotto chiesto: "40 ordini in produzione" NON è "40 ordini di rashguard in produzione" e non è "40 ordini di kimoni". Due strade sole: o NON citi l'asse custom, oppure lo citi dicendo per esteso che quel numero è su TUTTI i prodotti e non solo su quello chiesto. Il dettaglio per prodotto lo dà soltanto catalogo_btoweb, E LO SI CHIAMA CON 'query' UGUALE AL NOME DEL PRODOTTO, MAI SENZA. Senza 'query' quello strumento torna il quadro di TUTTI i prodotti, e il suo elenco è TRONCATO ai primi 25 gruppi su oltre cento: se il prodotto che ti hanno chiesto non compare lì dentro NON vuol dire che sia zero, vuol dire che non l'hai cercato — i gruppi più grossi sono proprio quelli che restano fuori dall'elenco. Scrivi la 'query' come il prodotto sta scritto A CATALOGO: al SINGOLARE e, se il catalogo è in inglese, in inglese (quindi 'kimono' e non 'kimoni', 'belt' e non 'cintura' o 'cinture', 't-shirt' e non 'tshirt'). E se la query torna ZERO righe non hai finito: RIPROVA con un'altra forma della stessa parola (singolare, radice più corta, il termine inglese) PRIMA di dire che quel prodotto non esiste o che non è in produzione. Zero righe significa che non l'hai ancora trovato, non che non ci sia.
 - CATALOGO BTOWEB (catalogo_btoweb, solo STAFF): è la fonte per taglie a catalogo e SKU/EAN. I dati di 'produzione' NON sono giacenza vendibile: quando li riporti dichiara sempre che sono contatori della pipeline di produzione e non disponibilità di magazzino, e non dire mai che un capo è "disponibile" o "in stock" basandoti su di essi. Questa fonte non contiene prezzi: per i prezzi usa solo prezzi_listino.
+- RICERCA DIRETTA PER PRODOTTO (ordini_per_produttore con 'prodotto', solo STAFF): se l'utente nomina un PRODOTTO e chiede se/quando arriva, un restock o un carico ("sto aspettando un carico di cinture", "quando tornano in stock i kaze?"), chiami SUBITO ordini_per_produttore con 'prodotto' e senza produttore: cerca su tutti i produttori. Non chiedi chi, cosa o quale prima di aver cercato: chiedi solo se non trova niente. Se ti chiedono anche la giacenza attuale, aggiungi giacenza_fully. La prima riga della risposta (il titolo) dice la stessa cosa del 'verdetto' dello strumento: un titolo che contraddice l'elenco sotto è un errore grave.
+- DATE DEGLI ORDINI DI FABBRICA: btoweb ha solo l'ARRIVO PREVISTO. Usi 'arrivo_previsto_in_parole' così com'è (i giorni li ha contati il codice) e non scrivi MAI "spedito il <data>": 'spedito' è uno stato, non una data.
 - ORDINI DI FABBRICA PER PRODUTTORE (ordini_per_produttore, solo STAFF): quando la domanda riguarda cosa deve arrivare da un produttore/fornitore ("cosa deve arrivare da X", "quali ordini ha in produzione X", "quando arriva la merce di X") usa questo strumento e NON cerca_ordini_per_cliente: i produttori sono fornitori, non clienti. Riporta stato, data di arrivo prevista, prodotti e quantità esattamente come tornano dallo strumento; se una data o il dettaglio prodotti non sono valorizzati alla fonte dichiaralo, non stimarli. ATTENZIONE al caso opposto: i produttori sono POCHI e NOTI (Martin, 7punch/Seventh Punch, Wearica, Tussle, Fair Tex), quindi se lo strumento risponde 'trovato: false' quel nome quasi certamente NON è un produttore ma un CLIENTE (persona, palestra, ASD, azienda): riprova SUBITO con cerca_ordini_per_cliente prima di dire all'utente che non risulta nulla. Non chiudere mai con "non lo trovo" avendo provato una sola delle due strade.
 - ORDINI DI FABBRICA PER NUMERO (ordine_fabbrica_per_numero, solo STAFF): un numero di sei cifre + trattino + quattro cifre (082026-0002, 122025-0007, 062026-0004) è un ORDINE DI FABBRICA btoweb, cioè un BATCH di merce ordinata a un produttore. Quando l'utente lo cita — anche da solo, anche solo dicendo "batch" o "ordine fabbrica" — usa questo strumento. NON è uno SKU/EAN (quelli sono numeri di sole cifre) e non è un ordine cliente. E NON CHIEDERE MAI IL PRODUTTORE: il produttore è dentro l'ordine e te lo restituisce lo strumento. Riporta prodotti, taglie, quantità ordinate, SKU e colore come tornano dallo strumento, dichiara che è un ordine di FABBRICA su btoweb, dichiara l'origine delle quantità ('origine_quantita_products_source': size_lines / sizes / production_quantities) e non spacciare le conferme di ricezione registrate su btoweb per prove che la merce sia arrivata in magazzino. Se lo strumento risponde 'trovato': false quel numero non esiste su btoweb: dillo, senza inventare e senza sostituirlo con un numero simile.
 - SE UNA RICERCA SKU/EAN NON TROVA NULLA e il valore cercato somiglia a un numero di batch (sei cifre-trattino-quattro cifre), riprova con ordine_fabbrica_per_numero PRIMA di dire che non trovi niente. È la stessa regola già valida fra produttori e clienti: mai chiudere con "non lo trovo" avendo provato una sola strada.
@@ -4491,15 +4505,88 @@ def _bto_resolve_producer(query: str, presenti: list) -> dict:
 _BTO_MAX_PRODOTTI_PER_ORDINE = 40
 
 
-def tool_ordini_per_produttore(produttore: str = None) -> dict:
+# btoweb ha UNA sola data per ordine di fabbrica: l'arrivo previsto. Il 15/10/2026
+# il bot l'ha chiamata "spedito il 17/10" e ci ha contato sopra i giorni: le
+# parole e i giorni li scrive il codice (20/10/2026, COMANDO 55).
+_BTO_NOTA_DATE = (
+    "DATE: btoweb ha UNA SOLA data per ordine di fabbrica, l'ARRIVO PREVISTO "
+    "('arrivo_previsto_in_parole'). 'spedito' è lo STATO, non una data: btoweb non "
+    "registra quando il produttore ha spedito, quindi non scrivere MAI 'spedito il "
+    "<data>' e non chiamare 'spedito' una data futura. Riporta 'arrivo_previsto_in_"
+    "parole' così com'è: i 'fra N giorni' li ha già contati il codice, non ricalcolarli. "
+    "Con la data già passata, se la merce è arrivata in magazzino lo dice "
+    "tracciamento_fully, non btoweb."
+)
+
+
+def _bto_arrivo_in_parole(data, oggi=None) -> str:
+    """'arrivo previsto il 17/10/2026 (fra 2 giorni)': la data con il suo nome
+    vero e i giorni contati qui, mai dal modello."""
+    if not data:
+        return "arrivo previsto: data non valorizzata su btoweb"
+    if isinstance(data, list):
+        return "arrivo previsto diverso fra le righe del batch: " + "; ".join(
+            _bto_arrivo_in_parole(d, oggi) for d in data)
+    try:
+        giorno = datetime.strptime(str(data)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return f"arrivo previsto il {data}"
+    oggi = oggi or datetime.now().date()
+    g = (giorno - oggi).days
+    testo = f"arrivo previsto il {giorno:%d/%m/%Y}"
+    if g > 1:
+        return testo + f" (fra {g} giorni)"
+    if g == 1:
+        return testo + " (domani)"
+    if g == 0:
+        return testo + " (oggi)"
+    return testo + f" (data già passata da {-g} giorni)"
+
+
+# Ricerca per PRODOTTO negli ordini di fabbrica (20/10/2026): i nomi su btoweb
+# sono in inglese ("BJJ Premium Belt"), lo staff scrive in italiano.
+_BTO_PRODOTTO_SINONIMI = (
+    ("cintur", "belt"), ("kimon", "gi"), ("pantaloncin", "short"), ("felp", "hoodie"),
+    ("zain", "backpack"), ("maglie", "shirt"), ("maglia", "shirt"), ("magliett", "shirt"),
+)
+_BTO_PAROLE_VUOTE_PRODOTTO = {"di", "dei", "delle", "degli", "il", "la", "le", "lo", "i", "gli",
+                              "un", "una", "carico", "restock", "the", "of"}
+
+
+def _bto_parole_prodotto(prodotto: str) -> list:
+    parole = []
+    for w in re.findall(r"[a-z0-9]+", _bto_norm_producer(prodotto)):
+        if w in _BTO_PAROLE_VUOTE_PRODOTTO:
+            continue
+        for it, en in _BTO_PRODOTTO_SINONIMI:
+            if w.startswith(it):
+                w = en
+                break
+        if len(w) > 4 and w.endswith("s"):
+            w = w[:-1]
+        parole.append(w)
+    return parole
+
+
+def _bto_prodotto_corrisponde(nome: str, parole: list) -> bool:
+    """Tutte le parole cercate dentro il nome, in qualsiasi ordine ('team gi'
+    trova 'BJJ Gi Team'). 'gi' vale solo come parola intera."""
+    n = _bto_norm_producer(nome)
+    parole_nome = set(re.findall(r"[a-z0-9]+", n))
+    return bool(parole) and all((w in parole_nome) if len(w) <= 2 else (w in n) for w in parole)
+
+
+def tool_ordini_per_produttore(produttore: str = None, prodotto: str = None) -> dict:
     """Ordini di fabbrica btoweb di un produttore (solo staff), orientati a
     'cosa deve arrivare da X': stato, data di arrivo prevista, prodotti e quantità.
     Il parametro 'producer' della edge function è IGNORATO lato server (verificato:
     qualsiasi valore restituisce comunque tutte le righe), quindi si scarica la
-    risorsa 'orders' con _bto_get_paged e si filtra qui."""
+    risorsa 'orders' con _bto_get_paged e si filtra qui. Dal 20/10/2026 accetta
+    anche 'prodotto': senza produttore cerca il prodotto su TUTTI i produttori."""
     q = (produttore or "").strip()
-    if not q:
-        return {"error": "Serve il nome del produttore da cercare."}
+    prod = (prodotto or "").strip()
+    if not q and not prod:
+        return {"error": "Serve il nome del produttore o del prodotto da cercare."}
 
     rows, meta = _bto_get_paged({"resource": "orders"})
     if rows is None:
@@ -4510,6 +4597,9 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
         p = (r.get("producer") or "").strip()
         if p and p not in presenti:
             presenti.append(p)
+
+    if not q:
+        return _bto_ordini_per_prodotto(rows, prod, presenti)
 
     ris = _bto_resolve_producer(q, presenti)
     candidati = ris["candidati"]
@@ -4564,7 +4654,128 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
 
     corrispondenti = [c["produttore"] for c in candidati]
     sel = [r for r in rows if (r.get("producer") or "").strip() in corrispondenti]
+    if prod:
+        out = _bto_ordini_per_prodotto(sel, prod, corrispondenti)
+        out["produttore_cercato"] = q
+        out["produttori_corrispondenti"] = corrispondenti
+        return out
+    out = _bto_raggruppa_ordini(sel)
+    ordini, oggi = out["ordini"], out["data_odierna"]
 
+    riepilogo = {}
+    for o in ordini:
+        k = o["stato"] or "(senza stato)"
+        riepilogo[k] = riepilogo.get(k, 0) + 1
+
+    out = {
+        "tipo": "ordini_per_produttore",
+            "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
+        "produttore_cercato": q,
+        "trovato": True,
+        "richiesta_chiarimento": False,
+        "produttori_corrispondenti": corrispondenti,
+        "tipo_match": ris["livello"],
+        "punteggio_match": candidati[0]["punteggio"],
+        "ordini_totali": len(ordini),
+        "riepilogo_stati": riepilogo,
+        "pezzi_totali_elencati": sum(o["pezzi_totali"] for o in ordini),
+        "data_odierna": oggi,
+        "ordini": ordini,
+        "nota": (
+            "Ordini di FABBRICA (merce che deve arrivare dal produttore), non ordini "
+            "cliente. Sono ordinati per data di arrivo prevista crescente: i più "
+            "imminenti per primi, quelli senza data in fondo. 'spedito' = già partito "
+            "dal produttore; 'in_produzione' = ancora in lavorazione; 'nuovo' = non "
+            "ancora avviato. Riporta solo le date e le quantità presenti qui: dove "
+            "manca il dato dichiaralo, non stimarlo."
+        ),
+        "nota_date": _BTO_NOTA_DATE,
+        "nota_prezzi": _BTO_NOTA_PREZZI,
+    }
+
+    # Se il nome usato non è quello digitato (alias o refuso), va dichiarato:
+    # l'utente deve sapere su chi ha risposto lo strumento.
+    if _bto_squash(q) != _bto_squash(corrispondenti[0]):
+        out["nota_interpretazione"] = (
+            f"L'utente ha scritto '{q}' e lo strumento l'ha risolto sul produttore "
+            f"'{corrispondenti[0]}' (match per {ris['livello']}). DICHIARALO nella risposta "
+            "prima dei dati, es. \"interpreto '%s' come %s\"." % (q, corrispondenti[0])
+        )
+    return out
+
+
+def _bto_ordini_per_prodotto(rows: list, prodotto: str, produttori: list) -> dict:
+    """Gli ordini di fabbrica che contengono il prodotto (solo le sue righe), con
+    il verdetto gia' scritto: il titolo della risposta deve dire la stessa cosa
+    (13/10/2026: "NO restock in programma per i Kaze" sopra un elenco di Kaze)."""
+    parole = _bto_parole_prodotto(prodotto)
+    out = _bto_raggruppa_ordini(rows, lambda nome: _bto_prodotto_corrisponde(nome, parole))
+    ordini, oggi = out["ordini"], out["data_odierna"]
+    def _str(v):
+        return v if isinstance(v, str) else ""
+
+    # Tre gruppi: ancora dal produttore; partiti con l'arrivo previsto davanti;
+    # partiti con l'arrivo previsto passato o senza data (se sono arrivati lo dice Fully).
+    in_produzione = [o for o in ordini if o["stato"] in ("nuovo", "in_produzione")]
+    in_viaggio = [o for o in ordini if o not in in_produzione and _str(o["data_arrivo_prevista"]) >= oggi]
+    da_verificare = [o for o in ordini if o not in in_produzione and o not in in_viaggio]
+
+    def _elenco(lista):
+        voci = [f"{o['numero_ordine']} di {o['produttore']} ({o['arrivo_previsto_in_parole']}, "
+                f"{o['pezzi_totali']} pezzi)" for o in lista[:6]]
+        if len(lista) > 6:
+            voci.append(f"e altri {len(lista) - 6}")
+        return "; ".join(voci)
+
+    parti = []
+    if in_produzione:
+        parti.append(f"{len(in_produzione)} in produzione presso il produttore: {_elenco(in_produzione)}")
+    if in_viaggio:
+        parti.append(f"{len(in_viaggio)} già spediti e in arrivo: {_elenco(in_viaggio)}")
+    if in_produzione or in_viaggio:
+        verdetto = f"SÌ, '{prodotto}' è negli ordini di fabbrica: " + ". ".join(parti) + "."
+        if da_verificare:
+            verdetto += (f" Altri {len(da_verificare)} già spediti con l'arrivo previsto passato o "
+                         f"senza data (se sono arrivati lo dice Fully): {_elenco(da_verificare)}.")
+    elif da_verificare:
+        verdetto = (f"NESSUN ordine di fabbrica con '{prodotto}' in produzione o con l'arrivo "
+                    f"davanti; {len(da_verificare)} già spediti dal produttore con l'arrivo "
+                    f"previsto passato o senza data (se sono arrivati lo dice Fully): "
+                    f"{_elenco(da_verificare)}.")
+    else:
+        verdetto = f"NO: nessun ordine di fabbrica su btoweb contiene '{prodotto}'."
+    return {
+        "tipo": "ordini_fabbrica_per_prodotto",
+        "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
+        "prodotto_cercato": prodotto,
+        "parole_cercate_nei_nomi": parole,
+        "produttori_controllati": produttori,
+        "trovato": bool(ordini),
+        "verdetto": verdetto,
+        "regola_titolo": (
+            "La PRIMA riga della risposta dice la stessa cosa di 'verdetto' (SÌ / NO / "
+            "nessuno in arrivo). È VIETATO un titolo che contraddice l'elenco: se ci sono "
+            "ordini in arrivo, il titolo non può dire 'no restock'."
+        ),
+        "ordini_in_produzione": in_produzione,
+        "ordini_spediti_in_arrivo": in_viaggio,
+        "ordini_spediti_arrivo_da_verificare": da_verificare,
+        "data_odierna": oggi,
+        "nota": (
+            "Ricerca per PRODOTTO negli ordini di FABBRICA di tutti i produttori elencati "
+            "in 'produttori_controllati': per ogni ordine ci sono SOLO le righe del "
+            "prodotto cercato. Se 'trovato' è false, prima di dire che non c'è riprova con "
+            "un nome più corto o in inglese (es. 'belt' invece di 'cintura premium')."
+        ),
+        "nota_date": _BTO_NOTA_DATE,
+        "nota_prezzi": _BTO_NOTA_PREZZI,
+    }
+
+
+def _bto_raggruppa_ordini(sel: list, filtro_prodotto=None) -> dict:
+    """Righe btoweb -> ordini con stato, arrivo previsto e prodotti, i piu'
+    imminenti in cima. Con filtro_prodotto restano solo le righe-prodotto che lo
+    soddisfano, e gli ordini senza righe rimaste spariscono."""
     gruppi = {}
     ordine_keys = []
     viste = set()
@@ -4591,6 +4802,8 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
             if not isinstance(p, dict):
                 continue
             nome = (p.get("name") or "").strip() or "(senza nome)"
+            if filtro_prodotto and not filtro_prodotto(nome):
+                continue
             taglia = (p.get("category") or "").strip() or None
             k = (nome, taglia)
             if k not in g["qty"]:
@@ -4605,6 +4818,8 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
     ordini = []
     for num in ordine_keys:
         g = gruppi[num]
+        if filtro_prodotto and not g["keys"]:
+            continue
         prodotti = [
             {"prodotto": n, "taglia": t, "quantita": g["qty"][(n, t)]} for (n, t) in g["keys"]
         ]
@@ -4615,6 +4830,8 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
             "stato": g["stato"],
             "stato_descrizione": _BTO_ORDER_STATUS_LABELS.get(g["stato"], g["stato"]),
             "data_arrivo_prevista": data,
+            "arrivo_previsto_in_parole": _bto_arrivo_in_parole(data),
+            "data_spedizione_dal_produttore": "non registrata su btoweb",
             "pezzi_totali": sum(x["quantita"] for x in prodotti),
             "prodotti": prodotti[:_BTO_MAX_PRODOTTI_PER_ORDINE],
         }
@@ -4644,46 +4861,7 @@ def tool_ordini_per_produttore(produttore: str = None) -> dict:
         if o["data_arrivo_prevista"]
         else (1, "", _peso_stato.get(o["stato"], 1))
     )
-
-    riepilogo = {}
-    for o in ordini:
-        k = o["stato"] or "(senza stato)"
-        riepilogo[k] = riepilogo.get(k, 0) + 1
-
-    out = {
-        "tipo": "ordini_per_produttore",
-            "piattaforma": "btoweb (ordini di FABBRICA verso i produttori)",
-        "produttore_cercato": q,
-        "trovato": True,
-        "richiesta_chiarimento": False,
-        "produttori_corrispondenti": corrispondenti,
-        "tipo_match": ris["livello"],
-        "punteggio_match": candidati[0]["punteggio"],
-        "ordini_totali": len(ordini),
-        "riepilogo_stati": riepilogo,
-        "pezzi_totali_elencati": sum(o["pezzi_totali"] for o in ordini),
-        "data_odierna": oggi,
-        "ordini": ordini,
-        "nota": (
-            "Ordini di FABBRICA (merce che deve arrivare dal produttore), non ordini "
-            "cliente. Sono ordinati per data di arrivo prevista crescente: i più "
-            "imminenti per primi, quelli senza data in fondo. 'spedito' = già partito "
-            "dal produttore; 'in_produzione' = ancora in lavorazione; 'nuovo' = non "
-            "ancora avviato. Riporta solo le date e le quantità presenti qui: dove "
-            "manca il dato dichiaralo, non stimarlo."
-        ),
-        "nota_prezzi": _BTO_NOTA_PREZZI,
-    }
-
-    # Se il nome usato non è quello digitato (alias o refuso), va dichiarato:
-    # l'utente deve sapere su chi ha risposto lo strumento.
-    if _bto_squash(q) != _bto_squash(corrispondenti[0]):
-        out["nota_interpretazione"] = (
-            f"L'utente ha scritto '{q}' e lo strumento l'ha risolto sul produttore "
-            f"'{corrispondenti[0]}' (match per {ris['livello']}). DICHIARALO nella risposta "
-            "prima dei dati, es. \"interpreto '%s' come %s\"." % (q, corrispondenti[0])
-        )
-    return out
+    return {"ordini": ordini, "data_odierna": oggi}
 
 
 # --- ORDINI DI FABBRICA PER NUMERO (batch) -----------------------------------
@@ -4940,9 +5118,19 @@ def _bto_scheda_ordine(numero: str, righe: list) -> dict:
         "piattaforma": "btoweb (ordine di FABBRICA verso il produttore, non un ordine di un cliente)",
         "produttore": _bto_uno(produttori),
         "stato": stato,
-        "stato_descrizione": _BTO_ORDER_STATUS_LABELS.get(stato, stato),
+        # Righe dello stesso batch con stati diversi: _bto_uno da' una lista (prima
+        # del 20/10/2026 qui lo strumento andava in errore).
+        "stato_descrizione": (_BTO_ORDER_STATUS_LABELS.get(stato, stato) if isinstance(stato, str)
+                              else stato),
         "stato_lato_produttore": _bto_uno(_bto_valori(righe, "producer_status")),
         "data_arrivo_prevista": _bto_uno(date),
+        "arrivo_previsto_in_parole": _bto_arrivo_in_parole(_bto_uno(date)),
+        "data_spedizione_dal_produttore": "non registrata su btoweb",
+        "numero_carico_fully_o_asn": (
+            "non presente su btoweb: l'ordine di fabbrica non porta né il numero di carico "
+            "(replenishment) Fully né l'ASN. Se te lo chiedono di' che su btoweb non risulta, "
+            "senza suggerire di contattare Fully o il produttore."
+        ),
         "conferme_ricezione": {
             "il_produttore_ha_confermato_di_aver_preso_in_carico_l_ordine": _conferma(conf_prod),
             "confermato_il": conf_quando,
@@ -5125,6 +5313,7 @@ def tool_ordine_fabbrica_per_numero(numero: str = None) -> dict:
                 "taglie, quantità, SKU, stato, data prevista, conferme e note esattamente "
                 "come stanno qui; dove il dato manca dichiaralo, non stimarlo."
             ),
+            "nota_date": _BTO_NOTA_DATE,
             "nota_prezzi": _BTO_NOTA_PREZZI,
         })
         return scheda
@@ -5138,6 +5327,7 @@ def tool_ordine_fabbrica_per_numero(numero: str = None) -> dict:
             "stato": s["stato"],
             "stato_descrizione": s["stato_descrizione"],
             "data_arrivo_prevista": s["data_arrivo_prevista"],
+            "arrivo_previsto_in_parole": s["arrivo_previsto_in_parole"],
             "articoli_totali": s["articoli_totali"],
             "pezzi_ordinati_totali": s["pezzi_ordinati_totali"],
             "prodotti": [a["prodotto"] for a in s["articoli"]][:8],
@@ -5279,8 +5469,7 @@ _FULLY_ARRIVO_PAROLE = {
     "counting_in_progress": (
         "ARRIVATA IN MAGAZZINO MA CONTEGGIO NON ANCORA CONCLUSO DA FULLY: la merce è "
         "al magazzino, il conteggio è ancora APERTO e i numeri sono PROVVISORI (possono "
-        "cambiare). È il caso in cui si può SOLLECITARE FULLY perché chiuda il "
-        "conteggio: dillo esplicitamente."
+        "cambiare): dillo esplicitamente. Non suggerire di contattare o sollecitare Fully."
     ),
     "no_arrival_evidence": (
         "NESSUNA PROVA DI ARRIVO: non risulta né un conteggio di Fully né una spunta "
@@ -5956,7 +6145,7 @@ def _fully_traccia_ordine(o: dict, spedizioni: list, righe_recon: list,
         val += (
             " ATTENZIONE: Fully NON ha ancora concluso il conteggio di questa merce "
             f"({dettagli}). I numeri qui sopra sono PROVVISORI e possono cambiare: "
-            "non dare l'ordine per verificato e segnala che si può SOLLECITARE FULLY."
+            "non dare l'ordine per verificato."
         )
     tr["valutazione_spedibilita"] = val
     return tr
@@ -6233,6 +6422,9 @@ def _fully_esito_carico_entrata(voce: dict, num2ord: dict, rep_per_asn: dict) ->
         ),
         "asn": s.get("shipment_number") or "nessun ASN collegato a questo numero di carico",
         "produttore": prod.get("name") if isinstance(prod, dict) else None,
+        # Dal 20/10/2026 anche la partenza: il 14/10 il bot, partito dal numero di
+        # carico, ha detto che non risultava (stava su kanokimonos.app).
+        "partito_dalla_fabbrica_il": s.get("shipped_at"),
         "corriere": s.get("courier"),
         "tracking": s.get("tracking_number"),
         "arrivo_in_fully": _fully_blocco_arrivo(rep, s),
@@ -6579,8 +6771,8 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
                 "Fully NON ha ancora concluso il conteggio di questo carico "
                 f"({rep.get('fully_count_rows_done') or 0} righe contate su "
                 f"{rep.get('fully_count_rows')}). Le righe qui sotto sono PROVVISORIE: "
-                "dillo prima dei numeri e segnala che si può SOLLECITARE FULLY perché "
-                "chiuda il conteggio. NON dire che la merce è arrivata e contata."
+                "dillo prima dei numeri. NON dire che la merce è arrivata e contata e "
+                "non suggerire di contattare o sollecitare Fully."
             )
         if righe:
             out.update(_fully_eta_fotografia(max(str(r.get("fully_synced_at") or "") for r in righe)))
@@ -7068,7 +7260,7 @@ def _execute_chat_tool(name: str, tool_input: dict, user_message: str, role: str
                 tool_input.get("query"), tool_input.get("sku"), tool_input.get("tipo")
             )
         if name == "ordini_per_produttore":
-            return tool_ordini_per_produttore(tool_input.get("produttore"))
+            return tool_ordini_per_produttore(tool_input.get("produttore"), tool_input.get("prodotto"))
         if name == "ordine_fabbrica_per_numero":
             return tool_ordine_fabbrica_per_numero(tool_input.get("numero"))
         if name == "tracciamento_fully":
@@ -8000,6 +8192,43 @@ def _uscita_retail(testo, role, chat_id):
         print(f"[BLOCCO] uscita retail chat={chat_id} categoria={esito['categoria']} "
               f"termine={esito['termine']!r} scartata={esito['originale'][:160]!r}")
     return esito["testo"]
+
+
+# Profili interni (staff, b2b): MAI suggerire di contattare Fully (chat del
+# 14/10/2026: "chiedi a Fully su Slack", "puoi sollecitare Fully"). Il prompt lo
+# vieta; questa rete toglie dopo il modello la FRASE che lo fa, non la risposta.
+_CONTATTO_FULLY_RE = re.compile(
+    r"slack|fullyview|portale\s+(di\s+)?fully"
+    r"|\b(sollecit|contatt|scriv|chied|ping)\w*\b[^.\n]{0,40}\bfully\b"
+    r"|\bfully\b[^.\n]{0,30}\b(sollecit|contatt)\w*"
+    r"|\b(ask|contact|chase|write\s+to|message|email|reach\s+out\s+to|ping)\b[^.\n]{0,20}\bfully\b",
+    re.IGNORECASE,
+)
+# Fine frase: punto/esclamativo/domanda/due punti seguiti da spazio (non dentro
+# un URL), oppure un trattino lungo fra spazi.
+_FINE_FRASE_RE = re.compile(r"(?<=[.!?:])\s+|\s+—\s+")
+
+
+def _rete_niente_contatti_fully(risposta: str, role: str, chat_id: str) -> str:
+    if _normalize_role(role) == "retail" or not risposta or not _CONTATTO_FULLY_RE.search(risposta):
+        return risposta
+    righe, tolte = [], []
+    for riga in risposta.split("\n"):
+        if not _CONTATTO_FULLY_RE.search(riga):
+            righe.append(riga)
+            continue
+        frasi = [f for f in _FINE_FRASE_RE.split(riga) if f]
+        restano = [f for f in frasi if not _CONTATTO_FULLY_RE.search(f)]
+        tolte.extend(f.strip() for f in frasi if _CONTATTO_FULLY_RE.search(f))
+        nuova = re.sub(r"\s*:$", ".", " ".join(restano).rstrip())
+        # Una riga che resta solo un punto elenco o un titolo con i due punti se ne va.
+        if re.sub(r"[\s\-*•·:>#]+", "", nuova):
+            righe.append(nuova)
+    pulita = re.sub(r"\n{3,}", "\n\n", "\n".join(righe)).strip()
+    _registra_strumento(chat_id, role, "rete_contatti_fully", {"frasi_tolte": tolte[:5]},
+                        "tolte", len(pulita), 0)
+    print(f"[FULLY] rete contatti chat={chat_id} frasi_tolte={tolte[:3]!r}")
+    return pulita or "Questo dato non risulta a sistema."
 
 
 def tool_taglia_consigliata(tool_input: dict, user_message: str, contesto: dict) -> dict:
@@ -9469,6 +9698,8 @@ def chat(request: ChatRequest, http_request: Request,
         bot_reply = _rete_email(bot_reply, role, contesto, request.message)
         # E per le taglie: una taglia detta senza lo strumento non passa.
         bot_reply = _rete_taglie(bot_reply, role, contesto, request.message)
+        # Staff e b2b: nessun suggerimento di contattare Fully (20/10/2026).
+        bot_reply = _rete_niente_contatti_fully(bot_reply, role, request.chat_id)
         # ULTIMA rete: quello che non deve uscire non esce, e quello che esce
         # e' esattamente quello che viene anche salvato in chat.
         bot_reply = _uscita_retail(bot_reply, role, request.chat_id)
@@ -11781,9 +12012,8 @@ def _fully_carico_diretto(numero: str, spedizioni=None) -> dict:
     if stato and stato != "done":
         out["nota_conteggio"] = (
             "Conteggio NON chiuso: i numeri di riga sono PROVVISORI e 'buoni' "
-            "ricalca gli attesi. Non dire 'arrivato e contato'. Se serve che Fully "
-            "chiuda il conteggio, quel sollecito lo manda una persona: prepara il "
-            "messaggio."
+            "ricalca gli attesi. Non dire 'arrivato e contato' e non suggerire di "
+            "contattare o sollecitare Fully."
         )
     if len(righe_fmt) > _FULLY_CARICO_MAX_RIGHE:
         out["nota_righe"] = (
