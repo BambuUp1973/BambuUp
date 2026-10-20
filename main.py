@@ -2789,8 +2789,8 @@ CHAT_TOOLS = [
             "e che il conteggio Fully non esiste);\n"
             "  * 'counting_in_progress' = merce ARRIVATA in magazzino ma conteggio NON "
             "ancora concluso da Fully: dillo esplicitamente, riporta 'avanzamento_conteggio_"
-            "fully' (righe contate su totale) e di' che i numeri sono PROVVISORI. Non "
-            "suggerire mai di contattare o sollecitare Fully. Non dire mai che è 'arrivata e contata';\n"
+            "fully' (righe contate su totale) e di' che i numeri sono PROVVISORI. "
+            "Non dire mai che è 'arrivata e contata';\n"
             "  * 'no_arrival_evidence' = nessuna prova di arrivo: dichiaralo così, senza "
             "dedurre né che sia arrivata né che sia persa.\n"
             "- Dichiara SEMPRE da dove viene il dato di arrivo ('come_lo_sappiamo'): "
@@ -5469,7 +5469,7 @@ _FULLY_ARRIVO_PAROLE = {
     "counting_in_progress": (
         "ARRIVATA IN MAGAZZINO MA CONTEGGIO NON ANCORA CONCLUSO DA FULLY: la merce è "
         "al magazzino, il conteggio è ancora APERTO e i numeri sono PROVVISORI (possono "
-        "cambiare): dillo esplicitamente. Non suggerire di contattare o sollecitare Fully."
+        "cambiare): dillo esplicitamente."
     ),
     "no_arrival_evidence": (
         "NESSUNA PROVA DI ARRIVO: non risulta né un conteggio di Fully né una spunta "
@@ -5644,6 +5644,11 @@ def _fully_blocco_arrivo(rep: dict, s: dict = None) -> dict:
     }
     if rep.get("arrived_at"):
         b["arrivata_il"] = rep.get("arrived_at")
+    else:
+        # 20/10/2026: senza questa riga il bot ha preso la data della fotografia
+        # del conteggio per la data di arrivo.
+        b["arrivata_il"] = ("data di arrivo in magazzino NON registrata. La data della "
+                            "fotografia del conteggio NON è una data di arrivo.")
 
     # Avanzamento del conteggio: ha senso solo se il carico ha righe da contare.
     if (rep.get("fully_count_rows") or 0) > 0:
@@ -6771,8 +6776,7 @@ def tool_tracciamento_fully(numero: str = None, cliente: str = None) -> dict:
                 "Fully NON ha ancora concluso il conteggio di questo carico "
                 f"({rep.get('fully_count_rows_done') or 0} righe contate su "
                 f"{rep.get('fully_count_rows')}). Le righe qui sotto sono PROVVISORIE: "
-                "dillo prima dei numeri. NON dire che la merce è arrivata e contata e "
-                "non suggerire di contattare o sollecitare Fully."
+                "dillo prima dei numeri. NON dire che la merce è arrivata e contata."
             )
         if righe:
             out.update(_fully_eta_fotografia(max(str(r.get("fully_synced_at") or "") for r in righe)))
@@ -8218,8 +8222,15 @@ def _rete_niente_contatti_fully(risposta: str, role: str, chat_id: str) -> str:
             righe.append(riga)
             continue
         frasi = [f for f in _FINE_FRASE_RE.split(riga) if f]
-        restano = [f for f in frasi if not _CONTATTO_FULLY_RE.search(f)]
-        tolte.extend(f.strip() for f in frasi if _CONTATTO_FULLY_RE.search(f))
+        restano, togli_seguito = [], False
+        for f in frasi:
+            # "Non sollecitare Fully: lo faranno loro" -> se ne va anche il seguito
+            # dei due punti, che da solo non ha senso.
+            if _CONTATTO_FULLY_RE.search(f) or togli_seguito:
+                tolte.append(f.strip())
+                togli_seguito = f.rstrip().endswith(":") and not togli_seguito
+            else:
+                restano.append(f)
         nuova = re.sub(r"\s*:$", ".", " ".join(restano).rstrip())
         # Una riga che resta solo un punto elenco o un titolo con i due punti se ne va.
         if re.sub(r"[\s\-*•·:>#]+", "", nuova):
@@ -12012,8 +12023,7 @@ def _fully_carico_diretto(numero: str, spedizioni=None) -> dict:
     if stato and stato != "done":
         out["nota_conteggio"] = (
             "Conteggio NON chiuso: i numeri di riga sono PROVVISORI e 'buoni' "
-            "ricalca gli attesi. Non dire 'arrivato e contato' e non suggerire di "
-            "contattare o sollecitare Fully."
+            "ricalca gli attesi. Non dire 'arrivato e contato'."
         )
     if len(righe_fmt) > _FULLY_CARICO_MAX_RIGHE:
         out["nota_righe"] = (
