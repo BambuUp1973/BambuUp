@@ -167,6 +167,13 @@ def _decimale(valore):
         return None
 
 
+def _e_tariffa_b2b(nome) -> bool:
+    """Dal 20/10/2026 su Shopify le tariffe B2B hanno il nome con la zona
+    ("Spedizione B2B UE", "... Italia", "... internazionale"): vale ogni nome
+    che comincia con "Spedizione B2B", maiuscole o minuscole."""
+    return (nome or "").lstrip().lower().startswith(TITOLO_B2B.lower())
+
+
 def tariffa_retail_della_zona(zona: dict):
     """(prezzo, soglia_gratuita, None) oppure (None, None, motivo).
     Si guardano solo le tariffe attive e NON "Spedizione B2B". La forma attesa
@@ -174,7 +181,7 @@ def tariffa_retail_della_zona(zona: dict):
     eventualmente una gratuita con "totale >= X". Qualunque altra forma non si
     interpreta: il dato risulta non disponibile."""
     retail = [t for t in zona.get("tariffe") or []
-              if t.get("attiva") and (t.get("nome") or "").strip() != TITOLO_B2B]
+              if t.get("attiva") and not _e_tariffa_b2b(t.get("nome"))]
     a_pagamento, soglie = [], []
     for t in retail:
         prezzo = _decimale(t.get("prezzo"))

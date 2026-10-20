@@ -182,6 +182,36 @@ class NessunaTariffaB2B(unittest.TestCase):
         r = costo("Italia", leggi=lambda: (tabella, None))
         self.assertEqual(r["esito"], "non_disponibile")
 
+    def test_nomi_b2b_con_la_zona(self):
+        # La tabella di Shopify del 20/10/2026: le tariffe B2B si chiamano
+        # "Spedizione B2B UE/Italia/internazionale" e prima rendevano ogni
+        # zona "non disponibile" (COMANDO 52/53).
+        def b2b(nome, prezzo, *cond):
+            return _tariffa(nome, prezzo, *cond)
+        peso = lambda da, a: (("TOTAL_WEIGHT", "GREATER_THAN_OR_EQUAL_TO", da, "GRAMS"),
+                              ("TOTAL_WEIGHT", "LESS_THAN_OR_EQUAL_TO", a, "GRAMS"))
+        oltre = ("TOTAL_WEIGHT", "GREATER_THAN_OR_EQUAL_TO", 20001.0, "GRAMS")
+        tabella = {"esito": "ok", "profili": [{"profilo": "General profile", "predefinito": True, "zone": [
+            {"zona": "Italia", "codici": ["IT"], "tariffe": [
+                _tariffa("Spedizione rapida", "5.9"), _tariffa("Spedizione gratuita", "0.0", GRATIS),
+                b2b("Spedizione B2B Italia", "7.5", *peso(0.0, 5000.0)),
+                b2b("Spedizione B2B Italia", "15.9", oltre)]},
+            {"zona": "UE 5", "codici": ["FR", "LV", "PT", "SK"], "tariffe": [
+                _tariffa("Spedizione veloce UE", "9.9"), _tariffa("Spedizione gratuita UE", "0.0", GRATIS),
+                b2b("Spedizione B2B UE", "9.75", *peso(0.0, 5000.0)),
+                b2b("Spedizione B2B UE", "20.41", *peso(5001.0, 20000.0)),
+                b2b("Spedizione B2B UE", "28.61", oltre)]},
+            {"zona": "Regno Unito", "codici": ["GB"], "tariffe": [
+                _tariffa("Spedizione veloce", "14.9"), _tariffa("Spedizione gratuita", "0.0", GRATIS),
+                b2b("  spedizione b2b internazionale", "35.9", oltre)]},
+        ]}]}
+        leggi = lambda: (tabella, None)
+        r = costo("Portogallo", leggi=leggi)
+        self.assertEqual((r["esito"], r["prezzo"], r["soglia_gratuita"]), ("ok", "9.9", "100.0"))
+        self.assertEqual(r["testo"], "Portogallo: la spedizione costa 9,90 €. È gratuita per ordini da 100 € in su.")
+        self.assertEqual(costo(codice="IT", leggi=leggi)["prezzo"], "5.9")
+        self.assertEqual(costo("UK", lingua="en", leggi=leggi)["prezzo"], "14.9")
+
     def test_due_tariffe_a_pagamento_non_si_sceglie_a_caso(self):
         # una seconda tariffa a pagamento senza condizioni rende il dato non
         # interpretabile: non se ne sceglie una a caso
