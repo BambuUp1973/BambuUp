@@ -26,9 +26,10 @@ ORDER_FIELDS = """id name createdAt currencyCode email phone taxesIncluded cance
   billingAddress{ phone }
   customer{ defaultPhoneNumber{ phoneNumber } defaultAddress{ phone } }
   totalPriceSet{ shopMoney{ amount currencyCode } }
+  currentTotalPriceSet{ shopMoney{ amount } }
   shippingLine{ title originalPriceSet{ shopMoney{ amount } } }
   shippingAddress{ name firstName lastName company address1 address2 city zip provinceCode countryCodeV2 phone }
-  lineItems(first:100){ nodes{ sku name quantity
+  lineItems(first:100){ nodes{ sku name quantity currentQuantity
     discountedUnitPriceAfterAllDiscountsSet{ shopMoney{ amount } }
     taxLines{ rate priceSet{ shopMoney{ amount } } }
     customAttributes{ key value }
@@ -143,8 +144,9 @@ def expand_line(li, unit=None):
     """Ritorna [(sku, nome, quantita, prezzo_per_pezzo)] e note. unit: prezzo per pezzo da usare
     (default: quello scontato IVA inclusa).
     Bundle Simple Bundles: variante senza SKU con metafield simple_bundles.bundled_variants ->
-    si mandano i COMPONENTI; il prezzo pagato si divide in proporzione al prezzo dei componenti."""
-    qty = int(li["quantity"])
+    si mandano i COMPONENTI; il prezzo pagato si divide in proporzione al prezzo dei componenti.
+    cmd 296: quantita' = currentQuantity (ordini modificati: quantity resta quella originale)."""
+    qty = int(li["currentQuantity"])
     if unit is None:
         unit = _money(li["discountedUnitPriceAfterAllDiscountsSet"]["shopMoney"]["amount"])
     var = li.get("variant") or {}
@@ -186,12 +188,14 @@ def build(order, origin=None):
     elif cnote:
         note.append("corriere %r per %s: %s" % (carrier, country, cnote))
     products = []
-    total = _money(order["totalPriceSet"]["shopMoney"]["amount"])
+    total = _money(order["currentTotalPriceSet"]["shopMoney"]["amount"])   # cmd 296: totale dopo le modifiche dell'ordine
     # cmd 230: ordine a totale 0 (cambi) -> ogni riga col prezzo di listino della variante; gli altri ordini invariati
     listino = total == 0
     if listino:
         note.append("ordine a totale 0: prezzi di listino delle varianti (cmd 230)")
     for li in order["lineItems"]["nodes"]:
+        if int(li["currentQuantity"]) == 0:   # cmd 296: riga tolta con una modifica dell'ordine
+            continue
         if listino:
             unit = list_unit(li)
             if unit is None:
